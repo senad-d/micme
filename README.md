@@ -141,7 +141,7 @@ Micme reads settings from shell environment variables and from a project `.env`.
 Use the example file in the project where you run pi:
 
 ```bash
-cp .env.example .env
+cp ~/.pi/agent/npm/node_modules/@senad-d/micme/.env.example .env
 ```
 
 If the project already has a `.env`, copy only the `MICME_*` lines you need. For a global pi install, do not edit the package directory; put `.env` in each project or set shell variables in your shell profile.
@@ -254,7 +254,6 @@ pi remove npm:@senad-d/micme -l       # remove project-local install
 ```bash
 npm ci
 npm run validate
-pi -e . --list-models micme-load-test
 ```
 
 ## Publishing
