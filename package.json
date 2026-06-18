@@ -63,7 +63,7 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "file:./dev-shims/pi-coding-agent",
     "@earendil-works/pi-tui": "*",
-    "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.3"
   }
 }
