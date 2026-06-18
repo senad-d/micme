@@ -4,8 +4,9 @@ All notable changes to Micme will be documented in this file.
 
 ## Unreleased
 
+- Document the scoped npm package name, `@senad-d/micme`, in install, diagnostics, update, and uninstall commands.
+- Add an interactive npm publishing script that prompts for a version, validates the package, creates the release commit/tag, and publishes with public scoped-package access.
 - Keep publication on hold until package name, metadata, security review, validation, and smoke tests are complete.
-- Use the `docs/PUBLISHING.md` checklist for the first npm release.
 
 ## 0.1.0 - 2026-06-18
 

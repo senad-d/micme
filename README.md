@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://pi.dev"><img alt="pi package" src="https://img.shields.io/badge/pi-package-6f42c1?style=flat-square" /></a>
-  <a href="https://www.npmjs.com/package/micme"><img alt="npm" src="https://img.shields.io/npm/v/micme?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/@senad-d/micme"><img alt="npm" src="https://img.shields.io/npm/v/%40senad-d%2Fmicme?style=flat-square" /></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
 </p>
 
@@ -35,13 +35,16 @@ Micme is a pi extension for short coding prompts. It records your microphone wit
 - [Troubleshooting](#troubleshooting)
 - [Diagnostics](#diagnostics)
 - [Update and Uninstall](#update-and-uninstall)
+- [Development](#development)
+- [Publishing](#publishing)
+- [License](#license)
 
 ---
 
 ## Quick Start
 
 ```bash
-pi install npm:micme
+pi install npm:@senad-d/micme
 ```
 
 Install a local backend. On macOS:
@@ -76,9 +79,9 @@ Micme is toggle-based. Press-and-hold recording is not used because terminal key
 
 | Scope | Command | Notes |
 | --- | --- | --- |
-| Global | `pi install npm:micme` | Loads in every trusted pi project. |
-| Project-local | `pi install npm:micme -l` | Writes to `.pi/settings.json` in the current project. |
-| One run | `pi -e npm:micme` | Try without changing settings. |
+| Global | `pi install npm:@senad-d/micme` | Loads in every trusted pi project. |
+| Project-local | `pi install npm:@senad-d/micme -l` | Writes to `.pi/settings.json` in the current project. |
+| One run | `pi -e npm:@senad-d/micme` | Try without changing settings. |
 | Git | `pi install git:github.com/senad-d/micme@<tag>` | Pin a tag or commit. |
 | Local checkout | `pi -e .` | Develop or test this repository. |
 
@@ -222,7 +225,7 @@ MICME_TRANSCRIBE_COMMAND=whisper-cli -m /path/to/model.bin -f {audio} -otxt -of 
 ## Diagnostics
 
 ```bash
-npx -p micme micme-doctor
+npx -p @senad-d/micme micme-doctor
 ```
 
 From a source checkout:
@@ -238,10 +241,10 @@ The doctor checks Node, pi, `ffmpeg`, whisper.cpp, optional `whisper-stream`, mo
 ## Update and Uninstall
 
 ```bash
-pi update --extensions       # update installed pi packages
-pi update npm:micme          # update Micme only
-pi remove npm:micme          # remove global install
-pi remove npm:micme -l       # remove project-local install
+pi update --extensions                # update installed pi packages
+pi update npm:@senad-d/micme          # update Micme only
+pi remove npm:@senad-d/micme          # remove global install
+pi remove npm:@senad-d/micme -l       # remove project-local install
 ```
 
 ---
@@ -253,6 +256,20 @@ npm ci
 npm run validate
 pi -e . --list-models micme-load-test
 ```
+
+## Publishing
+
+Micme publishes to npm as `@senad-d/micme`. You need an npm account with publish access to the `@senad-d` scope.
+
+```bash
+npm login
+npm whoami
+npm run publish:npm
+```
+
+The publish script asks for the version number, validates the package, runs `npm version <version>` to update `package.json` and `package-lock.json`, creates the `v<version>` git tag, publishes with `npm publish --access public`, and then offers to push the release commit and tag.
+
+Run it only from a clean working tree after updating `CHANGELOG.md`.
 
 ## License
 
