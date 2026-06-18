@@ -1,6 +1,6 @@
 {
   "name": "@senad-d/micme",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Local voice-to-text for pi, optimized for fast Whisper-style backends.",
   "license": "MIT",
