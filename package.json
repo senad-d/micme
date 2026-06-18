@@ -1,5 +1,5 @@
 {
-  "name": "micme",
+  "name": "@senad-d/micme",
   "version": "0.1.0",
   "type": "module",
   "description": "Local voice-to-text for pi, optimized for fast Whisper-style backends.",
@@ -55,7 +55,6 @@
       "./src/extension.ts"
     ]
   },
-  "dependencies": {},
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"

@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Micme logo" src="img/micme_logo.png" width="128">
+  <img alt="Micme logo" src="img/micme_logo.svg" width="128">
 </p>
 
 <p align="center">
