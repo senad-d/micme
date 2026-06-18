@@ -1,0 +1,33 @@
+name: Documentation improvement
+description: Report missing, unclear, or incorrect documentation
+title: "docs: "
+labels:
+  - documentation
+  - needs-triage
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Documentation location
+      placeholder: README.md, SECURITY.md, docs/VALIDATION.md, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What should change?
+      description: Describe the missing, outdated, or confusing documentation.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested wording or examples
+      description: Optional draft text, command examples, or links.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true

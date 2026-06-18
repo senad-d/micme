@@ -1,0 +1,87 @@
+name: Bug report
+description: Report a reproducible Micme problem
+title: "bug: "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Micme. Please avoid sharing secrets, private transcripts, or raw audio unless you intentionally created sanitized test data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected to happen.
+      placeholder: Micme failed to...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest set of steps or commands that reproduces the issue.
+      placeholder: |
+        1. Install/configure ...
+        2. Run /micme ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: micme-version
+    attributes:
+      label: Micme version or commit
+      placeholder: npm package version, git tag, or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: pi-version
+    attributes:
+      label: pi version
+      placeholder: Output from pi --version, if available
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: Output from node --version
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: backend
+    attributes:
+      label: Recorder/transcription backend
+      placeholder: ffmpeg + whisper.cpp, custom command, whisper, whisper-stream, etc.
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant MICME_* configuration
+      description: Include only non-sensitive MICME_* values. Redact paths/usernames if needed.
+      render: shell
+      placeholder: |
+        MICME_WHISPER_CPP_BIN=whisper-cli
+        MICME_MODEL=base.en
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or diagnostics
+      description: Paste relevant output from /micme doctor or terminal logs. Redact secrets and private content.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I removed or redacted secrets, private transcripts, and unrelated personal paths.
+          required: true

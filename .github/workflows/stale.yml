@@ -1,0 +1,43 @@
+name: Close stale pull requests
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: stale-prs
+  cancel-in-progress: false
+
+jobs:
+  stale-prs:
+    name: Mark and close inactive pull requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mark and close stale pull requests
+        uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          days-before-pr-stale: 30
+          days-before-pr-close: 14
+          stale-pr-label: stale
+          stale-pr-message: |
+            This pull request has had no activity for 30 days and has been marked stale.
+
+            It will be closed in 14 days unless there is new activity or a maintainer adds one of the exempt labels (`no-stale`, `do-not-close`, `security`, `pinned`, `work-in-progress`).
+          close-pr-message: |
+            Closing this pull request because it remained inactive after being marked stale.
+
+            Please reopen it or create a new pull request when it is ready for review.
+          exempt-pr-labels: no-stale,do-not-close,security,pinned,work-in-progress,dependencies
+          exempt-draft-pr: true
+          remove-stale-when-updated: true
+          operations-per-run: 30

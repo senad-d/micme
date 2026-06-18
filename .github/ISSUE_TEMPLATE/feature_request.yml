@@ -1,0 +1,56 @@
+name: Feature request
+description: Suggest an improvement or new Micme capability
+title: "feat: "
+labels:
+  - enhancement
+  - needs-triage
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What workflow are you trying to improve?
+      placeholder: I want to use Micme to...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior, API, command, setting, or documentation change you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or alternate designs have you tried?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Recording
+        - Transcription
+        - Configuration
+        - Commands/UI
+        - Packaging/release
+        - Documentation
+        - GitHub automation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add screenshots, logs, examples, or links if they help explain the request.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I can help test or review this change.
+          required: false

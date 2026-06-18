@@ -1,0 +1,11 @@
+{
+  "name": "@micme/pi-coding-agent-dev-shim",
+  "version": "0.0.0-development-shim",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "peerDependencies": {
+    "@earendil-works/pi-tui": "*"
+  }
+}

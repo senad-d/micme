@@ -1,0 +1,69 @@
+{
+  "name": "micme",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local voice-to-text for pi, optimized for fast Whisper-style backends.",
+  "license": "MIT",
+  "author": "Senad Dizdarević <112484166+senad-d@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/senad-d/micme.git"
+  },
+  "bugs": {
+    "url": "https://github.com/senad-d/micme/issues"
+  },
+  "homepage": "https://github.com/senad-d/micme#readme",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "voice-to-text",
+    "speech-to-text",
+    "dictation",
+    "whisper",
+    "whisper.cpp",
+    "local-first"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "micme-doctor": "./scripts/doctor.mjs"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    ".env.example",
+    "img/micme_logo.png",
+    "src/**/*.ts",
+    "scripts/*.mjs",
+    "docs/**/*.md",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "doctor": "node scripts/doctor.mjs",
+    "check": "node --check scripts/doctor.mjs && node --check scripts/check-package-contents.mjs",
+    "typecheck": "tsc --noEmit",
+    "pack:dry-run": "npm pack --dry-run --json",
+    "check:pack": "node scripts/check-package-contents.mjs",
+    "validate": "npm run typecheck && npm run check && npm run check:pack",
+    "prepublishOnly": "npm run validate"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "file:./dev-shims/pi-coding-agent",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build, coverage, and package outputs
+dist/
+build/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+*.tgz
+
+# OS/editor noise
+.DS_Store
+*.log
+
+# Local configuration and pi runtime state
+.env
+.env.local
+.env.*.local
+.pi/token-insights/
+
+# Micme runtime caches and artifacts
+.micme/
+models/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.opus
+*.aif
+*.aiff
+*.pcm
+*.gguf
+ggml-*.bin
+
+trivy-reports
+.trivycache
+odc-reports
