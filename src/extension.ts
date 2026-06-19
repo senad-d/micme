@@ -12,7 +12,7 @@ import {
 	getTranscriptionMode,
 	reloadMicmeConfig,
 } from "./config.ts";
-import { buildRecorderCommand, listAudioDevices, prepareAudioForTranscription, validateRecordedAudio } from "./audio.ts";
+import { buildRecorderCommand, listAudioDevices, prepareAudioForTranscription, registerDeviceMessageRenderer, validateRecordedAudio } from "./audio.ts";
 import { installMicmeEditorFallback, type MicmeEditorInputHandlers } from "./editor.ts";
 import { getDefaultWhisperCppModelPath, ensureWhisperCppModel } from "./models.ts";
 import {
@@ -52,6 +52,7 @@ let lastShortcutInputAt = 0;
 
 export default function micmeExtension(pi: ExtensionAPI) {
 	reloadMicmeConfig();
+	registerDeviceMessageRenderer(pi);
 
 	async function toggle(ctx: ExtensionContext) {
 		if (recording) {
@@ -77,7 +78,7 @@ export default function micmeExtension(pi: ExtensionAPI) {
 						await toggle(ctx);
 						return;
 					case "devices":
-						await listAudioDevices(ctx);
+						await listAudioDevices(ctx, pi);
 						return;
 					case "conf":
 						await showConfiguration(ctx);

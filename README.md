@@ -182,7 +182,7 @@ See [`micme.example.json`](micme.example.json) for the full JSON template.
 | --- | --- |
 | `/micme` | Toggle recording. |
 | `/micme conf` | Open the TUI configuration screen. |
-| `/micme devices` | List audio input devices. |
+| `/micme devices` | Show compact audio/video capture device inventory. |
 | `/micme last` | Paste the previous transcript again. |
 | `/micme audio` | Show the last kept audio directory. |
 | `/micme help` | Show short help. |
