@@ -46,6 +46,19 @@
     "MICME_KEEP_AUDIO": {
       "$ref": "#/$defs/stringFlag"
     },
+    "MICME_STREAM_KEEP_CONTEXT": {
+      "$ref": "#/$defs/stringFlag",
+      "description": "Pass --keep-context to whisper-stream. Defaults to off for append-only dictation."
+    },
+    "MICME_STREAM_FINALIZE_WITH_CLIP": {
+      "$ref": "#/$defs/stringFlag",
+      "description": "When enabled, stop-time clip transcription may replace the append-only live stream transcript."
+    },
+    "MICME_STREAM_FLUSH_MS": {
+      "type": ["string", "number"],
+      "default": "700",
+      "description": "Quiet interval in milliseconds before tentative stream words are committed append-only."
+    },
     "MICME_RECORD_COMMAND": {
       "type": "string",
       "description": "Advanced shell command hook. Use only trusted commands."

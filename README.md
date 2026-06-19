@@ -164,7 +164,10 @@ Common settings:
 | Variable | Meaning |
 | --- | --- |
 | `MICME_TRANSCRIPTION_MODE=clip` | Stable default: transcribe after recording stops. |
-| `MICME_TRANSCRIPTION_MODE=stream` | Experimental live preview with `whisper-stream`. |
+| `MICME_TRANSCRIPTION_MODE=stream` | Experimental append-only live dictation with `whisper-stream`. |
+| `MICME_STREAM_KEEP_CONTEXT=0` | Stream default: avoid Whisper prompt carry-over so live chunks are less likely to rewrite each other. |
+| `MICME_STREAM_FLUSH_MS=650` | Stream profile quiet interval before tentative words are committed append-only. |
+| `MICME_STREAM_FINALIZE_WITH_CLIP=0` | Keep the append-only live transcript on stop. Set `1` to opt in to final clip replacement. |
 | `MICME_AUTO_SUBMIT=0` | Paste for review. Set `1` to send automatically. |
 | `MICME_SHORTCUT=alt+m` | Toggle shortcut. Restart or `/reload` after changing. |
 | `MICME_PRINTABLE_SHORTCUTS=§` | macOS Option-key fallback. |
@@ -173,6 +176,8 @@ Common settings:
 | `MICME_MODEL_DIR=~/.cache/whisper.cpp` | Model cache/discovery directory. |
 
 See [`micme.example.json`](micme.example.json) for the full JSON template.
+
+Streaming mode treats `whisper-stream` output as repeated, overlapping hypotheses rather than committed word deltas. Micme only appends committed words to the editor during live streaming; tentative words are held internally and committed after agreement, overlap, stop, or the quiet interval configured by `MICME_STREAM_FLUSH_MS`. If `MICME_STREAM_FINALIZE_WITH_CLIP=1`, the stop-time clip transcript can intentionally replace the live append-only text.
 
 ---
 
@@ -238,6 +243,8 @@ npm run doctor
 ```
 
 The doctor checks Node, pi, `ffmpeg`, whisper.cpp, optional `whisper-stream`, model paths, and macOS devices when available. Custom command values are redacted.
+
+For stream state investigation, start pi with `MICME_STREAM_DIAGNOSTICS=1`. Diagnostics are opt-in and include sanitized frames, extraction mode, committed words, and tentative candidate words.
 
 ---
 

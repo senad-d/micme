@@ -13,6 +13,7 @@ import {
 	DEFAULT_STREAM_MAX_TOKENS,
 	DEFAULT_STREAM_STEP_MS,
 	DEFAULT_STREAM_VAD_THRESHOLD,
+	DEFAULT_STREAM_FLUSH_MS,
 	DEFAULT_TRANSCRIBE_SAMPLE_RATE,
 	DEFAULT_TRANSCRIBE_TIMEOUT_MS,
 	DEFAULT_MIN_MAX_VOLUME_DB,
@@ -22,6 +23,7 @@ import {
 	STREAM_PROFILE_STEP_MS,
 	STREAM_PROFILE_VAD_THRESHOLD,
 	STREAM_PROFILE_WORDS_PER_CHUNK,
+	STREAM_PROFILE_FLUSH_MS,
 } from "./constants.ts";
 
 const MICME_CONFIG_FILE = "micme.json";
@@ -106,7 +108,9 @@ export function getTranscriptionModeProfile(mode: TranscriptionMode): Record<str
 			MICME_STREAM_KEEP_MS: String(STREAM_PROFILE_KEEP_MS),
 			MICME_STREAM_MAX_TOKENS: String(STREAM_PROFILE_MAX_TOKENS),
 			MICME_STREAM_WORDS_PER_CHUNK: String(STREAM_PROFILE_WORDS_PER_CHUNK),
-			MICME_STREAM_KEEP_CONTEXT: "1",
+			MICME_STREAM_FLUSH_MS: String(STREAM_PROFILE_FLUSH_MS),
+			// whisper-stream's upstream default is no prompt carry-over. Keep it disabled for Micme's append-only stream profile so raw dictation is less likely to rewrite short chunks contextually.
+			MICME_STREAM_KEEP_CONTEXT: "0",
 			MICME_STREAM_FINALIZE_WITH_CLIP: "0",
 			MICME_STREAM_VAD_THRESHOLD: String(STREAM_PROFILE_VAD_THRESHOLD),
 		};
@@ -119,7 +123,8 @@ export function getTranscriptionModeProfile(mode: TranscriptionMode): Record<str
 		MICME_STREAM_KEEP_MS: String(DEFAULT_STREAM_KEEP_MS),
 		MICME_STREAM_MAX_TOKENS: String(DEFAULT_STREAM_MAX_TOKENS),
 		MICME_STREAM_WORDS_PER_CHUNK: "10",
-		MICME_STREAM_KEEP_CONTEXT: "1",
+		MICME_STREAM_FLUSH_MS: String(DEFAULT_STREAM_FLUSH_MS),
+		MICME_STREAM_KEEP_CONTEXT: "0",
 		MICME_STREAM_FINALIZE_WITH_CLIP: "1",
 		MICME_STREAM_VAD_THRESHOLD: String(DEFAULT_STREAM_VAD_THRESHOLD),
 	};
@@ -196,12 +201,17 @@ export function getStreamVadThreshold() {
 
 export function getStreamKeepContext() {
 	const value = env("MICME_STREAM_KEEP_CONTEXT");
-	return value === undefined ? true : /^(1|true|yes|on)$/i.test(value);
+	return value === undefined ? false : /^(1|true|yes|on)$/i.test(value);
+}
+
+export function getStreamFlushMs() {
+	const value = Number(env("MICME_STREAM_FLUSH_MS"));
+	return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_STREAM_FLUSH_MS;
 }
 
 export function getStreamFinalizeWithClip() {
 	const value = env("MICME_STREAM_FINALIZE_WITH_CLIP");
-	return value === undefined ? true : /^(1|true|yes|on)$/i.test(value);
+	return value === undefined ? false : /^(1|true|yes|on)$/i.test(value);
 }
 
 export function getStreamWordsPerChunk() {

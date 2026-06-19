@@ -35,8 +35,9 @@ export type StreamingState = {
 	previewText: string;
 	outputBuffer: string;
 	lastText: string;
-	pendingWords: string[];
 	emittedWords: string[];
+	candidateWords: string[];
+	lastHypothesisWords: string[];
 	startedAt: number;
 	firstOutputAt?: number;
 	firstPreviewAt?: number;

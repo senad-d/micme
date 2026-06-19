@@ -252,7 +252,16 @@ async function startStreamingTranscription(ctx: ExtensionContext, stopHint = get
 	const command = buildWhisperStreamCommand(whisperStream, whisperCppModel, tempDir);
 	const active = spawnRecording(command, "", tempDir);
 	const baseText = ctx.ui.getEditorText();
-	active.streaming = { baseText, previewText: baseText, outputBuffer: "", lastText: "", pendingWords: [], emittedWords: [], startedAt: Date.now() };
+	active.streaming = {
+		baseText,
+		previewText: baseText,
+		outputBuffer: "",
+		lastText: "",
+		emittedWords: [],
+		candidateWords: [],
+		lastHypothesisWords: [],
+		startedAt: Date.now(),
+	};
 	if (getStreamFinalizeWithClip()) {
 		const audioPath = join(tempDir, "raw.wav");
 		active.clipRecording = spawnRecording(buildRecorderCommand(audioPath), audioPath, tempDir);
@@ -335,10 +344,13 @@ async function stopStreamingTranscription(ctx: ExtensionContext, pi: ExtensionAP
 				keepTempDir = true;
 			}
 		} catch (error) {
+			flushPendingStreamingWords(ctx, state);
+			const liveTranscript = normalizeTranscript(getStreamingTranscript(state));
+			if (liveTranscript) lastTranscript = liveTranscript;
 			lastAudioDir = active.tempDir;
 			keepTempDir = true;
 			const message = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`Micme kept the live stream preview because final clip transcription failed: ${message}\nAudio kept for debugging: ${active.tempDir}`, "warning");
+			ctx.ui.notify(`Micme kept the live append-only stream transcript because final clip transcription failed: ${message}\nAudio kept for debugging: ${active.tempDir}`, "warning");
 		}
 	}
 

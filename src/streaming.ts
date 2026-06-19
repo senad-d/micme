@@ -1,11 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	MAX_CAPTURED_OUTPUT_CHARS,
-	STREAM_MIN_INITIAL_WORDS,
-} from "./constants.ts";
+import { MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import {
 	env,
 	envFlag,
+	getStreamFlushMs,
 	getStreamKeepContext,
 	getStreamKeepMs,
 	getStreamLengthMs,
@@ -17,6 +15,22 @@ import {
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import { shellQuote } from "./processes.ts";
 import type { CommandSpec, Recording, StreamingState } from "./types.ts";
+
+export type StreamingFrameMode = "cumulative" | "incremental" | "rolling" | "duplicate" | "reset";
+
+export type StreamingExtraction = {
+	mode: StreamingFrameMode;
+	newWords: string[];
+};
+
+type StreamingDiagnosticDetails = {
+	rawFrame?: string;
+	sanitizedText?: string;
+	frameWords?: string[];
+	extractionMode: StreamingFrameMode | "ignored" | "flush";
+	newWords?: string[];
+	reason?: string;
+};
 
 export function buildWhisperStreamCommand(binary: string, modelPath: string, tempDir: string): CommandSpec {
 	const args = [
@@ -52,25 +66,54 @@ export function handleStreamingOutput(ctx: ExtensionContext, active: Recording, 
 
 export function drainStreamingOutput(ctx: ExtensionContext, active: Recording, force: boolean, chunk = "") {
 	if (!active.streaming) return;
-	for (const part of readStreamingOutputFrames(active.streaming, chunk, force)) {
-		const text = sanitizeStreamingText(part);
-		if (!text) {
-			if (shouldResetStreamingPending(part)) {
-				active.streaming.pendingWords = [];
-				renderStreamingPreview(ctx, active.streaming, false);
+	const state = active.streaming;
+
+	for (const rawFrame of readStreamingOutputFrames(state, chunk, force)) {
+		const sanitizedText = sanitizeStreamingText(rawFrame);
+		const frameWords = splitStreamingWords(sanitizedText);
+
+		if (!sanitizedText) {
+			if (shouldResetStreamingPending(rawFrame)) {
+				clearStreamingFlush(state);
+				state.candidateWords = [];
+				state.lastHypothesisWords = [];
+				state.lastText = "";
+				renderStreamingPreview(ctx, state, false);
+				showStreamingFrameDiagnostics(ctx, state, {
+					rawFrame,
+					sanitizedText,
+					frameWords,
+					extractionMode: "reset",
+					newWords: [],
+					reason: "reset/hallucination frame",
+				});
+			} else {
+				showStreamingFrameDiagnostics(ctx, state, {
+					rawFrame,
+					sanitizedText,
+					frameWords,
+					extractionMode: "ignored",
+					newWords: [],
+					reason: "empty frame",
+				});
 			}
 			continue;
 		}
-		if (!active.streaming.firstOutputAt) active.streaming.firstOutputAt = Date.now();
-		const next = diffStreamingText(active.streaming.emittedWords.slice(-160).join(" "), text);
-		active.streaming.lastText = text;
-		if (!next) {
-			active.streaming.pendingWords = [];
-			renderStreamingPreview(ctx, active.streaming, false);
-			continue;
-		}
+
+		clearStreamingFlush(state);
+		if (!state.firstOutputAt) state.firstOutputAt = Date.now();
+		const extraction = extractStreamingCandidate(state, frameWords);
+		state.lastText = sanitizedText;
 		active.audioLevel = () => 0.55;
-		queueStableStreamingWords(ctx, active.streaming, splitStreamingWords(next));
+		queueStableStreamingWords(ctx, state, extraction.newWords, extraction.mode);
+		state.lastHypothesisWords = frameWords;
+		showStreamingFrameDiagnostics(ctx, state, {
+			rawFrame,
+			sanitizedText,
+			frameWords,
+			extractionMode: extraction.mode,
+			newWords: extraction.newWords,
+		});
 	}
 }
 
@@ -117,6 +160,32 @@ export function diffStreamingText(previous: string, current: string) {
 	return currentWords.slice(overlap).join(" ");
 }
 
+export function extractStreamingCandidate(state: StreamingState, frameWords: string[]): StreamingExtraction {
+	const words = frameWords.filter(Boolean);
+	if (words.length === 0) return { mode: "reset", newWords: [] };
+
+	const emittedOverlap = streamingWordOverlap(state.emittedWords.slice(-160), words);
+	if (emittedOverlap === words.length) return { mode: "duplicate", newWords: [] };
+	if (emittedOverlap > 0) return { mode: "cumulative", newWords: words.slice(emittedOverlap) };
+
+	if (state.candidateWords.length > 0) {
+		if (streamingWordsEqual(state.candidateWords, words)) return { mode: "duplicate", newWords: words };
+		if (isStreamingWordsPrefix(state.candidateWords, words)) return { mode: "cumulative", newWords: words };
+		if (streamingWordOverlap(state.candidateWords, words) > 0) return { mode: "rolling", newWords: words };
+		if (looksLikeStreamingCorrection(state.candidateWords, words)) return { mode: "reset", newWords: words };
+	}
+
+	if (state.lastHypothesisWords.length > 0) {
+		if (streamingWordsEqual(state.lastHypothesisWords, words)) return { mode: "duplicate", newWords: words };
+		if (isStreamingWordsPrefix(state.lastHypothesisWords, words)) return { mode: "cumulative", newWords: trimCommittedStreamingPrefix(state, words) };
+		if (streamingWordOverlap(state.lastHypothesisWords, words) > 0) return { mode: "rolling", newWords: words };
+		if (looksLikeStreamingCorrection(state.lastHypothesisWords, words)) return { mode: "reset", newWords: words };
+	}
+
+	const isFirstHypothesis = state.emittedWords.length === 0 && state.candidateWords.length === 0 && state.lastHypothesisWords.length === 0;
+	return { mode: isFirstHypothesis ? "cumulative" : "incremental", newWords: words };
+}
+
 export function isLikelyStreamingHallucination(text: string) {
 	if (!text) return true;
 	const normalized = text.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
@@ -133,28 +202,74 @@ export function shouldResetStreamingPending(text: string) {
 	return /^\[[^\]]+\]$/.test(cleaned) || /^\([^)]*\)$/.test(cleaned);
 }
 
-export function queueStableStreamingWords(ctx: ExtensionContext, state: StreamingState, currentWords: string[]) {
-	// Popular Whisper streaming frontends use local agreement: show/commit only the common prefix of consecutive hypotheses.
-	const stableCount = commonStreamingPrefixLength(state.pendingWords, currentWords);
-	const maxConfirmed = state.emittedWords.length === 0 && currentWords.length < STREAM_MIN_INITIAL_WORDS ? 0 : stableCount;
-	const confirmedCount = Math.min(maxConfirmed, getStreamWordsPerChunk());
-	if (confirmedCount > 0) queueStreamingWords(state, currentWords.slice(0, confirmedCount));
-	state.pendingWords = currentWords.slice(confirmedCount);
+export function queueStableStreamingWords(ctx: ExtensionContext, state: StreamingState, currentWords: string[], mode: StreamingFrameMode = "cumulative") {
+	const words = currentWords.filter(Boolean);
+
+	if (mode === "reset") {
+		state.candidateWords = trimCommittedStreamingPrefix(state, words);
+		renderStreamingPreview(ctx, state, false);
+		scheduleStreamingFlush(ctx, state);
+		return;
+	}
+
+	if (mode === "incremental") {
+		commitStreamingCandidate(state);
+		state.candidateWords = trimCommittedStreamingPrefix(state, words);
+		renderStreamingPreview(ctx, state, false);
+		scheduleStreamingFlush(ctx, state);
+		return;
+	}
+
+	if (mode === "rolling") {
+		queueRollingStreamingWords(state, words);
+		renderStreamingPreview(ctx, state, false);
+		scheduleStreamingFlush(ctx, state);
+		return;
+	}
+
+	if (mode === "duplicate" && words.length === 0) {
+		renderStreamingPreview(ctx, state, false);
+		scheduleStreamingFlush(ctx, state);
+		return;
+	}
+
+	const stableCount = commonStreamingPrefixLength(state.candidateWords, words);
+	const confirmedCount = Math.min(stableCount, getStreamWordsPerChunk());
+	if (confirmedCount > 0) queueStreamingWords(state, words.slice(0, confirmedCount));
+	state.candidateWords = words.slice(confirmedCount);
 	renderStreamingPreview(ctx, state, false);
+	scheduleStreamingFlush(ctx, state);
 }
 
-export function flushPendingStreamingWords(ctx: ExtensionContext, state: StreamingState) {
-	if (state.pendingWords.length > 0) {
-		queueStreamingWords(state, state.pendingWords);
-		state.pendingWords = [];
-	}
-	renderStreamingPreview(ctx, state, true);
+export function flushPendingStreamingWords(ctx: ExtensionContext, state: StreamingState, trailingSpace = true) {
+	clearStreamingFlush(state);
+	commitStreamingCandidate(state);
+	renderStreamingPreview(ctx, state, trailingSpace);
+	showStreamingFrameDiagnostics(ctx, state, {
+		extractionMode: "flush",
+		newWords: [],
+		reason: trailingSpace ? "stop flush" : "pause flush",
+	});
+}
+
+export function scheduleStreamingFlush(ctx: ExtensionContext, state: StreamingState) {
+	clearStreamingFlush(state);
+	if (state.candidateWords.length === 0) return;
+	const delayMs = getStreamFlushMs();
+	state.flushTimer = setTimeout(() => {
+		state.flushTimer = undefined;
+		flushPendingStreamingWords(ctx, state, false);
+	}, delayMs);
+	unrefStreamingTimer(state.flushTimer);
 }
 
 export function queueStreamingWords(state: StreamingState, words: string[]) {
 	const nextWords = words.filter(Boolean);
 	if (nextWords.length === 0) return;
-	state.emittedWords.push(...nextWords);
+	const overlap = streamingWordOverlap(state.emittedWords, nextWords);
+	const appendWords = nextWords.slice(overlap);
+	if (appendWords.length === 0) return;
+	state.emittedWords.push(...appendWords);
 }
 
 export function splitStreamingWords(text: string) {
@@ -181,6 +296,15 @@ export function commonStreamingPrefixLength(previousWords: string[], currentWord
 	return count;
 }
 
+export function commonStreamingSuffixLength(previousWords: string[], currentWords: string[]) {
+	const maxSuffix = Math.min(previousWords.length, currentWords.length);
+	let count = 0;
+	while (count < maxSuffix && normalizeStreamingWord(previousWords[previousWords.length - 1 - count] ?? "") === normalizeStreamingWord(currentWords[currentWords.length - 1 - count] ?? "")) {
+		count++;
+	}
+	return count;
+}
+
 export function streamingWordsEqual(left: string[], right: string[]) {
 	if (left.length !== right.length) return false;
 	return left.every((word, index) => normalizeStreamingWord(word) === normalizeStreamingWord(right[index] ?? ""));
@@ -192,7 +316,7 @@ export function normalizeStreamingWord(word: string) {
 }
 
 export function getStreamingTranscript(state: StreamingState) {
-	return [...state.emittedWords, ...state.pendingWords].join(" ");
+	return state.emittedWords.join(" ");
 }
 
 export function renderStreamingPreview(ctx: ExtensionContext, state: StreamingState, trailingSpace: boolean) {
@@ -234,4 +358,75 @@ export function clearStreamingFlush(state: StreamingState) {
 	if (!state.flushTimer) return;
 	clearTimeout(state.flushTimer);
 	state.flushTimer = undefined;
+}
+
+function queueRollingStreamingWords(state: StreamingState, words: string[]) {
+	const overlap = streamingWordOverlap(state.candidateWords, words);
+	if (overlap <= 0) {
+		commitStreamingCandidate(state);
+		state.candidateWords = trimCommittedStreamingPrefix(state, words);
+		return;
+	}
+
+	const previousCandidatePrefix = state.candidateWords.slice(0, state.candidateWords.length - overlap);
+	queueStreamingWords(state, previousCandidatePrefix);
+	const confirmedOverlap = Math.min(overlap, getStreamWordsPerChunk());
+	queueStreamingWords(state, words.slice(0, confirmedOverlap));
+	state.candidateWords = trimCommittedStreamingPrefix(state, words.slice(confirmedOverlap));
+}
+
+function commitStreamingCandidate(state: StreamingState) {
+	if (state.candidateWords.length === 0) return;
+	queueStreamingWords(state, state.candidateWords);
+	state.candidateWords = [];
+}
+
+function trimCommittedStreamingPrefix(state: StreamingState, words: string[]) {
+	const overlap = streamingWordOverlap(state.emittedWords, words);
+	return words.slice(overlap);
+}
+
+function isStreamingWordsPrefix(prefixWords: string[], words: string[]) {
+	if (prefixWords.length === 0 || prefixWords.length > words.length) return false;
+	return streamingWordsEqual(prefixWords, words.slice(0, prefixWords.length));
+}
+
+function looksLikeStreamingCorrection(previousWords: string[], currentWords: string[]) {
+	if (previousWords.length === 0 || currentWords.length === 0) return false;
+	if (previousWords.length === 1 && currentWords.length === 1) return false;
+	if (commonStreamingPrefixLength(previousWords, currentWords) > 0) return true;
+	if (commonStreamingSuffixLength(previousWords, currentWords) > 0) return true;
+	const previousNormalized = new Set(previousWords.map(normalizeStreamingWord));
+	const sharedCount = currentWords.filter((word) => previousNormalized.has(normalizeStreamingWord(word))).length;
+	return previousWords.length > 1 && currentWords.length > 1 && sharedCount >= Math.ceil(Math.min(previousWords.length, currentWords.length) / 2);
+}
+
+function showStreamingFrameDiagnostics(ctx: ExtensionContext, state: StreamingState, details: StreamingDiagnosticDetails) {
+	if (!envFlag("MICME_STREAM_DIAGNOSTICS")) return;
+	const payload = {
+		rawFrame: details.rawFrame === undefined ? undefined : truncateStreamingDiagnostic(stripStreamingControls(details.rawFrame)),
+		sanitizedText: details.sanitizedText === undefined ? undefined : truncateStreamingDiagnostic(details.sanitizedText),
+		frameWords: limitStreamingDiagnosticWords(details.frameWords ?? []),
+		emittedWords: limitStreamingDiagnosticWords(state.emittedWords),
+		candidateWords: limitStreamingDiagnosticWords(state.candidateWords),
+		previewText: truncateStreamingDiagnostic(getStreamingTranscript(state)),
+		extractionMode: details.extractionMode,
+		newWords: limitStreamingDiagnosticWords(details.newWords ?? []),
+		reason: details.reason,
+	};
+	ctx.ui.notify(`Micme stream frame: ${JSON.stringify(payload)}`, "info");
+}
+
+function limitStreamingDiagnosticWords(words: string[]) {
+	return words.slice(-16);
+}
+
+function truncateStreamingDiagnostic(value: string) {
+	return value.length > 160 ? `${value.slice(0, 157)}...` : value;
+}
+
+function unrefStreamingTimer(timer: ReturnType<typeof setTimeout>) {
+	if (typeof timer !== "object" || timer === null || !("unref" in timer)) return;
+	const unref = timer.unref;
+	if (typeof unref === "function") unref.call(timer);
 }

@@ -12,13 +12,13 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { homedir } from "node:os";
 import { basename } from "node:path";
 import {
 	DEFAULT_MACOS_PRINTABLE_SHORTCUT,
 	DEFAULT_RECORD_SAMPLE_RATE,
 	DEFAULT_SHORTCUT,
 	DEFAULT_STREAM_VAD_THRESHOLD,
+	DEFAULT_STREAM_FLUSH_MS,
 	DEFAULT_TRANSCRIBE_SAMPLE_RATE,
 	DEFAULT_WHISPER_CPP_MODEL_NAME,
 	PYTHON_WHISPER_MODEL_NAMES,
@@ -27,7 +27,6 @@ import {
 import {
 	env,
 	expandConfigPath,
-	getMicmeConfigPath,
 	getTranscriptionMode,
 	getTranscriptionModeProfile,
 	reloadMicmeConfig,
@@ -659,20 +658,30 @@ export function buildConfigurationItems(modelCandidates: ModelCandidate[], audio
 			id: "MICME_STREAM_KEEP_CONTEXT",
 			categoryId: "streaming",
 			label: "Stream context",
-			description: "Keep Whisper prompt context between chunks for better fast/accented speech continuity.",
-			rawValue: env("MICME_STREAM_KEEP_CONTEXT") ?? "1",
-			currentValue: env("MICME_STREAM_KEEP_CONTEXT") ?? "1",
-			values: ["1", "0"],
+			description: "Keep Whisper prompt context between chunks. Off by default for append-only dictation; turn on for more contextual correction.",
+			rawValue: env("MICME_STREAM_KEEP_CONTEXT") ?? "0",
+			currentValue: env("MICME_STREAM_KEEP_CONTEXT") ?? "0",
+			values: ["0", "1"],
 			displayKind: "boolean",
+		},
+		{
+			id: "MICME_STREAM_FLUSH_MS",
+			categoryId: "streaming",
+			label: "Stream flush delay",
+			description: "Quiet interval before tentative stream words are committed append-only into the editor.",
+			rawValue: env("MICME_STREAM_FLUSH_MS") ?? String(DEFAULT_STREAM_FLUSH_MS),
+			currentValue: env("MICME_STREAM_FLUSH_MS") ?? String(DEFAULT_STREAM_FLUSH_MS),
+			values: ["400", "650", "700", "1000"],
+			displayKind: "number",
 		},
 		{
 			id: "MICME_STREAM_FINALIZE_WITH_CLIP",
 			categoryId: "streaming",
 			label: "Stream final pass",
-			description: "On stop, replace the live preview with the stable clip-mode transcript.",
-			rawValue: env("MICME_STREAM_FINALIZE_WITH_CLIP") ?? "1",
-			currentValue: env("MICME_STREAM_FINALIZE_WITH_CLIP") ?? "1",
-			values: ["1", "0"],
+			description: "Opt in to replace the append-only live stream with a final clip-mode transcript on stop.",
+			rawValue: env("MICME_STREAM_FINALIZE_WITH_CLIP") ?? "0",
+			currentValue: env("MICME_STREAM_FINALIZE_WITH_CLIP") ?? "0",
+			values: ["0", "1"],
 			displayKind: "boolean",
 		},
 		{
@@ -802,7 +811,7 @@ export function buildConfigurationItems(modelCandidates: ModelCandidate[], audio
 			id: "MICME_STREAM_DIAGNOSTICS",
 			categoryId: "diagnostics",
 			label: "Stream diagnostics",
-			description: "Show timing notifications for first whisper-stream output and first editor preview.",
+			description: "Show opt-in whisper-stream frame/state diagnostics and first-output timing notifications.",
 			rawValue: env("MICME_STREAM_DIAGNOSTICS") ?? "0",
 			currentValue: env("MICME_STREAM_DIAGNOSTICS") ?? "0",
 			values: ["0", "1"],
@@ -860,19 +869,6 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 	await writeMicmeConfigValues(valuesToWrite);
 	reloadMicmeConfig();
 
-	const configLabel = formatConfigPathForMessage(getMicmeConfigPath());
-	const overriddenKeys = Object.keys(valuesToWrite).filter((key) => process.env[key] !== undefined);
-	if (id === "MICME_TRANSCRIPTION_MODE") {
-		const mode = valuesToWrite.MICME_TRANSCRIPTION_MODE === "stream" ? "stream" : "clip";
-		const detail = mode === "stream" ? "low-latency stream profile" : "stable clip profile";
-		const sourceSuffix = overriddenKeys.length ? `; shell env still overrides ${overriddenKeys.join(", ")}` : ` (${configLabel})`;
-		ctx.ui.notify(`Saved ${mode} mode and applied ${detail}${sourceSuffix}.`, overriddenKeys.length ? "warning" : "info");
-	} else {
-		const overrideSuffix = overriddenKeys.includes(id) ? `, but shell env still overrides ${id}` : ` (${configLabel})`;
-		const reloadSuffix = id === "MICME_SHORTCUT" ? " • /reload required" : id === "MICME_PRINTABLE_SHORTCUTS" ? " • /reload recommended" : "";
-		ctx.ui.notify(`Saved ${id}=${displayConfigurationValue(id, value)}${overrideSuffix}${reloadSuffix}`, overriddenKeys.includes(id) ? "warning" : "info");
-	}
-
 	const effectiveValues: Record<string, string> = {};
 	for (const key of Object.keys(valuesToWrite)) effectiveValues[key] = env(key) ?? "";
 	return effectiveValues;
@@ -899,24 +895,11 @@ export function uniqueStrings(values: string[]) {
 function formatSaveStatus(id: string, value: string) {
 	const writtenKeys = id === "MICME_TRANSCRIPTION_MODE" ? Object.keys(getTranscriptionModeProfile(value === "stream" ? "stream" : "clip")) : [id];
 	const overriddenKeys = writtenKeys.filter((key) => process.env[key] !== undefined);
-	const configLabel = formatConfigPathForMessage(getMicmeConfigPath());
-	if (id === "MICME_TRANSCRIPTION_MODE") {
-		const mode = value === "stream" ? "stream" : "clip";
-		const detail = mode === "stream" ? "low-latency stream profile" : "stable clip profile";
-		const sourceSuffix = overriddenKeys.length ? ` • shell env still overrides ${overriddenKeys.join(", ")}` : ` • ${configLabel}`;
-		return `Saved MICME_TRANSCRIPTION_MODE=${mode} and applied ${detail}${sourceSuffix}`;
-	}
+	const reloadHint = id === "MICME_SHORTCUT" ? "/reload required for shortcut changes" : id === "MICME_PRINTABLE_SHORTCUTS" ? "/reload recommended for printable shortcuts" : "";
 
-	const sourceSuffix = overriddenKeys.includes(id) ? `, but shell env still overrides ${id}` : ` (${configLabel})`;
-	const reloadSuffix = id === "MICME_SHORTCUT" ? " • /reload required" : id === "MICME_PRINTABLE_SHORTCUTS" ? " • /reload recommended" : "";
-	return `Saved ${id}=${displayConfigurationValue(id, value)}${sourceSuffix}${reloadSuffix}`;
-}
-
-function formatConfigPathForMessage(path: string) {
-	const home = homedir();
-	if (home && path === home) return "~";
-	if (home && path.startsWith(`${home}/`)) return `~/${path.slice(home.length + 1)}`;
-	return path;
+	if (id === "MICME_TRANSCRIPTION_MODE" && overriddenKeys.length) return `Shell env still overrides ${overriddenKeys.join(", ")}`;
+	if (overriddenKeys.includes(id)) return reloadHint ? `Shell env still overrides ${id} • ${reloadHint}` : `Shell env still overrides ${id}`;
+	return reloadHint;
 }
 
 function fitAnsi(text: string, width: number, ellipsis = "…") {
