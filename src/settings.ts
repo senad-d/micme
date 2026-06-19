@@ -37,7 +37,7 @@ import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } 
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
 
-type ConfigurationCategoryId = "general" | "transcription" | "streaming" | "audio" | "shortcuts" | "diagnostics";
+type ConfigurationCategoryId = "general" | "transcription" | "streaming" | "audio";
 type FocusedPane = "categories" | "settings";
 type DisplayKind = "boolean" | "number" | "path" | "slider" | "text" | "model";
 
@@ -61,8 +61,6 @@ const CONFIGURATION_CATEGORIES: ConfigurationCategory[] = [
 	{ id: "transcription", label: "Transcription", description: "Backend model, mode, and transcription fallback settings." },
 	{ id: "streaming", label: "Streaming", description: "Low-latency live transcription behavior." },
 	{ id: "audio", label: "Audio", description: "Recording, preprocessing, and metering settings." },
-	{ id: "shortcuts", label: "Shortcuts", description: "Terminal and printable-character shortcut bindings." },
-	{ id: "diagnostics", label: "Diagnostics", description: "Debug and timing output." },
 ];
 
 const TWO_PANE_MIN_WIDTH = 72;
@@ -850,7 +848,7 @@ export function buildConfigurationItems(
 		},
 		{
 			id: "MICME_SHORTCUT",
-			categoryId: "shortcuts",
+			categoryId: "general",
 			label: "Terminal shortcut",
 			description: "Shortcut when your terminal sends real Alt/Ctrl keys. Requires /reload or restart after changing.",
 			rawValue: env("MICME_SHORTCUT") ?? DEFAULT_SHORTCUT,
@@ -860,7 +858,7 @@ export function buildConfigurationItems(
 		},
 		{
 			id: "MICME_PRINTABLE_SHORTCUTS",
-			categoryId: "shortcuts",
+			categoryId: "general",
 			label: "macOS printable shortcut",
 			description: "Toggle-only fallback for terminals where Option+M inserts a character instead of sending Alt+M. Use /reload after changing.",
 			rawValue: macosPrintableShortcut,
@@ -871,7 +869,7 @@ export function buildConfigurationItems(
 		},
 		{
 			id: "MICME_STREAM_DIAGNOSTICS",
-			categoryId: "diagnostics",
+			categoryId: "general",
 			label: "Stream diagnostics",
 			description: "Show opt-in whisper-stream frame/state diagnostics and first-output timing notifications.",
 			rawValue: env("MICME_STREAM_DIAGNOSTICS") ?? "0",
