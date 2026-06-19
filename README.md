@@ -17,6 +17,17 @@
 
 Micme is a pi extension for short coding prompts. It records your microphone with `ffmpeg`, transcribes locally with `whisper.cpp` or another local backend, and inserts the transcript into pi.
 
+<table align="center">
+  <tr>
+    <th>Micme demo</th>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="img/demo.gif" alt="Micme demo: record voice and paste the transcript into pi" title="Micme demo" width="760">
+    </td>
+  </tr>
+</table>
+
 - **Local-first:** no telemetry and no cloud STT service by default.
 - **Review-first:** transcripts paste into the editor unless you enable auto-submit.
 - **Pi-native:** install globally, project-locally, from git, or from a source checkout.
