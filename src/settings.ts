@@ -20,9 +20,6 @@ import {
 	DEFAULT_STREAM_VAD_THRESHOLD,
 	DEFAULT_STREAM_FLUSH_MS,
 	DEFAULT_TRANSCRIBE_SAMPLE_RATE,
-	DEFAULT_WHISPER_CPP_MODEL_NAME,
-	PYTHON_WHISPER_MODEL_NAMES,
-	WHISPER_CPP_MODEL_NAMES,
 } from "./constants.ts";
 import {
 	env,
@@ -33,9 +30,10 @@ import {
 	writeMicmeConfigValues,
 } from "./config.ts";
 import { discoverAudioDevices } from "./audio.ts";
-import { discoverWhisperCppModels, ensureWhisperCppModel, getDefaultWhisperCppModelPath } from "./models.ts";
+import { formatBackendLabel, resolveTranscriptionPlan } from "./backends.ts";
+import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
-import type { AudioDeviceCandidate, ModelCandidate } from "./types.ts";
+import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
 
@@ -55,6 +53,7 @@ interface ConfigurationItem extends SettingItem {
 	displayKind?: DisplayKind;
 	emptyLabel?: string;
 	valueLabels?: Record<string, string>;
+	visibleWhen?: (plan: ResolvedTranscriptionPlan) => boolean;
 }
 
 const CONFIGURATION_CATEGORIES: ConfigurationCategory[] = [
@@ -81,9 +80,10 @@ export async function showConfiguration(ctx: ExtensionContext) {
 	}
 	const audioDevices = await discoverAudioDevices();
 	const modelCandidates = discoverWhisperCppModels(ctx.cwd);
+	const pythonModelCandidates = await discoverPythonWhisperModels();
 
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-		const items = buildConfigurationItems(modelCandidates, audioDevices, theme);
+		const items = buildConfigurationItems(modelCandidates, pythonModelCandidates, audioDevices, theme);
 		return new ConfigurationScreen({
 			configPath: configState.path,
 			items,
@@ -134,6 +134,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	render(width: number): string[] {
+		this.refreshDerivedItems();
 		if (this.submenuComponent) return this.submenuComponent.render(width);
 		if (width < TWO_PANE_MIN_WIDTH) return this.renderNarrow(width);
 		return this.renderTwoPane(width);
@@ -350,9 +351,9 @@ class ConfigurationScreen implements Component {
 		const category = this.currentCategory();
 		const selection = this.getSelectionText();
 		const search = this.searchActive ? `Search: ${this.searchQuery || "type to filter all settings"}` : "";
-		const lead = this.statusText || search || "↑↓ move • Tab pane • Enter edit • / search • Esc back • q quit";
+		const lead = this.statusText || search;
 		const description = selected?.description ?? category.description;
-		return `${lead} • ${selection} • ${description}`;
+		return lead ? `${lead} • ${selection} • ${description}` : `${selection} • ${description}`;
 	}
 
 	private formatValue(item: ConfigurationItem, width: number) {
@@ -409,12 +410,22 @@ class ConfigurationScreen implements Component {
 	}
 
 	private getCategoryItems(categoryId = this.currentCategory().id) {
-		return this.items.filter((item) => item.categoryId === categoryId);
+		const plan = this.getCurrentPlan();
+		return this.items.filter((item) => item.categoryId === categoryId && this.isItemVisible(item, plan));
+	}
+
+	private getVisibleItems() {
+		const plan = this.getCurrentPlan();
+		return this.items.filter((item) => this.isItemVisible(item, plan));
+	}
+
+	private isItemVisible(item: ConfigurationItem, plan: ResolvedTranscriptionPlan) {
+		return item.visibleWhen ? item.visibleWhen(plan) : true;
 	}
 
 	private getDisplaySettings() {
 		if (!this.hasSearchQuery()) return this.getCategoryItems();
-		return fuzzyFilter(this.items, this.searchQuery, (item) => `${item.label} ${item.id} ${item.description ?? ""} ${this.getCategory(item.categoryId).label}`);
+		return fuzzyFilter(this.getVisibleItems(), this.searchQuery, (item) => `${item.label} ${item.id} ${item.description ?? ""} ${this.getCategory(item.categoryId).label}`);
 	}
 
 	private getSelectedSetting() {
@@ -479,7 +490,8 @@ class ConfigurationScreen implements Component {
 		void this.onSave(item.id, nextValue)
 			.then((updatedValues) => {
 				this.updateValues(updatedValues);
-				this.refreshDerivedDefaults();
+				this.refreshDerivedItems();
+				this.clampSelections();
 				this.statusText = formatSaveStatus(item.id, nextValue);
 			})
 			.catch((error) => {
@@ -501,13 +513,40 @@ class ConfigurationScreen implements Component {
 		}
 	}
 
-	private refreshDerivedDefaults() {
-		if (env("MICME_WHISPER_CPP_MODEL") !== undefined) return;
-		const item = this.items.find((candidate) => candidate.id === "MICME_WHISPER_CPP_MODEL");
-		if (!item) return;
-		item.rawValue = getDefaultWhisperCppModelPath();
-		item.currentValue = displayConfigurationValue(item.id, item.rawValue);
+	private refreshDerivedItems() {
+		const plan = this.getCurrentPlan();
+		const backend = this.items.find((candidate) => candidate.id === "MICME_TRANSCRIBE_BACKEND");
+		if (backend && !["whisper.cpp", "python"].includes(backend.rawValue)) {
+			backend.rawValue = getUiBackendValue(plan);
+			backend.currentValue = displayConfigurationValue(backend.id, backend.rawValue);
+		}
+
+		const model = this.items.find((candidate) => candidate.id === "MICME_WHISPER_CPP_MODEL");
+		if (model) {
+			model.rawValue = getCurrentWhisperCppModelValue();
+			model.currentValue = displayConfigurationValue(model.id, model.rawValue);
+		}
+
+		const mode = this.items.find((candidate) => candidate.id === "MICME_TRANSCRIPTION_MODE");
+		if (mode) {
+			const base = "Changing this applies the matching profile: stable clip defaults or low-latency stream settings.";
+			mode.description = plan.requestedBackend === "python" || plan.requestedBackend === "custom"
+				? `${base} Streaming mode requires whisper.cpp. Switch to clip mode or choose auto/whisper.cpp.`
+				: base;
+		}
 	}
+
+	private getCurrentPlan() {
+		return resolveTranscriptionPlan({ transcriptionMode: getTranscriptionMode() });
+	}
+
+	private clampSelections() {
+		for (const category of CONFIGURATION_CATEGORIES) {
+			const count = this.getCategoryItems(category.id).length;
+			this.selectedByCategory.set(category.id, clamp(this.selectedByCategory.get(category.id) ?? 0, 0, Math.max(0, count - 1)));
+		}
+	}
+
 
 	private handleSearchInput(data: string) {
 		if (matchesKey(data, Key.slash)) {
@@ -549,8 +588,16 @@ class ConfigurationScreen implements Component {
 	}
 }
 
-export function buildConfigurationItems(modelCandidates: ModelCandidate[], audioDevices: AudioDeviceCandidate[], theme: MicmeTheme): ConfigurationItem[] {
-	const currentModel = env("MICME_WHISPER_CPP_MODEL") ?? getDefaultWhisperCppModelPath();
+export function buildConfigurationItems(
+	modelCandidates: ModelCandidate[],
+	pythonModelCandidatesOrAudioDevices: ModelCandidate[] | AudioDeviceCandidate[],
+	audioDevicesOrTheme: AudioDeviceCandidate[] | MicmeTheme,
+	maybeTheme?: MicmeTheme,
+): ConfigurationItem[] {
+	const pythonModelCandidates = maybeTheme ? (pythonModelCandidatesOrAudioDevices as ModelCandidate[]) : [];
+	const audioDevices = maybeTheme ? (audioDevicesOrTheme as AudioDeviceCandidate[]) : (pythonModelCandidatesOrAudioDevices as AudioDeviceCandidate[]);
+	const theme = maybeTheme ?? (audioDevicesOrTheme as MicmeTheme);
+	const currentModelPath = getCurrentWhisperCppModelValue();
 	const currentDevice = env("MICME_AUDIO_DEVICE") ?? "0";
 	const audioValues = audioDevices.length > 0 ? audioDevices.map((device) => device.value) : [currentDevice];
 	if (!audioValues.includes(currentDevice)) audioValues.unshift(currentDevice);
@@ -559,6 +606,15 @@ export function buildConfigurationItems(modelCandidates: ModelCandidate[], audio
 	const whisperStreamBinValues = uniqueStrings([env("MICME_WHISPER_STREAM_BIN") ?? "", findExecutable(["whisper-stream"]) ?? "", "whisper-stream"]);
 	const audioFilter = env("MICME_AUDIO_FILTER") ?? "highpass=f=80,lowpass=f=7600";
 	const macosPrintableShortcut = env("MICME_PRINTABLE_SHORTCUTS") ?? (process.platform === "darwin" ? DEFAULT_MACOS_PRINTABLE_SHORTCUT : "");
+	const plan = resolveTranscriptionPlan({ transcriptionMode: getTranscriptionMode() });
+	const backendValues = ["whisper.cpp", "python"] as const;
+	const backendLabels = Object.fromEntries(backendValues.map((value) => [value, formatBackendLabel(value)]));
+	const uiBackendValue = getUiBackendValue(plan);
+	const whisperCppVisible = (candidate: ResolvedTranscriptionPlan) => getUiBackendValue(candidate) === "whisper.cpp";
+	const pythonVisible = (candidate: ResolvedTranscriptionPlan) => getUiBackendValue(candidate) === "python";
+	const pythonModelValues = uniqueStrings([env("MICME_WHISPER_MODEL") ?? "base.en", ...pythonModelCandidates.map((candidate) => candidate.value)]);
+	const pythonModelLabels = Object.fromEntries(pythonModelCandidates.map((candidate) => [candidate.value, candidate.label]));
+	const modelPathCandidates = [{ label: "Use default model", value: "", description: "Clear explicit path override and use Micme's default whisper.cpp model path.", installed: true, kind: "path" as const }, ...modelCandidates];
 
 	return [
 		{
@@ -570,16 +626,6 @@ export function buildConfigurationItems(modelCandidates: ModelCandidate[], audio
 			currentValue: env("MICME_AUTO_DOWNLOAD_MODEL") ?? "1",
 			values: ["1", "0"],
 			displayKind: "boolean",
-		},
-		{
-			id: "MICME_DEFAULT_WHISPER_CPP_MODEL",
-			categoryId: "general",
-			label: "Default model name",
-			description: "Used when no explicit whisper.cpp model path is configured.",
-			rawValue: env("MICME_DEFAULT_WHISPER_CPP_MODEL") ?? DEFAULT_WHISPER_CPP_MODEL_NAME,
-			currentValue: env("MICME_DEFAULT_WHISPER_CPP_MODEL") ?? DEFAULT_WHISPER_CPP_MODEL_NAME,
-			values: [...WHISPER_CPP_MODEL_NAMES],
-			displayKind: "text",
 		},
 		{
 			id: "MICME_LANGUAGE",
@@ -602,37 +648,53 @@ export function buildConfigurationItems(modelCandidates: ModelCandidate[], audio
 			displayKind: "text",
 		},
 		{
+			id: "MICME_TRANSCRIBE_BACKEND",
+			categoryId: "transcription",
+			label: "Backend",
+			description: "Choose the transcription backend.",
+			rawValue: uiBackendValue,
+			currentValue: uiBackendValue,
+			values: [...backendValues],
+			valueLabels: backendLabels,
+			displayKind: "text",
+		},
+		{
 			id: "MICME_WHISPER_CPP_MODEL",
 			categoryId: "transcription",
-			label: "Whisper.cpp model",
-			description: "Local ggml/gguf Whisper model. Use small.en/medium.en if base.en is too weak.",
-			rawValue: currentModel,
-			currentValue: displayConfigurationValue("MICME_WHISPER_CPP_MODEL", currentModel),
+			label: "Model",
+			description: "Whisper.cpp ggml/gguf model file.",
+			rawValue: currentModelPath,
+			currentValue: displayConfigurationValue("MICME_WHISPER_CPP_MODEL", currentModelPath),
 			displayKind: "model",
 			emptyLabel: "not set",
-			submenu: (_currentValue, done) => createModelSelector(modelCandidates, theme, done),
+			submenu: (_currentValue, done) => createModelSelector(modelPathCandidates, theme, done),
+			visibleWhen: whisperCppVisible,
 		},
 		{
 			id: "MICME_WHISPER_CPP_BIN",
 			categoryId: "transcription",
-			label: "Whisper.cpp binary",
+			label: "Binary",
 			description: "Command/path for whisper.cpp transcription. Leave unset to use whisper-cli/whisper-cpp from PATH.",
 			rawValue: env("MICME_WHISPER_CPP_BIN") ?? "",
 			currentValue: displayConfigurationValue("MICME_WHISPER_CPP_BIN", env("MICME_WHISPER_CPP_BIN") ?? ""),
 			values: whisperCppBinValues,
 			displayKind: "path",
 			emptyLabel: "not set",
+			visibleWhen: whisperCppVisible,
 		},
 		{
 			id: "MICME_WHISPER_MODEL",
 			categoryId: "transcription",
-			label: "Python fallback model",
-			description: "Used only when whisper.cpp model is not configured.",
+			label: "Model",
+			description: "Model name passed to the OpenAI Whisper Python CLI.",
 			rawValue: env("MICME_WHISPER_MODEL") ?? "base.en",
 			currentValue: env("MICME_WHISPER_MODEL") ?? "base.en",
-			values: [...PYTHON_WHISPER_MODEL_NAMES],
+			values: pythonModelValues,
+			valueLabels: pythonModelLabels,
 			displayKind: "text",
+			visibleWhen: pythonVisible,
 		},
+
 		{
 			id: "MICME_WHISPER_STREAM_BIN",
 			categoryId: "streaming",
@@ -876,8 +938,19 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 
 export function displayConfigurationValue(id: string, value: string) {
 	if (id === "MICME_WHISPER_CPP_MODEL") return value ? basename(value) : "not set";
+	if (id === "MICME_TRANSCRIBE_COMMAND") return value ? "configured" : "not set";
 	if (id === "MICME_AUDIO_FILTER") return value || "<empty>";
 	return value || "not set";
+}
+
+function getUiBackendValue(plan: ResolvedTranscriptionPlan): "whisper.cpp" | "python" {
+	if (plan.requestedBackend === "python" || plan.requestedBackend === "whisper.cpp") return plan.requestedBackend;
+	return plan.effectiveBackend === "python" ? "python" : "whisper.cpp";
+}
+
+function getCurrentWhisperCppModelValue() {
+	const explicit = env("MICME_WHISPER_CPP_MODEL")?.trim();
+	return explicit ? expandConfigPath(explicit) : resolveWhisperCppModel().path;
 }
 
 export function uniqueStrings(values: string[]) {

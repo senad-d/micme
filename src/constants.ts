@@ -25,7 +25,9 @@ export const STREAM_PROFILE_VAD_THRESHOLD = 0.35;
 export const STREAM_PROFILE_FLUSH_MS = 650;
 export const DEFAULT_MIN_MAX_VOLUME_DB = -50;
 export const AUDIO_VALIDATION_TIMEOUT_MS = 30_000;
+export const DEFAULT_TRANSCRIBE_BACKEND = "auto";
 export const DEFAULT_WHISPER_CPP_MODEL_NAME = "small.en";
+export const DEFAULT_PYTHON_WHISPER_MODEL_NAME = "base.en";
 export const WHISPER_CPP_MODEL_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 export const WHISPER_CPP_MODEL_NAMES = [
 	"tiny.en",

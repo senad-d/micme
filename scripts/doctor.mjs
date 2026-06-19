@@ -7,6 +7,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 
 const isWin = process.platform === "win32";
 const micmeConfig = loadMicmeConfig();
+const DEFAULT_TRANSCRIBE_BACKEND = "auto";
+const TRANSCRIBE_BACKENDS = new Set(["auto", "whisper.cpp", "python", "custom"]);
 
 function getMicmeConfigPath() {
   const agentDir = process.env.PI_CODING_AGENT_DIR ? resolve(process.env.PI_CODING_AGENT_DIR) : join(homedir(), ".pi", "agent");
@@ -91,6 +93,94 @@ function summarizeConfiguredCommand(value) {
   return `configured (${trimmed.length} chars${placeholderText}; full value redacted)`;
 }
 
+function getTranscribeBackend() {
+  const raw = env("MICME_TRANSCRIBE_BACKEND")?.trim();
+  return TRANSCRIBE_BACKENDS.has(raw) ? raw : DEFAULT_TRANSCRIBE_BACKEND;
+}
+
+function getTranscriptionMode() {
+  return env("MICME_TRANSCRIPTION_MODE") === "stream" ? "stream" : "clip";
+}
+
+function resolveWhisperCppModelSummary() {
+  const explicit = envPath("MICME_WHISPER_CPP_MODEL");
+  if (explicit) {
+    return {
+      path: explicit,
+      source: "MICME_WHISPER_CPP_MODEL explicit path",
+      exists: existsSync(explicit),
+    };
+  }
+  const defaultModel = env("MICME_DEFAULT_WHISPER_CPP_MODEL") || "small.en";
+  const modelDir = expandConfigValue(env("MICME_MODEL_DIR") || join(homedir(), ".cache", "whisper.cpp"));
+  const path = join(modelDir, `ggml-${defaultModel}.bin`);
+  return {
+    path,
+    modelName: defaultModel,
+    source: env("MICME_DEFAULT_WHISPER_CPP_MODEL") ? "MICME_DEFAULT_WHISPER_CPP_MODEL" : "default whisper.cpp model name",
+    exists: existsSync(path),
+  };
+}
+
+function resolveBackendPlan({ whisperCpp, whisperStream, whisper, transcribeCommand }) {
+  const requestedBackend = getTranscribeBackend();
+  const mode = getTranscriptionMode();
+  const whisperCppAvailable = Boolean(whisperCpp && existsSync(whisperCpp));
+  const whisperStreamAvailable = Boolean(whisperStream && existsSync(whisperStream));
+  const pythonAvailable = Boolean(whisper && existsSync(whisper));
+  const model = resolveWhisperCppModelSummary();
+  const warnings = [];
+
+  const invalidBackend = env("MICME_TRANSCRIBE_BACKEND")?.trim();
+  if (invalidBackend && !TRANSCRIBE_BACKENDS.has(invalidBackend)) warnings.push(`Invalid MICME_TRANSCRIBE_BACKEND=${invalidBackend}; using auto.`);
+
+  if (mode === "stream") {
+    if (requestedBackend === "python") {
+      return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "Streaming mode requires whisper.cpp; Python Whisper only supports clip transcription.", warnings };
+    }
+    if (requestedBackend === "custom") {
+      return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "Streaming mode requires whisper.cpp; custom transcribe commands only support clip transcription.", warnings };
+    }
+    if (whisperStreamAvailable) {
+      return { requestedBackend, effectiveBackend: "whisper.cpp", binary: whisperStream, model, effectiveModel: model.path, reason: "streaming uses whisper-stream", warnings };
+    }
+    return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "MICME_TRANSCRIPTION_MODE=stream but whisper-stream was not found.", warnings };
+  }
+
+  if (requestedBackend === "custom") {
+    if (transcribeCommand?.trim()) return { requestedBackend, effectiveBackend: "custom", effectiveModel: "unknown", reason: "MICME_TRANSCRIBE_BACKEND=custom", warnings };
+    return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "MICME_TRANSCRIBE_BACKEND=custom but MICME_TRANSCRIBE_COMMAND is not set.", warnings };
+  }
+  if (requestedBackend === "whisper.cpp") {
+    if (whisperCppAvailable) return { requestedBackend, effectiveBackend: "whisper.cpp", binary: whisperCpp, model, effectiveModel: model.path, reason: "MICME_TRANSCRIBE_BACKEND=whisper.cpp", warnings };
+    return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "MICME_TRANSCRIBE_BACKEND=whisper.cpp but whisper.cpp was not found.", warnings };
+  }
+  if (requestedBackend === "python") {
+    if (pythonAvailable) return { requestedBackend, effectiveBackend: "python", binary: whisper, effectiveModel: env("MICME_WHISPER_MODEL") || "base.en", reason: "MICME_TRANSCRIBE_BACKEND=python", warnings };
+    return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "MICME_TRANSCRIBE_BACKEND=python but the `whisper` CLI was not found.", warnings };
+  }
+
+  if (transcribeCommand?.trim()) return { requestedBackend, effectiveBackend: "custom", effectiveModel: "unknown", reason: "auto selected custom command because MICME_TRANSCRIBE_COMMAND is configured", warnings };
+  if (whisperCppAvailable) return { requestedBackend, effectiveBackend: "whisper.cpp", binary: whisperCpp, model, effectiveModel: model.path, reason: "auto selected whisper.cpp because a whisper.cpp binary is available", warnings };
+  if (pythonAvailable) return { requestedBackend, effectiveBackend: "python", binary: whisper, effectiveModel: env("MICME_WHISPER_MODEL") || "base.en", reason: "auto selected Python Whisper because whisper.cpp is unavailable", warnings };
+  return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "No Micme transcription backend found.", warnings };
+}
+
+function printBackendPlanDiagnostics(plan) {
+  info("requested backend", plan.requestedBackend);
+  if (plan.effectiveBackend === "none") warn("effective backend", plan.reason);
+  else ok("effective backend", `${plan.effectiveBackend} (${plan.reason})`);
+
+  if (plan.effectiveBackend === "custom") info("effective model", "unknown; controlled by MICME_TRANSCRIBE_COMMAND");
+  else if (plan.effectiveBackend === "whisper.cpp") {
+    info("effective model", `${plan.effectiveModel} (${plan.model?.source || "whisper.cpp model"})`);
+    if (plan.model && !plan.model.exists) warn("effective whisper.cpp model is missing", plan.effectiveModel);
+  } else if (plan.effectiveBackend === "python") info("effective model", plan.effectiveModel);
+  else info("effective model", "unavailable");
+
+  for (const warning of plan.warnings) warn("backend warning", warning);
+}
+
 function printConfigDiagnostics() {
   if (micmeConfig.error) warn("micme.json invalid", `${micmeConfig.path}: ${micmeConfig.error}`);
   else if (micmeConfig.found) ok("micme.json loaded", `${micmeConfig.path} (${Object.keys(micmeConfig.values).length} MICME_* key(s))`);
@@ -151,6 +241,8 @@ async function main() {
   const transcribeCommand = env("MICME_TRANSCRIBE_COMMAND");
   if (transcribeCommand) ok("custom transcribe command", summarizeConfiguredCommand(transcribeCommand));
   else info("custom transcribe command", "not set");
+
+  printBackendPlanDiagnostics(resolveBackendPlan({ whisperCpp, whisperStream, whisper, transcribeCommand }));
 
   const recordCommand = env("MICME_RECORD_COMMAND");
   if (recordCommand) ok("custom record command", summarizeConfiguredCommand(recordCommand));

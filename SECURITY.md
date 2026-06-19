@@ -39,7 +39,7 @@ The default process output is capped before it is shown to users or errors. Diag
 
 ## Custom command risks
 
-`MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND` are advanced escape hatches. They run through the local shell (`sh -lc` on Unix-like systems and `cmd.exe` on Windows). Only use commands you wrote or fully trust.
+`MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND` are advanced escape hatches. They run through the local shell (`sh -lc` on Unix-like systems and `cmd.exe` on Windows). Only use commands you wrote or fully trust. When `MICME_TRANSCRIBE_BACKEND=custom`, Micme does not try to inspect, parse, or rewrite the command to infer which model it uses.
 
 Micme replaces these placeholders in custom commands:
 
@@ -59,7 +59,7 @@ Disable model downloads with:
 MICME_AUTO_DOWNLOAD_MODEL=0
 ```
 
-You can also download models manually and set `MICME_WHISPER_CPP_MODEL=/path/to/model.bin`.
+You can also download models manually and set `MICME_WHISPER_CPP_MODEL=/path/to/model.bin`. Micme only auto-downloads standard, inferable whisper.cpp model files and does not treat arbitrary custom-command model references as downloadable assets.
 
 ## Micme config handling
 

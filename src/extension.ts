@@ -6,7 +6,6 @@ import { RECORDER_STARTUP_GRACE_MS, STATUS_KEY } from "./constants.ts";
 import {
 	env,
 	envFlag,
-	expandConfigPath,
 	getShortcut,
 	getStreamFinalizeWithClip,
 	getTranscriptionMode,
@@ -14,7 +13,8 @@ import {
 } from "./config.ts";
 import { buildRecorderCommand, listAudioDevices, prepareAudioForTranscription, registerDeviceMessageRenderer, validateRecordedAudio } from "./audio.ts";
 import { installMicmeEditorFallback, type MicmeEditorInputHandlers } from "./editor.ts";
-import { getDefaultWhisperCppModelPath, ensureWhisperCppModel } from "./models.ts";
+import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
+import { ensureWhisperCppModel } from "./models.ts";
 import {
 	cleanup,
 	formatExit,
@@ -38,7 +38,7 @@ import {
 	showStreamingDiagnostics,
 } from "./streaming.ts";
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
-import { getWhisperStreamBinary, transcribe } from "./transcription.ts";
+import { transcribe } from "./transcription.ts";
 import type { Recording } from "./types.ts";
 
 const MICME_ACTIONS = ["devices", "conf", "last", "audio", "help"] as const;
@@ -240,16 +240,15 @@ async function stopAndTranscribe(ctx: ExtensionContext, pi: ExtensionAPI) {
 }
 
 async function startStreamingTranscription(ctx: ExtensionContext, stopHint = getShortcut()) {
-	const whisperStream = getWhisperStreamBinary();
-	if (!whisperStream) {
-		throw new Error("Streaming mode needs whisper-stream. Install whisper-cpp or switch /micme conf back to clip mode.");
+	const plan = resolveTranscriptionPlan({ transcriptionMode: "stream" });
+	if (plan.effectiveBackend !== "whisper.cpp" || !plan.binary || !plan.modelPath) {
+		throw new Error(formatTranscriptionPlan(plan));
 	}
 
-	const whisperCppModel = expandConfigPath(getConfiguredWhisperCppModel());
-	await ensureWhisperCppModel(whisperCppModel, ctx);
+	await ensureWhisperCppModel(plan.modelPath, ctx, { allowDownload: plan.modelDownloadable !== false });
 
 	const tempDir = await mkdtemp(join(tmpdir(), "micme-stream-"));
-	const command = buildWhisperStreamCommand(whisperStream, whisperCppModel, tempDir);
+	const command = buildWhisperStreamCommand(plan.binary, plan.modelPath, tempDir);
 	const active = spawnRecording(command, "", tempDir);
 	const baseText = ctx.ui.getEditorText();
 	active.streaming = {
@@ -358,7 +357,4 @@ async function stopStreamingTranscription(ctx: ExtensionContext, pi: ExtensionAP
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
-function getConfiguredWhisperCppModel() {
-	return env("MICME_WHISPER_CPP_MODEL") || getDefaultWhisperCppModelPath();
-}
 

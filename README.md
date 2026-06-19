@@ -161,6 +161,7 @@ You can also edit the JSON manually. Minimal `~/.pi/agent/micme.json`:
 {
   "$schema": "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json",
   "MICME_LANGUAGE": "en",
+  "MICME_TRANSCRIBE_BACKEND": "auto",
   "MICME_AUTO_DOWNLOAD_MODEL": "1",
   "MICME_DEFAULT_WHISPER_CPP_MODEL": "small.en",
   "MICME_AUTO_SUBMIT": "0",
@@ -174,8 +175,9 @@ Common settings:
 
 | Variable | Meaning |
 | --- | --- |
+| `MICME_TRANSCRIBE_BACKEND=auto` | Backend selector. `auto` preserves priority: custom command, whisper.cpp, then Python Whisper. |
 | `MICME_TRANSCRIPTION_MODE=clip` | Stable default: transcribe after recording stops. |
-| `MICME_TRANSCRIPTION_MODE=stream` | Experimental append-only live dictation with `whisper-stream`. |
+| `MICME_TRANSCRIPTION_MODE=stream` | Experimental append-only live dictation with `whisper-stream`; requires whisper.cpp. |
 | `MICME_STREAM_KEEP_CONTEXT=0` | Stream default: avoid Whisper prompt carry-over so live chunks are less likely to rewrite each other. |
 | `MICME_STREAM_FLUSH_MS=650` | Stream profile quiet interval before tentative words are committed append-only. |
 | `MICME_STREAM_FINALIZE_WITH_CLIP=0` | Keep the append-only live transcript on stop. Set `1` to opt in to final clip replacement. |
@@ -207,9 +209,16 @@ Streaming mode treats `whisper-stream` output as repeated, overlapping hypothese
 
 ## Models and Backends
 
-Default backend: `whisper.cpp` via `whisper-cli`.
+Micme supports these backend values in JSON/env config:
 
-With `MICME_AUTO_DOWNLOAD_MODEL=1`, Micme downloads missing standard models into `MICME_MODEL_DIR`. Disable downloads with:
+- `auto` (default): custom command when configured, otherwise whisper.cpp, otherwise Python Whisper.
+- `whisper.cpp`: uses `whisper-cli`/`whisper-cpp` and a ggml/gguf model path.
+- `python`: uses the OpenAI Whisper `whisper` CLI and a Python model name.
+- `custom`: runs `MICME_TRANSCRIBE_COMMAND`; Micme treats the model as unknown.
+
+`/micme conf` keeps the interactive backend picker focused on `whisper.cpp` and `Python Whisper`, then shows only the model/binary fields for the selected backend. For whisper.cpp, `MICME_WHISPER_CPP_MODEL` is the selected ggml/gguf model path; if it is unset, Micme falls back to `${MICME_MODEL_DIR}/ggml-${MICME_DEFAULT_WHISPER_CPP_MODEL}.bin`. For Python Whisper, `MICME_WHISPER_MODEL` is passed as the CLI model name.
+
+With `MICME_AUTO_DOWNLOAD_MODEL=1`, Micme downloads missing standard whisper.cpp models into `MICME_MODEL_DIR`. Disable downloads with:
 
 ```env
 MICME_AUTO_DOWNLOAD_MODEL=0
@@ -232,7 +241,7 @@ MICME_TRANSCRIBE_COMMAND=whisper-cli -m /path/to/model.bin -f {audio} -otxt -of 
 
 | Problem | Try |
 | --- | --- |
-| No backend found | Install `whisper.cpp`, put `whisper-cli` on `PATH`, or set `MICME_WHISPER_CPP_BIN`. |
+| No backend found | Use `/micme conf` to choose `whisper.cpp` or Python Whisper, install the selected backend, or configure a trusted custom command manually. |
 | Wrong microphone | Run `/micme devices`, then set the OS-specific device variable. |
 | Unrelated transcript | You probably recorded silence. Set `MICME_KEEP_AUDIO=1` and check `/micme audio`. |
 | Slow transcription | Use `whisper.cpp`, a smaller model, and shorter recordings. |
@@ -253,7 +262,7 @@ From a source checkout:
 npm run doctor
 ```
 
-The doctor checks Node, pi, `ffmpeg`, whisper.cpp, optional `whisper-stream`, model paths, and macOS devices when available. Custom command values are redacted.
+The doctor checks Node, pi, `ffmpeg`, requested/effective backend, effective model, whisper.cpp, optional `whisper-stream`, model paths, and macOS devices when available. Custom command values are redacted.
 
 For stream state investigation, start pi with `MICME_STREAM_DIAGNOSTICS=1`. Diagnostics are opt-in and include sanitized frames, extraction mode, committed words, and tentative candidate words.
 

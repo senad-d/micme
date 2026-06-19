@@ -2,31 +2,31 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { env, expandConfigPath, getTranscribeTimeoutMs } from "./config.ts";
-import { ensureWhisperCppModel, getDefaultWhisperCppModelPath } from "./models.ts";
-import { findExecutable, formatRunExit, replacePlaceholders, runProcess, runShell } from "./processes.ts";
+import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
+import { env, getTranscribeTimeoutMs } from "./config.ts";
+import { ensureWhisperCppModel } from "./models.ts";
+import { formatRunExit, replacePlaceholders, runProcess, runShell } from "./processes.ts";
+
+export { getWhisperCppBinary, getWhisperStreamBinary, resolveExecutableConfig } from "./backends.ts";
 
 export async function transcribe(audioPath: string, tempDir: string, ctx?: ExtensionContext): Promise<string> {
-	const custom = env("MICME_TRANSCRIBE_COMMAND");
-	if (custom?.trim()) {
-		return transcribeWithCustomCommand(custom, audioPath, tempDir);
+	const plan = resolveTranscriptionPlan({ transcriptionMode: "clip" });
+
+	switch (plan.effectiveBackend) {
+		case "custom":
+			if (!plan.command) break;
+			return transcribeWithCustomCommand(plan.command, audioPath, tempDir);
+		case "whisper.cpp":
+			if (!plan.binary || !plan.modelPath) break;
+			return transcribeWithWhisperCpp(plan.binary, plan.modelPath, audioPath, tempDir, ctx, { allowDownload: plan.modelDownloadable !== false });
+		case "python":
+			if (!plan.binary) break;
+			return transcribeWithOpenAiWhisper(plan.binary, audioPath, tempDir, plan.modelName);
+		case "none":
+			break;
 	}
 
-	const whisperCppBinary = getWhisperCppBinary();
-	const whisperCppModel = env("MICME_WHISPER_CPP_MODEL") || (whisperCppBinary ? getDefaultWhisperCppModelPath() : undefined);
-	if (whisperCppModel && whisperCppBinary) {
-		return transcribeWithWhisperCpp(whisperCppBinary, expandConfigPath(whisperCppModel), audioPath, tempDir, ctx);
-	}
-
-	const openAiWhisper = findExecutable(["whisper"]);
-	if (openAiWhisper) {
-		return transcribeWithOpenAiWhisper(openAiWhisper, audioPath, tempDir);
-	}
-
-	throw new Error(
-		"No Micme transcription backend found. Install whisper-cpp and set MICME_WHISPER_CPP_MODEL, " +
-			"install openai-whisper, or set MICME_TRANSCRIBE_COMMAND.",
-	);
+	throw new Error(formatTranscriptionPlan(plan));
 }
 
 export async function transcribeWithCustomCommand(template: string, audioPath: string, tempDir: string) {
@@ -45,8 +45,15 @@ export async function transcribeWithCustomCommand(template: string, audioPath: s
 	return result.stdout;
 }
 
-export async function transcribeWithWhisperCpp(binary: string, modelPath: string, audioPath: string, tempDir: string, ctx?: ExtensionContext) {
-	await ensureWhisperCppModel(modelPath, ctx);
+export async function transcribeWithWhisperCpp(
+	binary: string,
+	modelPath: string,
+	audioPath: string,
+	tempDir: string,
+	ctx?: ExtensionContext,
+	options: { allowDownload?: boolean } = {},
+) {
+	await ensureWhisperCppModel(modelPath, ctx, options);
 	const outputBase = join(tempDir, "whisper-cpp");
 	const args = ["-m", modelPath, "-f", audioPath, "-otxt", "-of", outputBase, "-nt", "-np", "-nf", "-sns"];
 	const language = env("MICME_LANGUAGE");
@@ -66,8 +73,8 @@ export async function transcribeWithWhisperCpp(binary: string, modelPath: string
 	return result.stdout;
 }
 
-export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string) {
-	const model = env("MICME_WHISPER_MODEL") || "base.en";
+export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string) {
+	const model = modelName || env("MICME_WHISPER_MODEL") || "base.en";
 	const args = [
 		audioPath,
 		"--model",
@@ -105,27 +112,4 @@ export async function transcribeWithOpenAiWhisper(binary: string, audioPath: str
 	}
 
 	return result.stdout;
-}
-
-export function getWhisperCppBinary() {
-	const configured = env("MICME_WHISPER_CPP_BIN")?.trim();
-	if (configured) return resolveExecutableConfig(configured, "MICME_WHISPER_CPP_BIN");
-	return findExecutable(["whisper-cli", "whisper-cpp"]);
-}
-
-export function getWhisperStreamBinary() {
-	const configured = env("MICME_WHISPER_STREAM_BIN")?.trim();
-	if (configured) return resolveExecutableConfig(configured, "MICME_WHISPER_STREAM_BIN");
-	return findExecutable(["whisper-stream"]);
-}
-
-export function resolveExecutableConfig(value: string, configName: string) {
-	const expanded = expandConfigPath(value);
-	if (/[/\\]/.test(expanded)) {
-		if (!existsSync(expanded)) throw new Error(`${configName} is set but not found: ${expanded}`);
-		return expanded;
-	}
-	const executable = findExecutable([expanded]);
-	if (!executable) throw new Error(`${configName} is set but not found on PATH: ${expanded}`);
-	return executable;
 }

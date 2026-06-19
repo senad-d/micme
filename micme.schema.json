@@ -21,6 +21,12 @@
       "enum": ["clip", "stream"],
       "default": "clip"
     },
+    "MICME_TRANSCRIBE_BACKEND": {
+      "type": "string",
+      "enum": ["auto", "whisper.cpp", "python", "custom"],
+      "default": "auto",
+      "description": "Select transcription backend. auto preserves priority: custom command, whisper.cpp, then Python Whisper."
+    },
     "MICME_AUTO_SUBMIT": {
       "$ref": "#/$defs/stringFlag"
     },
@@ -33,7 +39,21 @@
     },
     "MICME_DEFAULT_WHISPER_CPP_MODEL": {
       "type": "string",
-      "default": "small.en"
+      "default": "small.en",
+      "description": "whisper.cpp model name mapped to MICME_MODEL_DIR/ggml-<name>.bin unless MICME_WHISPER_CPP_MODEL is set."
+    },
+    "MICME_WHISPER_CPP_MODEL": {
+      "type": "string",
+      "description": "Advanced whisper.cpp exact ggml/gguf model path override. When set, it wins over MICME_DEFAULT_WHISPER_CPP_MODEL."
+    },
+    "MICME_WHISPER_CPP_BIN": {
+      "type": "string",
+      "description": "Command or path for whisper.cpp clip transcription. Leave unset to find whisper-cli/whisper-cpp on PATH."
+    },
+    "MICME_WHISPER_MODEL": {
+      "type": "string",
+      "default": "base.en",
+      "description": "Model name passed to the OpenAI Whisper Python CLI when the Python backend is used."
     },
     "MICME_MODEL_DIR": {
       "type": "string",
@@ -65,7 +85,7 @@
     },
     "MICME_TRANSCRIBE_COMMAND": {
       "type": "string",
-      "description": "Advanced shell command hook. Use only trusted commands."
+      "description": "Advanced custom transcription shell command. Use only trusted commands; Micme cannot inspect which model it uses."
     }
   },
   "patternProperties": {

@@ -6,13 +6,16 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { finished } from "node:stream/promises";
 import {
+	DEFAULT_PYTHON_WHISPER_MODEL_NAME,
 	DEFAULT_WHISPER_CPP_MODEL_NAME,
+	PYTHON_WHISPER_MODEL_NAMES,
 	STATUS_KEY,
 	WHISPER_CPP_MODEL_BASE_URL,
 	WHISPER_CPP_MODEL_NAMES,
 } from "./constants.ts";
 import { env, expandConfigPath } from "./config.ts";
-import type { ModelCandidate } from "./types.ts";
+import { findExecutable, runProcess } from "./processes.ts";
+import type { ModelCandidate, ResolvedWhisperCppModel } from "./types.ts";
 
 const modelDownloads = new Map<string, Promise<void>>();
 
@@ -32,23 +35,25 @@ export function discoverWhisperCppModels(cwd: string): ModelCandidate[] {
 		add({
 			label: basename(expanded),
 			value: expanded,
-			description: existsSync(expanded) ? `current model: ${expanded}` : `current model path is missing: ${expanded}`,
+			description: existsSync(expanded) ? `current explicit path: ${expanded}` : `current explicit path is missing: ${expanded}`,
 			installed: existsSync(expanded),
+			kind: "path",
 		});
 	}
 
 	for (const file of scanModelFiles(cwd)) {
-		add({ label: basename(file), value: file, description: file, installed: true });
+		add({ label: basename(file), value: file, description: file, installed: true, kind: "path" });
 	}
 
 	const cacheDir = getWhisperCppModelCacheDir();
 	for (const modelName of WHISPER_CPP_MODEL_NAMES) {
 		const path = join(cacheDir, `ggml-${modelName}.bin`);
 		add({
-			label: `ggml-${modelName}.bin`,
+			label: modelName,
 			value: path,
-			description: `${describeWhisperModel(modelName)}${existsSync(path) ? "" : " (expected path; download model first)"}`,
+			description: `${describeWhisperModel(modelName)} • ${basename(path)}${existsSync(path) ? "" : " (expected path; download model first)"}`,
 			installed: existsSync(path),
+			kind: "model-name",
 		});
 	}
 
@@ -111,8 +116,80 @@ export function describeWhisperModel(name: string) {
 	return "Whisper model";
 }
 
-export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionContext) {
+export function resolveWhisperCppModel(): ResolvedWhisperCppModel {
+	const explicitPath = env("MICME_WHISPER_CPP_MODEL")?.trim();
+	if (explicitPath) {
+		const path = expandConfigPath(explicitPath);
+		return {
+			path,
+			modelName: getWhisperCppModelNameFromPath(path),
+			source: "explicit-path",
+			configuredValue: explicitPath,
+			exists: existsSync(path),
+			downloadable: isDownloadableWhisperCppModelPath(path),
+		};
+	}
+
+	const configuredName = env("MICME_DEFAULT_WHISPER_CPP_MODEL")?.trim();
+	const modelName = configuredName || DEFAULT_WHISPER_CPP_MODEL_NAME;
+	const path = join(getWhisperCppModelCacheDir(), `ggml-${modelName}.bin`);
+	return {
+		path,
+		modelName,
+		source: configuredName ? "configured-name" : "default-name",
+		configuredValue: configuredName,
+		exists: existsSync(path),
+		downloadable: isDownloadableWhisperCppModelPath(path),
+	};
+}
+
+export function getPythonWhisperModelName() {
+	return env("MICME_WHISPER_MODEL")?.trim() || DEFAULT_PYTHON_WHISPER_MODEL_NAME;
+}
+
+export async function discoverPythonWhisperModels(): Promise<ModelCandidate[]> {
+	const dynamicNames = await queryPythonWhisperModelNames();
+	const names = dynamicNames.length > 0 ? dynamicNames : [...PYTHON_WHISPER_MODEL_NAMES];
+	const source = dynamicNames.length > 0 ? "reported by whisper.available_models()" : "built-in fallback list";
+	return names.map((name) => ({
+		label: name,
+		value: name,
+		description: `${describeWhisperModel(name)} • ${source}`,
+		installed: dynamicNames.length > 0,
+		kind: "model-name",
+	}));
+}
+
+export async function queryPythonWhisperModelNames(): Promise<string[]> {
+	const python = findExecutable(["python3", "python"]);
+	if (!python) return [];
+
+	try {
+		const result = await runProcess(python, ["-c", "import whisper; print('\\n'.join(whisper.available_models()))"], 2_000);
+		if (result.code !== 0 || result.timedOut) return [];
+		return uniqueModelNames(result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+	} catch {
+		return [];
+	}
+}
+
+export function uniqueModelNames(names: string[]) {
+	const seen = new Set<string>();
+	const output: string[] = [];
+	for (const name of names) {
+		const normalized = name.trim();
+		if (!normalized || seen.has(normalized)) continue;
+		seen.add(normalized);
+		output.push(normalized);
+	}
+	return output;
+}
+
+export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionContext, options: { allowDownload?: boolean } = {}) {
 	if (existsSync(modelPath)) return;
+	if (options.allowDownload === false) {
+		throw new Error(`Micme model is missing: ${modelPath}`);
+	}
 	if (env("MICME_AUTO_DOWNLOAD_MODEL") === "0") {
 		throw new Error(`Micme model is missing and auto-download is disabled: ${modelPath}`);
 	}
@@ -128,9 +205,9 @@ export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionCo
 		return;
 	}
 
-	const modelName = getWhisperCppModelNameFromPath(modelPath);
+	const modelName = getDownloadableWhisperCppModelName(modelPath);
 	if (!modelName) {
-		throw new Error(`Micme model is missing and cannot infer download URL: ${modelPath}`);
+		throw new Error(`Micme model is missing and cannot infer a standard download URL: ${modelPath}`);
 	}
 
 	const download = downloadWhisperCppModel(modelName, modelPath, ctx);
@@ -204,6 +281,20 @@ export function getWhisperCppModelNameFromPath(modelPath: string) {
 	return match?.[1];
 }
 
+export function getDownloadableWhisperCppModelName(modelPath: string) {
+	const match = basename(modelPath).match(/^ggml-(.+)\.bin$/i);
+	const modelName = match?.[1];
+	return modelName && isKnownWhisperCppModelName(modelName) ? modelName : undefined;
+}
+
+export function isDownloadableWhisperCppModelPath(modelPath: string) {
+	return getDownloadableWhisperCppModelName(modelPath) !== undefined;
+}
+
+export function isKnownWhisperCppModelName(modelName: string): modelName is (typeof WHISPER_CPP_MODEL_NAMES)[number] {
+	return WHISPER_CPP_MODEL_NAMES.includes(modelName as (typeof WHISPER_CPP_MODEL_NAMES)[number]);
+}
+
 export function getWhisperCppModelUrl(modelName: string) {
 	return `${WHISPER_CPP_MODEL_BASE_URL}/ggml-${modelName}.bin`;
 }
@@ -213,7 +304,7 @@ export function getWhisperCppModelCacheDir() {
 }
 
 export function getDefaultWhisperCppModelPath() {
-	const modelName = env("MICME_DEFAULT_WHISPER_CPP_MODEL") || DEFAULT_WHISPER_CPP_MODEL_NAME;
+	const modelName = env("MICME_DEFAULT_WHISPER_CPP_MODEL")?.trim() || DEFAULT_WHISPER_CPP_MODEL_NAME;
 	return join(getWhisperCppModelCacheDir(), `ggml-${modelName}.bin`);
 }
 

@@ -3,7 +3,7 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { MicmeConfigState, TranscriptionMode } from "./types.ts";
+import type { MicmeConfigState, TranscribeBackend, TranscriptionMode } from "./types.ts";
 import {
 	DEFAULT_MACOS_PRINTABLE_SHORTCUT,
 	DEFAULT_RECORD_SAMPLE_RATE,
@@ -14,6 +14,7 @@ import {
 	DEFAULT_STREAM_STEP_MS,
 	DEFAULT_STREAM_VAD_THRESHOLD,
 	DEFAULT_STREAM_FLUSH_MS,
+	DEFAULT_TRANSCRIBE_BACKEND,
 	DEFAULT_TRANSCRIBE_SAMPLE_RATE,
 	DEFAULT_TRANSCRIBE_TIMEOUT_MS,
 	DEFAULT_MIN_MAX_VOLUME_DB,
@@ -152,6 +153,15 @@ export function getShortcut() {
 
 export function getTranscriptionMode() {
 	return env("MICME_TRANSCRIPTION_MODE") === "stream" ? "stream" : "clip";
+}
+
+export function getTranscribeBackend(): TranscribeBackend {
+	const value = env("MICME_TRANSCRIBE_BACKEND")?.trim();
+	return isTranscribeBackend(value) ? value : DEFAULT_TRANSCRIBE_BACKEND;
+}
+
+export function isTranscribeBackend(value: string | undefined): value is TranscribeBackend {
+	return value === "auto" || value === "whisper.cpp" || value === "python" || value === "custom";
 }
 
 export function getPrintableShortcuts() {

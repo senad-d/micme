@@ -1,6 +1,32 @@
 import type { ChildProcess } from "node:child_process";
 
 export type TranscriptionMode = "clip" | "stream";
+export type TranscribeBackend = "auto" | "whisper.cpp" | "python" | "custom";
+export type EffectiveBackend = "whisper.cpp" | "python" | "custom" | "none";
+export type WhisperCppModelSource = "explicit-path" | "configured-name" | "default-name";
+export type TranscriptionModelSource = WhisperCppModelSource | "python-name" | "custom-command";
+
+export type ResolvedWhisperCppModel = {
+	path: string;
+	modelName?: string;
+	source: WhisperCppModelSource;
+	configuredValue?: string;
+	exists: boolean;
+	downloadable: boolean;
+};
+
+export type ResolvedTranscriptionPlan = {
+	requestedBackend: TranscribeBackend;
+	effectiveBackend: EffectiveBackend;
+	reason: string;
+	command?: string;
+	binary?: string;
+	modelName?: string;
+	modelPath?: string;
+	modelSource?: TranscriptionModelSource;
+	modelDownloadable?: boolean;
+	warnings: string[];
+};
 
 export type CommandSpec = {
 	command: string;
@@ -71,6 +97,7 @@ export type ModelCandidate = {
 	value: string;
 	description: string;
 	installed: boolean;
+	kind?: "model-name" | "path";
 };
 
 export type AudioDeviceCandidate = {
