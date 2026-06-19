@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json",
+  "title": "Micme configuration",
+  "description": "Machine-level Micme settings. Shell environment variables override saved values.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "MICME_SHORTCUT": {
+      "type": "string",
+      "default": "alt+m"
+    },
+    "MICME_PRINTABLE_SHORTCUTS": {
+      "type": "string",
+      "default": "§"
+    },
+    "MICME_TRANSCRIPTION_MODE": {
+      "type": "string",
+      "enum": ["clip", "stream"],
+      "default": "clip"
+    },
+    "MICME_AUTO_SUBMIT": {
+      "$ref": "#/$defs/stringFlag"
+    },
+    "MICME_LANGUAGE": {
+      "type": "string",
+      "default": "en"
+    },
+    "MICME_AUTO_DOWNLOAD_MODEL": {
+      "$ref": "#/$defs/stringFlag"
+    },
+    "MICME_DEFAULT_WHISPER_CPP_MODEL": {
+      "type": "string",
+      "default": "small.en"
+    },
+    "MICME_MODEL_DIR": {
+      "type": "string",
+      "default": "${HOME}/.cache/whisper.cpp"
+    },
+    "MICME_AUDIO_DEVICE": {
+      "type": "string",
+      "default": "0"
+    },
+    "MICME_KEEP_AUDIO": {
+      "$ref": "#/$defs/stringFlag"
+    },
+    "MICME_RECORD_COMMAND": {
+      "type": "string",
+      "description": "Advanced shell command hook. Use only trusted commands."
+    },
+    "MICME_TRANSCRIBE_COMMAND": {
+      "type": "string",
+      "description": "Advanced shell command hook. Use only trusted commands."
+    }
+  },
+  "patternProperties": {
+    "^MICME_": {
+      "type": ["string", "number", "boolean"],
+      "description": "Micme runtime setting. Values are read as strings by Micme."
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "stringFlag": {
+      "type": "string",
+      "enum": ["0", "1", "true", "false", "yes", "no", "on", "off"],
+      "default": "0"
+    }
+  }
+}

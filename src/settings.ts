@@ -12,7 +12,8 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { basename, join } from "node:path";
+import { homedir } from "node:os";
+import { basename } from "node:path";
 import {
 	DEFAULT_MACOS_PRINTABLE_SHORTCUT,
 	DEFAULT_RECORD_SAMPLE_RATE,
@@ -26,10 +27,11 @@ import {
 import {
 	env,
 	expandConfigPath,
+	getMicmeConfigPath,
 	getTranscriptionMode,
 	getTranscriptionModeProfile,
-	reloadDotEnv,
-	writeDotEnvValue,
+	reloadMicmeConfig,
+	writeMicmeConfigValues,
 } from "./config.ts";
 import { discoverAudioDevices } from "./audio.ts";
 import { discoverWhisperCppModels, ensureWhisperCppModel, getDefaultWhisperCppModelPath } from "./models.ts";
@@ -74,14 +76,17 @@ export async function showConfiguration(ctx: ExtensionContext) {
 		return;
 	}
 
-	reloadDotEnv(ctx.cwd);
+	const configState = reloadMicmeConfig();
+	if (configState.error) {
+		ctx.ui.notify(`Micme config is invalid at ${configState.path}: ${configState.error}. Fix it before saving settings.`, "warning");
+	}
 	const audioDevices = await discoverAudioDevices();
 	const modelCandidates = discoverWhisperCppModels(ctx.cwd);
 
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 		const items = buildConfigurationItems(modelCandidates, audioDevices, theme);
 		return new ConfigurationScreen({
-			cwd: ctx.cwd,
+			configPath: configState.path,
 			items,
 			theme,
 			onDone: done,
@@ -93,7 +98,7 @@ export async function showConfiguration(ctx: ExtensionContext) {
 }
 
 class ConfigurationScreen implements Component {
-	private readonly cwd: string;
+	private readonly configPath: string;
 	private readonly items: ConfigurationItem[];
 	private readonly theme: MicmeTheme;
 	private readonly onDone: () => void;
@@ -111,7 +116,7 @@ class ConfigurationScreen implements Component {
 	private statusText = "";
 
 	constructor(options: {
-		cwd: string;
+		configPath: string;
 		items: ConfigurationItem[];
 		theme: MicmeTheme;
 		onDone: () => void;
@@ -119,7 +124,7 @@ class ConfigurationScreen implements Component {
 		onSave: (id: string, newValue: string) => Promise<Record<string, string>>;
 		requestRender: () => void;
 	}) {
-		this.cwd = options.cwd;
+		this.configPath = options.configPath;
 		this.items = options.items;
 		this.theme = options.theme;
 		this.onDone = options.onDone;
@@ -201,7 +206,7 @@ class ConfigurationScreen implements Component {
 		const lines: string[] = [];
 
 		lines.push(this.renderTitleBorder(width, this.currentHeaderLabel()));
-		lines.push(this.renderFullLine(width, `writes ${join(this.cwd, ".env")} • shell env overrides .env`));
+		lines.push(this.renderFullLine(width, this.renderConfigSourceText(width)));
 		lines.push(this.renderFullLine(width, "↑↓ move  Tab pane  Enter edit  / search  Esc back  q quit"));
 		lines.push(this.renderPaneSeparator(width, leftWidth, rightWidth, "top"));
 
@@ -226,7 +231,7 @@ class ConfigurationScreen implements Component {
 		const lines: string[] = [];
 
 		lines.push(this.renderTitleBorder(width, this.currentHeaderLabel()));
-		lines.push(this.renderFullLine(width, `writes ${join(this.cwd, ".env")} • shell env overrides .env`));
+		lines.push(this.renderFullLine(width, this.renderConfigSourceText(width)));
 		lines.push(this.renderFullLine(width, showCategories ? "↑↓ category  Enter open  / search  q quit" : "↑↓ move  Enter edit  Esc categories  / search  q quit"));
 		lines.push(this.colorBorder(`├${"─".repeat(innerWidth)}┤`, width));
 		for (const line of bodyLines) lines.push(this.renderFullLine(width, line));
@@ -282,6 +287,15 @@ class ConfigurationScreen implements Component {
 
 	private colorBorder(line: string, width: number) {
 		return this.theme.fg("accent", fitAnsi(line, width, ""));
+	}
+
+	private renderConfigSourceText(width: number) {
+		const innerWidth = Math.max(0, width - 2);
+		const prefix = "writes ";
+		const suffix = " • shell env overrides Micme settings";
+		const pathWidth = Math.max(0, innerWidth - visibleWidth(prefix) - visibleWidth(suffix));
+		const path = pathWidth > 0 ? fitPath(this.configPath, pathWidth) : "micme.json";
+		return `${prefix}${path}${suffix}`;
 	}
 
 	private renderCategoryPaneLines(width: number) {
@@ -843,20 +857,20 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 		await ensureWhisperCppModel(expandConfigPath(value), ctx);
 	}
 
-	for (const [key, nextValue] of Object.entries(valuesToWrite)) {
-		await writeDotEnvValue(ctx.cwd, key, nextValue);
-	}
+	await writeMicmeConfigValues(valuesToWrite);
+	reloadMicmeConfig();
 
-	reloadDotEnv(ctx.cwd);
+	const configLabel = formatConfigPathForMessage(getMicmeConfigPath());
 	const overriddenKeys = Object.keys(valuesToWrite).filter((key) => process.env[key] !== undefined);
 	if (id === "MICME_TRANSCRIPTION_MODE") {
 		const mode = valuesToWrite.MICME_TRANSCRIPTION_MODE === "stream" ? "stream" : "clip";
 		const detail = mode === "stream" ? "low-latency stream profile" : "stable clip profile";
-		const overrideSuffix = overriddenKeys.length ? `; shell env still overrides ${overriddenKeys.join(", ")}` : "";
-		ctx.ui.notify(`Saved ${mode} mode and applied ${detail}${overrideSuffix}.`, overriddenKeys.length ? "warning" : "info");
+		const sourceSuffix = overriddenKeys.length ? `; shell env still overrides ${overriddenKeys.join(", ")}` : ` (${configLabel})`;
+		ctx.ui.notify(`Saved ${mode} mode and applied ${detail}${sourceSuffix}.`, overriddenKeys.length ? "warning" : "info");
 	} else {
-		const source = overriddenKeys.includes(id) ? "shell env still overrides .env" : ".env";
-		ctx.ui.notify(`Saved ${id}=${displayConfigurationValue(id, value)} (${source})`, overriddenKeys.includes(id) ? "warning" : "info");
+		const overrideSuffix = overriddenKeys.includes(id) ? `, but shell env still overrides ${id}` : ` (${configLabel})`;
+		const reloadSuffix = id === "MICME_SHORTCUT" ? " • /reload required" : id === "MICME_PRINTABLE_SHORTCUTS" ? " • /reload recommended" : "";
+		ctx.ui.notify(`Saved ${id}=${displayConfigurationValue(id, value)}${overrideSuffix}${reloadSuffix}`, overriddenKeys.includes(id) ? "warning" : "info");
 	}
 
 	const effectiveValues: Record<string, string> = {};
@@ -885,16 +899,24 @@ export function uniqueStrings(values: string[]) {
 function formatSaveStatus(id: string, value: string) {
 	const writtenKeys = id === "MICME_TRANSCRIPTION_MODE" ? Object.keys(getTranscriptionModeProfile(value === "stream" ? "stream" : "clip")) : [id];
 	const overriddenKeys = writtenKeys.filter((key) => process.env[key] !== undefined);
+	const configLabel = formatConfigPathForMessage(getMicmeConfigPath());
 	if (id === "MICME_TRANSCRIPTION_MODE") {
 		const mode = value === "stream" ? "stream" : "clip";
 		const detail = mode === "stream" ? "low-latency stream profile" : "stable clip profile";
-		const overrideSuffix = overriddenKeys.length ? ` • shell env still overrides ${overriddenKeys.join(", ")}` : "";
-		return `Saved MICME_TRANSCRIPTION_MODE=${mode} and applied ${detail}${overrideSuffix}`;
+		const sourceSuffix = overriddenKeys.length ? ` • shell env still overrides ${overriddenKeys.join(", ")}` : ` • ${configLabel}`;
+		return `Saved MICME_TRANSCRIPTION_MODE=${mode} and applied ${detail}${sourceSuffix}`;
 	}
 
-	const overrideSuffix = overriddenKeys.includes(id) ? `, but shell env still overrides ${id}` : "";
+	const sourceSuffix = overriddenKeys.includes(id) ? `, but shell env still overrides ${id}` : ` (${configLabel})`;
 	const reloadSuffix = id === "MICME_SHORTCUT" ? " • /reload required" : id === "MICME_PRINTABLE_SHORTCUTS" ? " • /reload recommended" : "";
-	return `Saved ${id}=${displayConfigurationValue(id, value)} (.env${overrideSuffix})${reloadSuffix}`;
+	return `Saved ${id}=${displayConfigurationValue(id, value)}${sourceSuffix}${reloadSuffix}`;
+}
+
+function formatConfigPathForMessage(path: string) {
+	const home = homedir();
+	if (home && path === home) return "~";
+	if (home && path.startsWith(`${home}/`)) return `~/${path.slice(home.length + 1)}`;
+	return path;
 }
 
 function fitAnsi(text: string, width: number, ellipsis = "…") {

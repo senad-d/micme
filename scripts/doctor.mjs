@@ -1,34 +1,55 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 
 const isWin = process.platform === "win32";
-const dotEnv = loadDotEnv(process.cwd());
+const micmeConfig = loadMicmeConfig();
 
-function loadDotEnv(cwd) {
-  const path = join(cwd, ".env");
-  if (!existsSync(path)) return { path: "", values: {} };
-  const values = {};
-  for (const rawLine of readFileSync(path, "utf8").replace(/^\uFEFF/, "").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const match = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match || !match[1].startsWith("MICME_")) continue;
-    let value = match[2] || "";
-    if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-    else if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
-    else value = value.replace(/\s+#.*$/, "").trim();
-    value = value.replace(/^~\//, `${process.env.HOME || ""}/`);
-    value = value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_m, braced, bare) => values[braced || bare] ?? process.env[braced || bare] ?? "");
-    values[match[1]] = value;
+function getMicmeConfigPath() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR ? resolve(process.env.PI_CODING_AGENT_DIR) : join(homedir(), ".pi", "agent");
+  return join(agentDir, "micme.json");
+}
+
+function loadMicmeConfig() {
+  const path = getMicmeConfigPath();
+  if (!existsSync(path)) return { path, found: false, values: {} };
+
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { path, found: true, values: {}, error: "top-level value must be a JSON object" };
+    }
+
+    const values = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!key.startsWith("MICME_")) continue;
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") values[key] = String(value);
+    }
+    return { path, found: true, values };
+  } catch (error) {
+    return { path, found: true, values: {}, error: error instanceof Error ? error.message : String(error) };
   }
-  return { path, values };
 }
 
 function env(name) {
-  return process.env[name] ?? dotEnv.values[name];
+  return process.env[name] ?? micmeConfig.values[name];
+}
+
+function expandConfigValue(value) {
+  const home = process.env.HOME || homedir();
+  const withHome = value.startsWith("~/") && home ? `${home}${value.slice(1)}` : value;
+  return withHome.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_m, braced, bare) => {
+    const key = braced || bare || "";
+    return process.env[key] ?? micmeConfig.values[key] ?? "";
+  });
+}
+
+function envPath(name) {
+  const value = env(name);
+  return value ? expandConfigValue(value) : undefined;
 }
 
 function which(names) {
@@ -46,7 +67,7 @@ function which(names) {
 }
 
 function resolveExecutable(value) {
-  const expanded = value.replace(/^~\//, `${process.env.HOME || ""}/`);
+  const expanded = expandConfigValue(value);
   if (/[\\/]/.test(expanded)) return expanded;
   return which([expanded]) || expanded;
 }
@@ -70,12 +91,23 @@ function summarizeConfiguredCommand(value) {
   return `configured (${trimmed.length} chars${placeholderText}; full value redacted)`;
 }
 
+function printConfigDiagnostics() {
+  if (micmeConfig.error) warn("micme.json invalid", `${micmeConfig.path}: ${micmeConfig.error}`);
+  else if (micmeConfig.found) ok("micme.json loaded", `${micmeConfig.path} (${Object.keys(micmeConfig.values).length} MICME_* key(s))`);
+  else info("micme.json", `not found; /micme conf will create ${micmeConfig.path}`);
+
+  const micmeEnvKeys = Object.keys(process.env).filter((key) => key.startsWith("MICME_")).sort((a, b) => a.localeCompare(b));
+  const overrides = micmeEnvKeys.filter((key) => micmeConfig.values[key] !== undefined);
+  const shellOnly = micmeEnvKeys.filter((key) => micmeConfig.values[key] === undefined);
+  if (overrides.length) warn("shell env overrides micme.json", overrides.join(", "));
+  if (shellOnly.length) info("MICME_* shell values", shellOnly.join(", "));
+}
+
 async function main() {
   console.log("Micme doctor\n");
   info("platform", `${process.platform} ${process.arch}`);
   info("node", process.version);
-  if (dotEnv.path) ok(".env loaded", dotEnv.path);
-  else info(".env", "not found");
+  printConfigDiagnostics();
 
   const pi = which(["pi"]);
   if (pi) ok("pi CLI", pi);
@@ -87,15 +119,15 @@ async function main() {
 
   const configuredWhisperCpp = env("MICME_WHISPER_CPP_BIN");
   const whisperCpp = configuredWhisperCpp ? resolveExecutable(configuredWhisperCpp) : which(["whisper-cli", "whisper-cpp"]);
-  const whisperCppModel = env("MICME_WHISPER_CPP_MODEL");
+  const whisperCppModel = envPath("MICME_WHISPER_CPP_MODEL");
   if (whisperCpp && existsSync(whisperCpp)) ok("whisper.cpp binary", whisperCpp);
-  else if (configuredWhisperCpp) warn("MICME_WHISPER_CPP_BIN is set but not found", configuredWhisperCpp);
+  else if (configuredWhisperCpp) warn("MICME_WHISPER_CPP_BIN is set but not found", resolveExecutable(configuredWhisperCpp));
   else warn("whisper.cpp binary missing", "recommended backend for portable local transcription");
 
   const configuredWhisperStream = env("MICME_WHISPER_STREAM_BIN");
   const whisperStream = configuredWhisperStream ? resolveExecutable(configuredWhisperStream) : which(["whisper-stream"]);
   if (whisperStream && existsSync(whisperStream)) ok("whisper-stream binary", whisperStream);
-  else if (configuredWhisperStream) warn("MICME_WHISPER_STREAM_BIN is set but not found", configuredWhisperStream);
+  else if (configuredWhisperStream) warn("MICME_WHISPER_STREAM_BIN is set but not found", resolveExecutable(configuredWhisperStream));
   else info("whisper-stream binary", "not installed; only needed for MICME_TRANSCRIPTION_MODE=stream");
 
   if (whisperCppModel) {
@@ -108,7 +140,7 @@ async function main() {
     }
   } else {
     const defaultModel = env("MICME_DEFAULT_WHISPER_CPP_MODEL") || "small.en";
-    const modelDir = env("MICME_MODEL_DIR") || `${process.env.HOME}/.cache/whisper.cpp`;
+    const modelDir = expandConfigValue(env("MICME_MODEL_DIR") || join(homedir(), ".cache", "whisper.cpp"));
     info("MICME_WHISPER_CPP_MODEL", `not set; Micme defaults to ${modelDir}/ggml-${defaultModel}.bin and auto-downloads when needed`);
   }
 
@@ -140,7 +172,7 @@ async function main() {
     if (macbookMic) {
       const current = env("MICME_AUDIO_DEVICE") || "0";
       if (current !== macbookMic[1]) {
-        warn("MacBook Pro microphone is not the configured default", `try: export MICME_AUDIO_DEVICE=${macbookMic[1]}`);
+        warn("MacBook Pro microphone is not the configured default", `try: MICME_AUDIO_DEVICE=${macbookMic[1]} pi`);
       }
     }
     console.log("\nSet MICME_AUDIO_DEVICE to the numeric audio device id if device 0 is wrong.");

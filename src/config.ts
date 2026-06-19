@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import type { DotEnvState, TranscriptionMode } from "./types.ts";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import type { MicmeConfigState, TranscriptionMode } from "./types.ts";
 import {
 	DEFAULT_MACOS_PRINTABLE_SHORTCUT,
 	DEFAULT_RECORD_SAMPLE_RATE,
@@ -22,11 +24,77 @@ import {
 	STREAM_PROFILE_WORDS_PER_CHUNK,
 } from "./constants.ts";
 
-let dotEnvState: DotEnvState = { path: "", values: {} };
+const MICME_CONFIG_FILE = "micme.json";
+const MICME_SCHEMA_URL = "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json";
+const requireModule = createRequire(import.meta.url);
 
-export function reloadDotEnv(cwd: string) {
-	dotEnvState = loadDotEnv(cwd);
-	return dotEnvState;
+type JsonObject = Record<string, unknown>;
+
+let piAgentDirChecked = false;
+let piAgentDir: string | undefined;
+let micmeConfigState: MicmeConfigState = loadMicmeJson();
+
+export function getMicmeAgentDir() {
+	const configured = process.env.PI_CODING_AGENT_DIR?.trim();
+	if (configured) return resolve(configured);
+
+	const exported = getPiExportedAgentDir();
+	if (exported) return resolve(exported);
+
+	return join(homedir(), ".pi", "agent");
+}
+
+export function getMicmeConfigPath() {
+	return join(getMicmeAgentDir(), MICME_CONFIG_FILE);
+}
+
+export function reloadMicmeConfig() {
+	micmeConfigState = loadMicmeJson();
+	return micmeConfigState;
+}
+
+export function loadMicmeJson(): MicmeConfigState {
+	const path = getMicmeConfigPath();
+	if (!existsSync(path)) return { path, values: {} };
+
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
+		if (!isJsonObject(parsed)) {
+			return { path, values: {}, error: "top-level value must be a JSON object" };
+		}
+		return { path, values: extractMicmeValues(parsed) };
+	} catch (error) {
+		return { path, values: {}, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+export async function writeMicmeConfigValue(key: string, value: string) {
+	await writeMicmeConfigValues({ [key]: value });
+}
+
+export async function writeMicmeConfigValues(values: Record<string, string>) {
+	for (const key of Object.keys(values)) {
+		if (!key.startsWith("MICME_")) throw new Error(`Micme config keys must start with MICME_: ${key}`);
+	}
+
+	const configPath = getMicmeConfigPath();
+	const configDir = dirname(configPath);
+	const existing = readMicmeJsonObjectForWrite(configPath);
+	const next: JsonObject = { ...existing };
+
+	for (const [key, value] of Object.entries(values)) next[key] = String(value);
+
+	await mkdir(configDir, { recursive: true });
+	const tempPath = join(configDir, `.micme.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+	try {
+		await writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+		await rename(tempPath, configPath);
+	} catch (error) {
+		await rm(tempPath, { force: true }).catch(() => undefined);
+		throw error;
+	}
+
+	reloadMicmeConfig();
 }
 
 export function getTranscriptionModeProfile(mode: TranscriptionMode): Record<string, string> {
@@ -57,90 +125,20 @@ export function getTranscriptionModeProfile(mode: TranscriptionMode): Record<str
 	};
 }
 
-export async function writeDotEnvValue(cwd: string, key: string, value: string) {
-	const path = join(cwd, ".env");
-	const lines = existsSync(path) ? readFileSync(path, "utf8").split(/\r?\n/) : [];
-	const matcher = new RegExp(`^\\s*(?:export\\s+)?${escapeRegExp(key)}\\s*=`);
-	let found = false;
-	const nextLines = lines.map((line) => {
-		if (!matcher.test(line)) return line;
-		found = true;
-		return `${key}=${formatDotEnvValue(value)}`;
-	});
-
-	if (!found) {
-		if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
-		nextLines.push(`${key}=${formatDotEnvValue(value)}`);
-	}
-
-	await writeFile(path, `${nextLines.join("\n").replace(/\n*$/, "")}\n`, "utf8");
-}
-
-export function formatDotEnvValue(value: string) {
-	if (value === "") return "";
-	if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-	return JSON.stringify(value);
-}
-
-export function escapeRegExp(value: string) {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function expandConfigPath(value: string) {
-	return expandEnvReferences(value, dotEnvState.values);
+	return expandEnvReferences(value, micmeConfigState.values);
 }
 
-export function loadDotEnv(cwd: string): DotEnvState {
-	const path = join(cwd, ".env");
-	if (!existsSync(path)) return { path: "", values: {} };
-
-	try {
-		const values: Record<string, string> = {};
-		const content = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
-		for (const line of content.split(/\r?\n/)) {
-			const parsed = parseDotEnvLine(line, values);
-			if (!parsed) continue;
-			values[parsed.key] = parsed.value;
-		}
-		return { path, values };
-	} catch (error) {
-		return { path, values: {}, error: error instanceof Error ? error.message : String(error) };
-	}
-}
-
-export function parseDotEnvLine(line: string, previousValues: Record<string, string>) {
-	const trimmed = line.trim();
-	if (!trimmed || trimmed.startsWith("#")) return undefined;
-
-	const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-	if (!match) return undefined;
-
-	const key = match[1] ?? "";
-	if (!key.startsWith("MICME_")) return undefined;
-
-	let value = match[2] ?? "";
-	if (value.startsWith('"') && value.endsWith('"')) {
-		value = value.slice(1, -1).replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-	} else if (value.startsWith("'") && value.endsWith("'")) {
-		value = value.slice(1, -1);
-	} else {
-		value = value.replace(/\s+#.*$/, "").trim();
-	}
-
-	value = expandEnvReferences(value, previousValues);
-	return { key, value };
-}
-
-export function expandEnvReferences(value: string, previousValues: Record<string, string>) {
+export function expandEnvReferences(value: string, configValues: Record<string, string>) {
 	const withHome = value.startsWith("~/") && process.env.HOME ? `${process.env.HOME}${value.slice(1)}` : value;
 	return withHome.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_match, braced: string | undefined, bare: string | undefined) => {
 		const key = braced ?? bare ?? "";
-		return previousValues[key] ?? process.env[key] ?? "";
+		return process.env[key] ?? configValues[key] ?? "";
 	});
 }
 
 export function env(name: string) {
-	return process.env[name] ?? dotEnvState.values[name];
+	return process.env[name] ?? micmeConfigState.values[name];
 }
 
 export function getShortcut() {
@@ -253,4 +251,47 @@ export function getMeterGain() {
 
 export function envFlag(name: string) {
 	return /^(1|true|yes|on)$/i.test(env(name) || "");
+}
+
+function readMicmeJsonObjectForWrite(configPath: string): JsonObject {
+	if (!existsSync(configPath)) return { $schema: MICME_SCHEMA_URL };
+
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(configPath, "utf8").replace(/^\uFEFF/, ""));
+		if (!isJsonObject(parsed)) throw new Error("top-level value must be a JSON object");
+		return parsed;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Cannot save Micme config: ${configPath} is invalid JSON (${message}). Fix or remove it first.`);
+	}
+}
+
+function extractMicmeValues(json: JsonObject) {
+	const values: Record<string, string> = {};
+	for (const [key, value] of Object.entries(json)) {
+		if (!key.startsWith("MICME_")) continue;
+		if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") values[key] = String(value);
+	}
+	return values;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getPiExportedAgentDir() {
+	if (piAgentDirChecked) return piAgentDir;
+	piAgentDirChecked = true;
+
+	try {
+		const piModule = requireModule("@earendil-works/pi-coding-agent") as { getAgentDir?: unknown };
+		if (typeof piModule.getAgentDir === "function") {
+			const value = piModule.getAgentDir();
+			if (typeof value === "string" && value.trim()) piAgentDir = value;
+		}
+	} catch {
+		// Some pi runtimes may not expose this helper or may be ESM-only. Falling back is safe.
+	}
+
+	return piAgentDir;
 }

@@ -14,9 +14,7 @@ coverage/
 *.log
 
 # Local configuration and pi runtime state
-.env
-.env.local
-.env.*.local
+micme.json
 .pi/token-insights/
 
 # Micme runtime caches and artifacts
@@ -34,6 +32,9 @@ models/
 *.gguf
 ggml-*.bin
 
+# Security scaning
 trivy-reports
 .trivycache
 odc-reports
+
+.local

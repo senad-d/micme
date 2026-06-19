@@ -61,11 +61,13 @@ MICME_AUTO_DOWNLOAD_MODEL=0
 
 You can also download models manually and set `MICME_WHISPER_CPP_MODEL=/path/to/model.bin`.
 
-## `.env` handling
+## Micme config handling
 
-Micme reads only `MICME_*` keys from a project `.env`. Shell environment variables override `.env` values.
+Micme reads only `MICME_*` runtime keys from `~/.pi/agent/micme.json`. Shell environment variables override saved JSON values.
 
-`/micme conf` writes only `MICME_*` values to the current project's `.env` file. It does not write arbitrary environment variables. Keep `.env` ignored by git and avoid placing secrets in Micme custom commands.
+`/micme conf` writes only `MICME_*` values to `micme.json` and preserves other JSON metadata. Micme uses its own global config store to reduce accidental project influence over microphone and command-hook behavior.
+
+Treat `micme.json` as trusted local user configuration. Command hooks stored there, especially `MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`, execute local shell commands with your user permissions. Avoid placing secrets in custom commands.
 
 ## Telemetry and retention
 

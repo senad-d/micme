@@ -4,6 +4,8 @@ All notable changes to Micme will be documented in this file.
 
 ## Unreleased
 
+- Move normal Micme persistence to the global `~/.pi/agent/micme.json` store; shell environment variables still override saved settings.
+- Update `/micme conf`, `micme-doctor`, docs, and package examples for the new global JSON config path.
 - Document the scoped npm package name, `@senad-d/micme`, in install, diagnostics, update, and uninstall commands.
 - Add an interactive npm publishing script that prompts for a version, validates the package, creates the release commit/tag, and publishes with public scoped-package access.
 - Keep publication on hold until package name, metadata, security review, validation, and smoke tests are complete.

@@ -59,7 +59,7 @@ export type Recording = {
 	stderr: () => string;
 };
 
-export type DotEnvState = {
+export type MicmeConfigState = {
 	path: string;
 	values: Record<string, string>;
 	error?: string;

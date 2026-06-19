@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 
+const hiddenEnvironmentFilePattern = new RegExp(`^\\.${"env"}(?:$|\\.)`);
+
 const forbiddenChecks = [
   {
     label: "environment files",
-    test: (path) => path === ".env" || (path.startsWith(".env.") && path !== ".env.example"),
+    test: (path) => hiddenEnvironmentFilePattern.test(path),
   },
   { label: "project-local pi state", test: (path) => path.startsWith(".pi/") },
+  { label: "generated Micme config", test: (path) => path === "micme.json" || path.endsWith("/micme.json") },
   { label: "node_modules", test: (path) => path.startsWith("node_modules/") || path.includes("/node_modules/") },
   { label: "planning specs", test: (path) => path.startsWith("specs/") },
   { label: "Micme cache", test: (path) => path.startsWith(".micme/") || path.includes("/.micme/") },

@@ -20,9 +20,9 @@ Micme is a pi extension for short coding prompts. It records your microphone wit
 - **Local-first:** no telemetry and no cloud STT service by default.
 - **Review-first:** transcripts paste into the editor unless you enable auto-submit.
 - **Pi-native:** install globally, project-locally, from git, or from a source checkout.
-- **Configurable:** use `/micme conf`, `.env`, or shell variables.
+- **Configurable:** use `/micme conf`, `~/.pi/agent/micme.json`, or shell variables.
 
-> **Security:** pi packages run with your full system permissions. Micme can use your microphone, spawn local commands, write `MICME_*` settings to `.env`, and optionally download Whisper model files. Read [`SECURITY.md`](SECURITY.md).
+> **Security:** pi packages run with your full system permissions. Micme can use your microphone, spawn local commands, write `MICME_*` settings to `~/.pi/agent/micme.json`, and optionally download Whisper model files. Read [`SECURITY.md`](SECURITY.md).
 
 ## Table of Contents
 
@@ -136,25 +136,28 @@ MICME_WHISPER_CPP_MODEL=/path/to/ggml-small.en.bin
 
 ## Configuration
 
-Micme reads settings from shell environment variables and from a project `.env`. Shell variables win. `/micme conf` writes only `MICME_*` keys to `.env`.
+Micme reads settings from shell environment variables and from the global Micme config file at `~/.pi/agent/micme.json`. Shell variables win. `/micme conf` writes only `MICME_*` keys to that JSON file, so settings follow you across pi projects on the same machine.
 
-Use the example file in the project where you run pi:
+The usual setup path is to run:
 
-```bash
-cp ~/.pi/agent/npm/node_modules/@senad-d/micme/.env.example .env
+```text
+/micme conf
 ```
 
-If the project already has a `.env`, copy only the `MICME_*` lines you need. For a global pi install, do not edit the package directory; put `.env` in each project or set shell variables in your shell profile.
+You can also edit the JSON manually. Minimal `~/.pi/agent/micme.json`:
 
-Minimal `.env`:
-
-```env
-MICME_LANGUAGE=en
-MICME_AUTO_DOWNLOAD_MODEL=1
-MICME_DEFAULT_WHISPER_CPP_MODEL=small.en
-MICME_AUTO_SUBMIT=0
-MICME_KEEP_AUDIO=0
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json",
+  "MICME_LANGUAGE": "en",
+  "MICME_AUTO_DOWNLOAD_MODEL": "1",
+  "MICME_DEFAULT_WHISPER_CPP_MODEL": "small.en",
+  "MICME_AUTO_SUBMIT": "0",
+  "MICME_KEEP_AUDIO": "0"
+}
 ```
+
+For temporary one-off overrides, set shell variables when starting pi, for example `MICME_KEEP_AUDIO=1 pi`.
 
 Common settings:
 
@@ -169,7 +172,7 @@ Common settings:
 | `MICME_KEEP_AUDIO=0` | Delete successful temp audio. Set `1` for debugging. |
 | `MICME_MODEL_DIR=~/.cache/whisper.cpp` | Model cache/discovery directory. |
 
-See [`.env.example`](.env.example) for the full template.
+See [`micme.example.json`](micme.example.json) for the full JSON template.
 
 ---
 

@@ -10,7 +10,7 @@ import {
 	getShortcut,
 	getStreamFinalizeWithClip,
 	getTranscriptionMode,
-	reloadDotEnv,
+	reloadMicmeConfig,
 } from "./config.ts";
 import { buildRecorderCommand, listAudioDevices, prepareAudioForTranscription, validateRecordedAudio } from "./audio.ts";
 import { installMicmeEditorFallback, type MicmeEditorInputHandlers } from "./editor.ts";
@@ -51,7 +51,7 @@ let lastAudioDir = "";
 let lastShortcutInputAt = 0;
 
 export default function micmeExtension(pi: ExtensionAPI) {
-	reloadDotEnv(process.cwd());
+	reloadMicmeConfig();
 
 	async function toggle(ctx: ExtensionContext) {
 		if (recording) {
@@ -113,7 +113,7 @@ export default function micmeExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		reloadDotEnv(ctx.cwd);
+		reloadMicmeConfig();
 		installMicmeEditorFallback(ctx, createMicmeEditorHandlers(ctx, toggle));
 	});
 
