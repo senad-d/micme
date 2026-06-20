@@ -1,13 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RECORDER_STARTUP_GRACE_MS, STATUS_KEY } from "./constants.ts";
 import {
-	env,
 	envFlag,
 	getShortcut,
 	getStreamFinalizeWithClip,
+	getTerminalShortcut,
 	getTranscriptionMode,
 	reloadMicmeConfig,
 } from "./config.ts";
@@ -25,6 +23,7 @@ import {
 	stopRecorder,
 } from "./processes.ts";
 import { clearRecordingWidget, startRecordingWidget } from "./recording-widget.ts";
+import { createRecordingDirectory } from "./recording-dir.ts";
 import { showConfiguration } from "./settings.ts";
 import {
 	buildWhisperStreamCommand,
@@ -101,17 +100,20 @@ export default function micmeExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerShortcut(getShortcut() as Parameters<ExtensionAPI["registerShortcut"]>[0], {
-		description: "Micme: toggle local voice recording",
-		handler: async (ctx) => {
-			try {
-				if (isShortcutAutoRepeat()) return;
-				await toggle(ctx);
-			} catch (error) {
-				handleExtensionError(ctx, error);
-			}
-		},
-	});
+	const terminalShortcut = getTerminalShortcut();
+	if (terminalShortcut) {
+		pi.registerShortcut(terminalShortcut as Parameters<ExtensionAPI["registerShortcut"]>[0], {
+			description: "Micme: toggle local voice recording",
+			handler: async (ctx) => {
+				try {
+					if (isShortcutAutoRepeat()) return;
+					await toggle(ctx);
+				} catch (error) {
+					handleExtensionError(ctx, error);
+				}
+			},
+		});
+	}
 
 	pi.on("session_start", async (_event, ctx) => {
 		reloadMicmeConfig();
@@ -169,7 +171,7 @@ async function startRecording(ctx: ExtensionContext, stopHint = getShortcut()) {
 		return;
 	}
 
-	const tempDir = await mkdtemp(join(tmpdir(), "micme-"));
+	const tempDir = await createRecordingDirectory(ctx.cwd, envFlag("MICME_KEEP_AUDIO"), "micme-");
 	const audioPath = join(tempDir, "raw.wav");
 	const command = buildRecorderCommand(audioPath);
 	const active = spawnRecording(command, audioPath, tempDir);
@@ -247,7 +249,7 @@ async function startStreamingTranscription(ctx: ExtensionContext, stopHint = get
 
 	await ensureWhisperCppModel(plan.modelPath, ctx, { allowDownload: plan.modelDownloadable !== false });
 
-	const tempDir = await mkdtemp(join(tmpdir(), "micme-stream-"));
+	const tempDir = await createRecordingDirectory(ctx.cwd, envFlag("MICME_KEEP_AUDIO"), "micme-stream-");
 	const command = buildWhisperStreamCommand(plan.binary, plan.modelPath, tempDir);
 	const active = spawnRecording(command, "", tempDir);
 	const baseText = ctx.ui.getEditorText();

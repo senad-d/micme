@@ -23,7 +23,7 @@ The default recorder uses `ffmpeg` and your operating system's microphone APIs:
 - Linux: PulseAudio through `ffmpeg -f pulse`
 - Windows: DirectShow through `ffmpeg -f dshow`
 
-Micme writes temporary audio files under the operating system temp directory while a recording is being processed. After successful transcription, those files are removed by default. Set `MICME_KEEP_AUDIO=1` only when you intentionally want to keep the last raw/preprocessed audio for debugging.
+Micme writes temporary audio files under the operating system temp directory by default. After successful transcription, those files are removed. Set `MICME_KEEP_AUDIO=1` only when you intentionally want to keep raw/preprocessed audio for debugging; kept recordings are written to per-recording project directories such as `./micme-rec/rec-001/`.
 
 ## Local process execution
 

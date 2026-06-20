@@ -10,11 +10,13 @@
     },
     "MICME_SHORTCUT": {
       "type": "string",
-      "default": "alt+m"
+      "default": "alt+m",
+      "description": "Unified toggle shortcut. Use terminal syntax such as alt+m/ctrl+space/f8, or a printable character such as §."
     },
     "MICME_PRINTABLE_SHORTCUTS": {
       "type": "string",
-      "default": "§"
+      "default": "§",
+      "description": "Legacy printable-character fallback. Prefer MICME_SHORTCUT with a printable character."
     },
     "MICME_TRANSCRIPTION_MODE": {
       "type": "string",

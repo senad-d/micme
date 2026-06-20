@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const { resolveTranscriptionPlan } = await import("../src/backends.ts");
-const { getTranscribeBackend } = await import("../src/config.ts");
+const { getPrintableShortcuts, getShortcutSettingValue, getTerminalShortcut, getTranscribeBackend } = await import("../src/config.ts");
 const { resolveWhisperCppModel } = await import("../src/models.ts");
 
 const fakeWhisperCppModel = {
@@ -78,6 +78,30 @@ test("getTranscribeBackend reads valid values and falls back to auto", () => {
 	});
 	withEnv({ MICME_TRANSCRIBE_BACKEND: "" }, () => {
 		assert.equal(getTranscribeBackend(), "auto");
+	});
+});
+
+test("unified shortcut can be a printable editor fallback", () => {
+	withEnv({ MICME_SHORTCUT: "§", MICME_PRINTABLE_SHORTCUTS: "" }, () => {
+		assert.equal(getShortcutSettingValue(), "§");
+		assert.equal(getTerminalShortcut(), undefined);
+		assert.deepEqual(getPrintableShortcuts(), ["§"]);
+	});
+});
+
+test("unified shortcut can be a terminal shortcut", () => {
+	withEnv({ MICME_SHORTCUT: "ctrl+space", MICME_PRINTABLE_SHORTCUTS: "" }, () => {
+		assert.equal(getShortcutSettingValue(), "ctrl+space");
+		assert.equal(getTerminalShortcut(), "ctrl+space");
+		assert.deepEqual(getPrintableShortcuts(), []);
+	});
+});
+
+test("legacy printable shortcut still works alongside a terminal shortcut", () => {
+	withEnv({ MICME_SHORTCUT: "alt+m", MICME_PRINTABLE_SHORTCUTS: "µ" }, () => {
+		assert.equal(getShortcutSettingValue(), "alt+m");
+		assert.equal(getTerminalShortcut(), "alt+m");
+		assert.deepEqual(getPrintableShortcuts(), ["µ"]);
 	});
 });
 

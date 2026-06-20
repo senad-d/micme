@@ -19,6 +19,7 @@ micme.json
 
 # Micme runtime caches and artifacts
 .micme/
+micme-rec/
 models/
 *.wav
 *.mp3

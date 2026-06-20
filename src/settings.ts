@@ -1,9 +1,11 @@
 import { DynamicBorder, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
+	decodeKittyPrintable,
 	fuzzyFilter,
 	Key,
 	matchesKey,
+	parseKey,
 	type Component,
 	type SelectItem,
 	SelectList,
@@ -14,9 +16,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { basename } from "node:path";
 import {
-	DEFAULT_MACOS_PRINTABLE_SHORTCUT,
 	DEFAULT_RECORD_SAMPLE_RATE,
-	DEFAULT_SHORTCUT,
 	DEFAULT_STREAM_VAD_THRESHOLD,
 	DEFAULT_STREAM_FLUSH_MS,
 	DEFAULT_TRANSCRIBE_SAMPLE_RATE,
@@ -24,6 +24,7 @@ import {
 import {
 	env,
 	expandConfigPath,
+	getShortcutSettingValue,
 	getTranscriptionMode,
 	getTranscriptionModeProfile,
 	reloadMicmeConfig,
@@ -109,6 +110,8 @@ class ConfigurationScreen implements Component {
 	private searchQuery = "";
 	private selectedSearchIndex = 0;
 	private submenuComponent: Component | null = null;
+	private editingShortcutItem: ConfigurationItem | null = null;
+	private pendingShortcutValue = "";
 	private saving = false;
 	private statusText = "";
 
@@ -145,6 +148,11 @@ class ConfigurationScreen implements Component {
 	handleInput(data: string): void {
 		if (this.submenuComponent) {
 			this.submenuComponent.handleInput?.(data);
+			return;
+		}
+
+		if (this.editingShortcutItem) {
+			this.handleShortcutCaptureInput(data);
 			return;
 		}
 
@@ -348,6 +356,10 @@ class ConfigurationScreen implements Component {
 		const selected = this.getSelectedSetting();
 		const category = this.currentCategory();
 		const selection = this.getSelectionText();
+		if (this.editingShortcutItem) {
+			const hint = this.pendingShortcutValue ? `Captured ${this.pendingShortcutValue} • Enter save • Esc cancel` : "Press desired key or key combination • Enter save • Esc cancel";
+			return `${selection} • ${this.statusText || hint}`;
+		}
 		const search = this.searchActive ? `Search: ${this.searchQuery || "type to filter all settings"}` : "";
 		const lead = this.statusText || search;
 		const description = selected?.description ?? category.description;
@@ -356,6 +368,7 @@ class ConfigurationScreen implements Component {
 
 	private formatValue(item: ConfigurationItem, width: number) {
 		if (width <= 0) return "";
+		if (this.editingShortcutItem?.id === item.id) return this.pendingShortcutValue ? this.theme.fg("accent", fitAnsi(this.pendingShortcutValue, width)) : "";
 		const raw = item.rawValue;
 		if (!raw) return this.theme.fg("dim", fitAnsi(item.emptyLabel ?? displayConfigurationValue(item.id, raw), width));
 
@@ -465,6 +478,11 @@ class ConfigurationScreen implements Component {
 		const item = displayItems[this.getSelectedSettingIndex(displayItems.length)];
 		if (!item) return;
 
+		if (item.id === "MICME_SHORTCUT") {
+			this.startShortcutCapture(item);
+			return;
+		}
+
 		if (item.submenu) {
 			this.submenuComponent = item.submenu(item.rawValue, (selectedValue?: string) => {
 				this.submenuComponent = null;
@@ -478,6 +496,50 @@ class ConfigurationScreen implements Component {
 		const currentIndex = item.values.indexOf(item.rawValue);
 		const nextValue = item.values[(currentIndex + 1) % item.values.length] ?? item.values[0] ?? "";
 		this.saveSetting(item, nextValue);
+	}
+
+	private startShortcutCapture(item: ConfigurationItem) {
+		this.editingShortcutItem = item;
+		this.pendingShortcutValue = "";
+		this.statusText = "";
+		this.requestRender();
+	}
+
+	private handleShortcutCaptureInput(data: string) {
+		const item = this.editingShortcutItem;
+		if (!item) return;
+
+		if (matchesKey(data, Key.escape)) {
+			this.editingShortcutItem = null;
+			this.pendingShortcutValue = "";
+			this.statusText = "";
+			this.requestRender();
+			return;
+		}
+
+		if (matchesKey(data, Key.enter)) {
+			if (!this.pendingShortcutValue) {
+				this.statusText = "Press a shortcut before confirming";
+				this.requestRender();
+				return;
+			}
+			const nextValue = this.pendingShortcutValue;
+			this.editingShortcutItem = null;
+			this.pendingShortcutValue = "";
+			this.saveSetting(item, nextValue);
+			return;
+		}
+
+		const captured = getShortcutInput(data);
+		if (!captured) {
+			this.statusText = "Shortcut input not recognized";
+			this.requestRender();
+			return;
+		}
+
+		this.pendingShortcutValue = captured;
+		this.statusText = "";
+		this.requestRender();
 	}
 
 	private saveSetting(item: ConfigurationItem, nextValue: string) {
@@ -603,7 +665,7 @@ export function buildConfigurationItems(
 	const whisperCppBinValues = uniqueStrings([env("MICME_WHISPER_CPP_BIN") ?? "", findExecutable(["whisper-cli"]) ?? "", findExecutable(["whisper-cpp"]) ?? "", "whisper-cli", "whisper-cpp"]);
 	const whisperStreamBinValues = uniqueStrings([env("MICME_WHISPER_STREAM_BIN") ?? "", findExecutable(["whisper-stream"]) ?? "", "whisper-stream"]);
 	const audioFilter = env("MICME_AUDIO_FILTER") ?? "highpass=f=80,lowpass=f=7600";
-	const macosPrintableShortcut = env("MICME_PRINTABLE_SHORTCUTS") ?? (process.platform === "darwin" ? DEFAULT_MACOS_PRINTABLE_SHORTCUT : "");
+	const shortcut = getShortcutSettingValue();
 	const plan = resolveTranscriptionPlan({ transcriptionMode: getTranscriptionMode() });
 	const backendValues = ["whisper.cpp", "python"] as const;
 	const backendLabels = Object.fromEntries(backendValues.map((value) => [value, formatBackendLabel(value)]));
@@ -849,21 +911,10 @@ export function buildConfigurationItems(
 		{
 			id: "MICME_SHORTCUT",
 			categoryId: "general",
-			label: "Terminal shortcut",
-			description: "Shortcut when your terminal sends real Alt/Ctrl keys. Requires /reload or restart after changing.",
-			rawValue: env("MICME_SHORTCUT") ?? DEFAULT_SHORTCUT,
-			currentValue: env("MICME_SHORTCUT") ?? DEFAULT_SHORTCUT,
-			values: ["alt+m", "ctrl+shift+m", "ctrl+space", "f8", "f9"],
-			displayKind: "text",
-		},
-		{
-			id: "MICME_PRINTABLE_SHORTCUTS",
-			categoryId: "general",
-			label: "macOS printable shortcut",
-			description: "Toggle-only fallback for terminals where Option+M inserts a character instead of sending Alt+M. Use /reload after changing.",
-			rawValue: macosPrintableShortcut,
-			currentValue: displayConfigurationValue("MICME_PRINTABLE_SHORTCUTS", macosPrintableShortcut),
-			values: [DEFAULT_MACOS_PRINTABLE_SHORTCUT, "µ", ""],
+			label: "Shortcut",
+			description: "Press Enter, then press the desired key or key combination, and press Enter again to confirm.",
+			rawValue: shortcut,
+			currentValue: displayConfigurationValue("MICME_SHORTCUT", shortcut),
 			displayKind: "text",
 			emptyLabel: "not set",
 		},
@@ -921,7 +972,7 @@ export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTh
 export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string): Promise<Record<string, string>> {
 	if (!id.startsWith("MICME_")) return {};
 
-	const valuesToWrite = id === "MICME_TRANSCRIPTION_MODE" ? getTranscriptionModeProfile(value === "stream" ? "stream" : "clip") : { [id]: value };
+	const valuesToWrite = getConfigurationValuesToWrite(id, value);
 	if (id === "MICME_WHISPER_CPP_MODEL" && value) {
 		await ensureWhisperCppModel(expandConfigPath(value), ctx);
 	}
@@ -963,13 +1014,19 @@ export function uniqueStrings(values: string[]) {
 	return output.length > 0 ? output : [""];
 }
 
+function getConfigurationValuesToWrite(id: string, value: string) {
+	if (id === "MICME_TRANSCRIPTION_MODE") return getTranscriptionModeProfile(value === "stream" ? "stream" : "clip");
+	if (id === "MICME_SHORTCUT") return { MICME_SHORTCUT: value, MICME_PRINTABLE_SHORTCUTS: undefined };
+	return { [id]: value };
+}
+
 function formatSaveStatus(id: string, value: string) {
-	const writtenKeys = id === "MICME_TRANSCRIPTION_MODE" ? Object.keys(getTranscriptionModeProfile(value === "stream" ? "stream" : "clip")) : [id];
+	const writtenKeys = Object.keys(getConfigurationValuesToWrite(id, value));
 	const overriddenKeys = writtenKeys.filter((key) => process.env[key] !== undefined);
 	const reloadHint = id === "MICME_SHORTCUT" ? "/reload required for shortcut changes" : id === "MICME_PRINTABLE_SHORTCUTS" ? "/reload recommended for printable shortcuts" : "";
 
 	if (id === "MICME_TRANSCRIPTION_MODE" && overriddenKeys.length) return `Shell env still overrides ${overriddenKeys.join(", ")}`;
-	if (overriddenKeys.includes(id)) return reloadHint ? `Shell env still overrides ${id} • ${reloadHint}` : `Shell env still overrides ${id}`;
+	if (overriddenKeys.length) return reloadHint ? `Shell env still overrides ${overriddenKeys.join(", ")} • ${reloadHint}` : `Shell env still overrides ${overriddenKeys.join(", ")}`;
 	return reloadHint;
 }
 
@@ -1013,6 +1070,12 @@ function clamp(value: number, min: number, max: number) {
 
 function isTruthyConfigValue(value: string) {
 	return /^(1|true|yes|on)$/i.test(value);
+}
+
+function getShortcutInput(data: string) {
+	const parsed = parseKey(data);
+	if (parsed && parsed !== "enter" && parsed !== "escape" && parsed !== "esc") return parsed;
+	return decodeKittyPrintable(data) ?? getPrintableInput(data);
 }
 
 function getPrintableInput(data: string) {

@@ -10,6 +10,7 @@ All notable changes to Micme will be documented in this file.
 - Add an interactive npm publishing script that prompts for a version, validates the package, creates the release commit/tag, and publishes with public scoped-package access.
 - Keep publication on hold until package name, metadata, security review, validation, and smoke tests are complete.
 - Add explicit transcription backend selection with backend-specific `/micme conf` model rows, doctor diagnostics, schema, and docs.
+- Store kept audio in sequential project directories under `./micme-rec/rec-###/` instead of the system temp directory.
 
 ## 0.1.0 - 2026-06-18
 

@@ -13,6 +13,7 @@ const forbiddenChecks = [
   { label: "node_modules", test: (path) => path.startsWith("node_modules/") || path.includes("/node_modules/") },
   { label: "planning specs", test: (path) => path.startsWith("specs/") },
   { label: "Micme cache", test: (path) => path.startsWith(".micme/") || path.includes("/.micme/") },
+  { label: "Micme recordings", test: (path) => path.startsWith("micme-rec/") || path.includes("/micme-rec/") },
   { label: "token insight files", test: (path) => path.includes("token-insights") },
   { label: "npm tarballs", test: (path) => /(^|\/)micme-[^/]+\.tgz$/i.test(path) || path.endsWith(".tgz") },
   { label: "audio artifacts", test: (path) => /\.(wav|mp3|m4a|flac|ogg|opus|aiff?|pcm)$/i.test(path) },

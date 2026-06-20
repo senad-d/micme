@@ -1,7 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json",
   "MICME_SHORTCUT": "alt+m",
-  "MICME_PRINTABLE_SHORTCUTS": "§",
   "MICME_TRANSCRIPTION_MODE": "clip",
   "MICME_TRANSCRIBE_BACKEND": "auto",
   "MICME_AUTO_SUBMIT": "0",

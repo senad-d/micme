@@ -15,15 +15,15 @@
 
 ---
 
-Micme is a pi extension for short coding prompts. It records your microphone with `ffmpeg`, transcribes locally with `whisper.cpp` or another local backend, and inserts the transcript into pi.
+MicMe is a pi extension for short coding prompts. It records your microphone with `ffmpeg`, transcribes locally with `whisper.cpp` or another local backend, and inserts the transcript into pi.
 
 <table align="center">
   <tr>
-    <th>Micme demo</th>
+    <th>MicMe demo</th>
   </tr>
   <tr>
     <td align="center">
-      <img src="img/demo.gif" alt="Micme demo: record voice and paste the transcript into pi" title="Micme demo" width="760">
+      <img src="img/demo.gif" alt="MicMe demo: record voice and paste the transcript into pi" title="MicMe demo" width="760">
     </td>
   </tr>
 </table>
@@ -182,10 +182,9 @@ Common settings:
 | `MICME_STREAM_FLUSH_MS=650` | Stream profile quiet interval before tentative words are committed append-only. |
 | `MICME_STREAM_FINALIZE_WITH_CLIP=0` | Keep the append-only live transcript on stop. Set `1` to opt in to final clip replacement. |
 | `MICME_AUTO_SUBMIT=0` | Paste for review. Set `1` to send automatically. |
-| `MICME_SHORTCUT=alt+m` | Toggle shortcut. Restart or `/reload` after changing. |
-| `MICME_PRINTABLE_SHORTCUTS=§` | macOS Option-key fallback. |
+| `MICME_SHORTCUT=alt+m` | Toggle shortcut. Use terminal syntax (`alt+m`, `ctrl+space`, `f8`) or a printable character such as `§`. Restart or `/reload` after changing. |
 | `MICME_VALIDATE_AUDIO=1` | Reject near-silent recordings. |
-| `MICME_KEEP_AUDIO=0` | Delete successful temp audio. Set `1` for debugging. |
+| `MICME_KEEP_AUDIO=0` | Delete successful recording audio. Set `1` to keep each recording under `./micme-rec/rec-###/` for debugging. |
 | `MICME_MODEL_DIR=~/.cache/whisper.cpp` | Model cache/discovery directory. |
 
 See [`micme.example.json`](micme.example.json) for the full JSON template.
@@ -211,10 +210,8 @@ Streaming mode treats `whisper-stream` output as repeated, overlapping hypothese
 
 Micme supports these backend values in JSON/env config:
 
-- `auto` (default): custom command when configured, otherwise whisper.cpp, otherwise Python Whisper.
 - `whisper.cpp`: uses `whisper-cli`/`whisper-cpp` and a ggml/gguf model path.
 - `python`: uses the OpenAI Whisper `whisper` CLI and a Python model name.
-- `custom`: runs `MICME_TRANSCRIBE_COMMAND`; Micme treats the model as unknown.
 
 `/micme conf` keeps the interactive backend picker focused on `whisper.cpp` and `Python Whisper`, then shows only the model/binary fields for the selected backend. For whisper.cpp, `MICME_WHISPER_CPP_MODEL` is the selected ggml/gguf model path; if it is unset, Micme falls back to `${MICME_MODEL_DIR}/ggml-${MICME_DEFAULT_WHISPER_CPP_MODEL}.bin`. For Python Whisper, `MICME_WHISPER_MODEL` is passed as the CLI model name.
 

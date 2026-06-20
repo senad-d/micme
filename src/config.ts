@@ -75,7 +75,7 @@ export async function writeMicmeConfigValue(key: string, value: string) {
 	await writeMicmeConfigValues({ [key]: value });
 }
 
-export async function writeMicmeConfigValues(values: Record<string, string>) {
+export async function writeMicmeConfigValues(values: Record<string, string | undefined>) {
 	for (const key of Object.keys(values)) {
 		if (!key.startsWith("MICME_")) throw new Error(`Micme config keys must start with MICME_: ${key}`);
 	}
@@ -85,7 +85,13 @@ export async function writeMicmeConfigValues(values: Record<string, string>) {
 	const existing = readMicmeJsonObjectForWrite(configPath);
 	const next: JsonObject = { ...existing };
 
-	for (const [key, value] of Object.entries(values)) next[key] = String(value);
+	for (const [key, value] of Object.entries(values)) {
+		if (value === undefined) {
+			delete next[key];
+		} else {
+			next[key] = String(value);
+		}
+	}
 
 	await mkdir(configDir, { recursive: true });
 	const tempPath = join(configDir, `.micme.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
@@ -147,8 +153,22 @@ export function env(name: string) {
 	return process.env[name] ?? micmeConfigState.values[name];
 }
 
+export function getShortcutSettingValue() {
+	const shortcut = env("MICME_SHORTCUT");
+	if (shortcut !== undefined) return shortcut;
+
+	const legacyPrintableShortcut = firstShortcutValue(env("MICME_PRINTABLE_SHORTCUTS"));
+	return legacyPrintableShortcut || DEFAULT_SHORTCUT;
+}
+
 export function getShortcut() {
-	return env("MICME_SHORTCUT") || DEFAULT_SHORTCUT;
+	return getShortcutSettingValue() || "not set";
+}
+
+export function getTerminalShortcut() {
+	const shortcut = env("MICME_SHORTCUT");
+	if (shortcut !== undefined) return isTerminalShortcut(shortcut) ? shortcut.trim() : undefined;
+	return DEFAULT_SHORTCUT;
 }
 
 export function getTranscriptionMode() {
@@ -165,18 +185,36 @@ export function isTranscribeBackend(value: string | undefined): value is Transcr
 }
 
 export function getPrintableShortcuts() {
-	const configured = env("MICME_PRINTABLE_SHORTCUTS");
-	if (configured !== undefined) {
-		return configured
-			.split(",")
-			.map((value) => value.trim())
-			.filter(Boolean);
+	const shortcut = env("MICME_SHORTCUT");
+	if (shortcut !== undefined) {
+		if (shortcut && !isTerminalShortcut(shortcut)) return splitShortcutValues(shortcut);
+		const legacyConfigured = env("MICME_PRINTABLE_SHORTCUTS");
+		return legacyConfigured !== undefined ? splitShortcutValues(legacyConfigured) : [];
 	}
+
+	const legacyConfigured = env("MICME_PRINTABLE_SHORTCUTS");
+	if (legacyConfigured !== undefined) return splitShortcutValues(legacyConfigured);
 	return process.platform === "darwin" ? [DEFAULT_MACOS_PRINTABLE_SHORTCUT] : [];
 }
 
 export function matchesPrintableMicmeShortcut(data: string) {
 	return getPrintableShortcuts().includes(data);
+}
+
+export function isTerminalShortcut(value: string) {
+	const normalized = value.trim();
+	return /^[\x20-\x7E]$/.test(normalized) || /^(?:escape|esc|enter|return|tab|space|backspace|delete|insert|clear|home|end|pageUp|pageDown|up|down|left|right|f\d{1,2}|(?:(?:ctrl|control|alt|option|meta|cmd|command|shift|super)\+)+.+)$/i.test(normalized);
+}
+
+function firstShortcutValue(value: string | undefined) {
+	return splitShortcutValues(value ?? "")[0] ?? "";
+}
+
+function splitShortcutValues(value: string) {
+	return value
+		.split(",")
+		.map((candidate) => candidate.trim())
+		.filter(Boolean);
 }
 
 export function getTranscribeTimeoutMs() {
