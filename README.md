@@ -15,7 +15,7 @@
 
 ---
 
-MicMe is a pi extension for short coding prompts. It records your microphone with `ffmpeg`, transcribes locally with `whisper.cpp` or another local backend, and inserts the transcript into pi.
+MicMe is a Pi extension for coding prompts. It records your microphone with `ffmpeg`, transcribes locally with `whisper.cpp` or another local backend, and inserts the transcript into pi.
 
 <table align="center">
   <tr>
@@ -147,7 +147,7 @@ MICME_WHISPER_CPP_MODEL=/path/to/ggml-small.en.bin
 
 ## Configuration
 
-Micme reads settings from shell environment variables and from the global Micme config file at `~/.pi/agent/micme.json`. Shell variables win. `/micme conf` writes only `MICME_*` keys to that JSON file, so settings follow you across pi projects on the same machine.
+MicMe reads settings from shell environment variables and from the global Micme config file at `~/.pi/agent/micme.json`. Shell variables win. `/micme conf` writes only `MICME_*` keys to that JSON file, so settings follow you across pi projects on the same machine.
 
 The usual setup path is to run:
 
