@@ -10,8 +10,10 @@ All notable changes to Micme will be documented in this file.
 - Add an interactive npm publishing script that prompts for a version, validates the package, creates the release commit/tag, and publishes with public scoped-package access.
 - Keep publication on hold until package name, metadata, security review, validation, and smoke tests are complete.
 - Add explicit transcription backend selection with backend-specific `/micme conf` model rows, doctor diagnostics, schema, and docs.
+- Add a single `MICME_TRANSLATE_TO_ENGLISH` setting that translates selected source languages to English and switches default Whisper model names to multilingual variants.
 - Store kept audio in sequential project directories under `./micme-rec/rec-###/` instead of the system temp directory.
 - Make the recorder quality-safe by default: preserve recorder timing from ffmpeg timestamps, disable the stdout meter branch, and ask macOS AVFoundation not to drop late frames.
+- Rename the translation UI to “Translate from” and automatically route translation away from non-translation Whisper turbo models to the closest translate-capable model.
 
 ## 0.1.0 - 2026-06-18
 

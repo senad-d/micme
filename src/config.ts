@@ -175,6 +175,12 @@ export function getTranscriptionMode() {
 	return env("MICME_TRANSCRIPTION_MODE") === "stream" ? "stream" : "clip";
 }
 
+export function getTranslateToEnglishLanguage() {
+	const value = env("MICME_TRANSLATE_TO_ENGLISH")?.trim();
+	if (!value || /^(0|false|no|off)$/i.test(value)) return undefined;
+	return value;
+}
+
 export function getTranscribeBackend(): TranscribeBackend {
 	const value = env("MICME_TRANSCRIBE_BACKEND")?.trim();
 	return isTranscribeBackend(value) ? value : DEFAULT_TRANSCRIBE_BACKEND;

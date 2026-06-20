@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const { resolveTranscriptionPlan } = await import("../src/backends.ts");
-const { getPrintableShortcuts, getShortcutSettingValue, getTerminalShortcut, getTranscribeBackend } = await import("../src/config.ts");
-const { resolveWhisperCppModel } = await import("../src/models.ts");
+const { getPrintableShortcuts, getShortcutSettingValue, getTerminalShortcut, getTranscribeBackend, getTranslateToEnglishLanguage } = await import("../src/config.ts");
+const { getPythonWhisperModelName, resolveWhisperCppModel } = await import("../src/models.ts");
 
 const fakeWhisperCppModel = {
 	path: "/models/ggml-small.en.bin",
@@ -81,6 +81,66 @@ test("getTranscribeBackend reads valid values and falls back to auto", () => {
 	});
 });
 
+test("translation to English is a single off-or-language option", () => {
+	withEnv({ MICME_TRANSLATE_TO_ENGLISH: "off" }, () => {
+		assert.equal(getTranslateToEnglishLanguage(), undefined);
+	});
+	withEnv({ MICME_TRANSLATE_TO_ENGLISH: "bs" }, () => {
+		assert.equal(getTranslateToEnglishLanguage(), "bs");
+	});
+});
+
+test("translation uses translate-capable Whisper model names", () => {
+	withEnv(
+		{
+			MICME_TRANSLATE_TO_ENGLISH: "bs",
+			MICME_WHISPER_CPP_MODEL: "",
+			MICME_MODEL_DIR: join(tmpdir(), "micme-model-test"),
+			MICME_DEFAULT_WHISPER_CPP_MODEL: "small.en",
+			MICME_WHISPER_MODEL: "base.en",
+		},
+		() => {
+			const model = resolveWhisperCppModel();
+			assert.equal(model.path, join(tmpdir(), "micme-model-test", "ggml-small.bin"));
+			assert.equal(model.modelName, "small");
+			assert.equal(getPythonWhisperModelName(), "base");
+		},
+	);
+
+	withEnv(
+		{
+			MICME_TRANSLATE_TO_ENGLISH: "hr",
+			MICME_WHISPER_CPP_MODEL: "",
+			MICME_MODEL_DIR: join(tmpdir(), "micme-model-test"),
+			MICME_DEFAULT_WHISPER_CPP_MODEL: "large-v3-turbo",
+			MICME_WHISPER_MODEL: "large-v3-turbo",
+		},
+		() => {
+			const model = resolveWhisperCppModel();
+			assert.equal(model.path, join(tmpdir(), "micme-model-test", "ggml-large-v3.bin"));
+			assert.equal(model.modelName, "large-v3");
+			assert.equal(model.translationFallbackFrom, "large-v3-turbo");
+			assert.equal(getPythonWhisperModelName(), "large-v3");
+		},
+	);
+});
+
+test("translation remaps explicit whisper.cpp turbo paths to the nearest translate-capable sibling", () => {
+	withEnv(
+		{
+			MICME_TRANSLATE_TO_ENGLISH: "hr",
+			MICME_WHISPER_CPP_MODEL: "/models/ggml-large-v3-turbo.bin",
+		},
+		() => {
+			const model = resolveWhisperCppModel();
+			assert.equal(model.path, "/models/ggml-large-v3.bin");
+			assert.equal(model.modelName, "large-v3");
+			assert.equal(model.translationFallbackFrom, "large-v3-turbo");
+			assert.equal(model.downloadable, true);
+		},
+	);
+});
+
 test("unified shortcut can be a printable editor fallback", () => {
 	withEnv({ MICME_SHORTCUT: "§", MICME_PRINTABLE_SHORTCUTS: "" }, () => {
 		assert.equal(getShortcutSettingValue(), "§");
@@ -114,6 +174,7 @@ test("invalid requested backend falls back to auto without throwing", () => {
 test("whisper.cpp model name maps through MICME_MODEL_DIR", () => {
 	withEnv(
 		{
+			MICME_TRANSLATE_TO_ENGLISH: "off",
 			MICME_WHISPER_CPP_MODEL: "",
 			MICME_MODEL_DIR: join(tmpdir(), "micme-model-test"),
 			MICME_DEFAULT_WHISPER_CPP_MODEL: "small.en",
@@ -130,6 +191,7 @@ test("whisper.cpp model name maps through MICME_MODEL_DIR", () => {
 test("explicit whisper.cpp model path overrides model name", () => {
 	withEnv(
 		{
+			MICME_TRANSLATE_TO_ENGLISH: "off",
 			MICME_WHISPER_CPP_MODEL: "/custom/model.bin",
 			MICME_MODEL_DIR: join(tmpdir(), "micme-model-test"),
 			MICME_DEFAULT_WHISPER_CPP_MODEL: "medium.en",

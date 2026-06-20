@@ -32,7 +32,7 @@ import {
 } from "./config.ts";
 import { discoverAudioDevices } from "./audio.ts";
 import { formatBackendLabel, resolveTranscriptionPlan } from "./backends.ts";
-import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, resolveWhisperCppModel } from "./models.ts";
+import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
@@ -66,6 +66,27 @@ const CONFIGURATION_CATEGORIES: ConfigurationCategory[] = [
 
 const TWO_PANE_MIN_WIDTH = 72;
 const MAX_SETTINGS_ROWS = 10;
+const LANGUAGE_LABELS: Record<string, string> = {
+	auto: "Auto detect",
+	en: "English",
+	bs: "Bosnian",
+	hr: "Croatian",
+	sr: "Serbian",
+	de: "German",
+	es: "Spanish",
+	fr: "French",
+	it: "Italian",
+	pt: "Portuguese",
+	nl: "Dutch",
+	pl: "Polish",
+	tr: "Turkish",
+};
+const TRANSCRIPTION_LANGUAGE_VALUES = ["en", "auto", "bs", "hr", "sr", "de", "es", "fr", "it", "pt", "nl", "pl", "tr"];
+const TRANSLATION_SOURCE_LANGUAGE_VALUES = ["bs", "hr", "sr", "de", "es", "fr", "it", "pt", "nl", "pl", "tr"];
+const TRANSLATE_FROM_VALUE_LABELS: Record<string, string> = {
+	off: "Off",
+	...Object.fromEntries(TRANSLATION_SOURCE_LANGUAGE_VALUES.map((language) => [language, `${LANGUAGE_LABELS[language] ?? language} → English`])),
+};
 
 export async function showConfiguration(ctx: ExtensionContext) {
 	if (ctx.mode !== "tui") {
@@ -587,6 +608,12 @@ class ConfigurationScreen implements Component {
 			model.currentValue = displayConfigurationValue(model.id, model.rawValue);
 		}
 
+		const pythonModel = this.items.find((candidate) => candidate.id === "MICME_WHISPER_MODEL");
+		if (pythonModel) {
+			pythonModel.rawValue = getPythonWhisperModelName();
+			pythonModel.currentValue = pythonModel.rawValue;
+		}
+
 		const mode = this.items.find((candidate) => candidate.id === "MICME_TRANSCRIPTION_MODE");
 		if (mode) {
 			const base = "Changing this applies the matching profile: stable clip defaults or low-latency stream settings.";
@@ -666,13 +693,15 @@ export function buildConfigurationItems(
 	const whisperStreamBinValues = uniqueStrings([env("MICME_WHISPER_STREAM_BIN") ?? "", findExecutable(["whisper-stream"]) ?? "", "whisper-stream"]);
 	const audioFilter = env("MICME_AUDIO_FILTER") ?? "highpass=f=80,lowpass=f=7600";
 	const shortcut = getShortcutSettingValue();
+	const translateToEnglish = env("MICME_TRANSLATE_TO_ENGLISH") ?? "off";
 	const plan = resolveTranscriptionPlan({ transcriptionMode: getTranscriptionMode() });
 	const backendValues = ["whisper.cpp", "python"] as const;
 	const backendLabels = Object.fromEntries(backendValues.map((value) => [value, formatBackendLabel(value)]));
 	const uiBackendValue = getUiBackendValue(plan);
 	const whisperCppVisible = (candidate: ResolvedTranscriptionPlan) => getUiBackendValue(candidate) === "whisper.cpp";
 	const pythonVisible = (candidate: ResolvedTranscriptionPlan) => getUiBackendValue(candidate) === "python";
-	const pythonModelValues = uniqueStrings([env("MICME_WHISPER_MODEL") ?? "base.en", ...pythonModelCandidates.map((candidate) => candidate.value)]);
+	const currentPythonModel = getPythonWhisperModelName();
+	const pythonModelValues = uniqueStrings([currentPythonModel, env("MICME_WHISPER_MODEL") ?? "", ...pythonModelCandidates.map((candidate) => candidate.value)]);
 	const pythonModelLabels = Object.fromEntries(pythonModelCandidates.map((candidate) => [candidate.value, candidate.label]));
 	const modelPathCandidates = [{ label: "Use default model", value: "", description: "Clear explicit path override and use Micme's default whisper.cpp model path.", installed: true, kind: "path" as const }, ...modelCandidates];
 
@@ -691,10 +720,22 @@ export function buildConfigurationItems(
 			id: "MICME_LANGUAGE",
 			categoryId: "general",
 			label: "Language",
-			description: "Use a fixed language for accuracy/speed, or auto for detection.",
+			description: "Transcription language when translation is off. Use auto for detection.",
 			rawValue: env("MICME_LANGUAGE") ?? "en",
 			currentValue: env("MICME_LANGUAGE") ?? "en",
-			values: ["en", "auto", "bs", "hr", "sr", "de", "es", "fr", "it", "pt", "nl", "pl", "tr"],
+			values: [...TRANSCRIPTION_LANGUAGE_VALUES],
+			valueLabels: LANGUAGE_LABELS,
+			displayKind: "text",
+		},
+		{
+			id: "MICME_TRANSLATE_TO_ENGLISH",
+			categoryId: "general",
+			label: "Translate from",
+			description: "Off by default. Choose the spoken source language to output English.",
+			rawValue: translateToEnglish,
+			currentValue: translateToEnglish,
+			values: ["off", ...TRANSLATION_SOURCE_LANGUAGE_VALUES],
+			valueLabels: TRANSLATE_FROM_VALUE_LABELS,
 			displayKind: "text",
 		},
 		{
@@ -747,8 +788,8 @@ export function buildConfigurationItems(
 			categoryId: "transcription",
 			label: "Model",
 			description: "Model name passed to the OpenAI Whisper Python CLI.",
-			rawValue: env("MICME_WHISPER_MODEL") ?? "base.en",
-			currentValue: env("MICME_WHISPER_MODEL") ?? "base.en",
+			rawValue: currentPythonModel,
+			currentValue: currentPythonModel,
 			values: pythonModelValues,
 			valueLabels: pythonModelLabels,
 			displayKind: "text",
@@ -1032,8 +1073,7 @@ function getUiBackendValue(plan: ResolvedTranscriptionPlan): "whisper.cpp" | "py
 }
 
 function getCurrentWhisperCppModelValue() {
-	const explicit = env("MICME_WHISPER_CPP_MODEL")?.trim();
-	return explicit ? expandConfigPath(explicit) : resolveWhisperCppModel().path;
+	return resolveWhisperCppModel().path;
 }
 
 export function uniqueStrings(values: string[]) {

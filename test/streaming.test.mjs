@@ -6,11 +6,30 @@ process.env.MICME_STREAM_FLUSH_MS = "20";
 process.env.MICME_STREAM_WORDS_PER_CHUNK = "10";
 
 const {
+	buildWhisperStreamCommand,
 	drainStreamingOutput,
 	flushPendingStreamingWords,
 	getStreamingTranscript,
 	clearStreamingFlush,
 } = await import("../src/streaming.ts");
+
+function withEnv(values, fn) {
+	const previous = new Map();
+	for (const key of Object.keys(values)) {
+		previous.set(key, process.env[key]);
+		const value = values[key];
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+	try {
+		return fn();
+	} finally {
+		for (const [key, value] of previous) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
+}
 
 function createHarness(baseText = "") {
 	let editorText = baseText;
@@ -135,6 +154,14 @@ test("pause flush commits the last candidate after a quiet interval", async () =
 	assert.deepEqual(harness.updates, ["Cat"]);
 	assertAppendOnly(harness.updates);
 	clearStreamingFlush(harness.state);
+});
+
+test("whisper-stream command enables translation with the selected source language", () => {
+	withEnv({ MICME_TRANSLATE_TO_ENGLISH: "bs", MICME_LANGUAGE: "en" }, () => {
+		const command = buildWhisperStreamCommand("/bin/whisper-stream", "/models/ggml-small.bin", "/tmp");
+		assert.ok(command.args.includes("-tr"));
+		assert.deepEqual(command.args.slice(command.args.indexOf("-l"), command.args.indexOf("-l") + 2), ["-l", "bs"]);
+	});
 });
 
 test("stream diagnostics are opt-in and include frame state", () => {

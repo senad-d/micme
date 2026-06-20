@@ -161,6 +161,7 @@ You can also edit the JSON manually. Minimal `~/.pi/agent/micme.json`:
 {
   "$schema": "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json",
   "MICME_LANGUAGE": "en",
+  "MICME_TRANSLATE_TO_ENGLISH": "off",
   "MICME_TRANSCRIBE_BACKEND": "auto",
   "MICME_AUTO_DOWNLOAD_MODEL": "1",
   "MICME_DEFAULT_WHISPER_CPP_MODEL": "small.en",
@@ -178,6 +179,8 @@ Common settings:
 | `MICME_TRANSCRIBE_BACKEND=auto` | Backend selector. `auto` preserves priority: custom command, whisper.cpp, then Python Whisper. |
 | `MICME_TRANSCRIPTION_MODE=clip` | Stable default: transcribe after recording stops. |
 | `MICME_TRANSCRIPTION_MODE=stream` | Experimental append-only live dictation with `whisper-stream`; requires whisper.cpp. |
+| `MICME_LANGUAGE=en` | Transcription language when translation is off. Use `auto` for detection. |
+| `MICME_TRANSLATE_TO_ENGLISH=off` | “Translate from” option. Leave `off`, or set the spoken source language code such as `hr`, `bs`, `de`, or `tr` to output English. |
 | `MICME_STREAM_KEEP_CONTEXT=0` | Stream default: avoid Whisper prompt carry-over so live chunks are less likely to rewrite each other. |
 | `MICME_STREAM_FLUSH_MS=650` | Stream profile quiet interval before tentative words are committed append-only. |
 | `MICME_STREAM_FINALIZE_WITH_CLIP=0` | Keep the append-only live transcript on stop. Set `1` to opt in to final clip replacement. |
@@ -225,7 +228,7 @@ With `MICME_AUTO_DOWNLOAD_MODEL=1`, Micme downloads missing standard whisper.cpp
 MICME_AUTO_DOWNLOAD_MODEL=0
 ```
 
-Recommended model progression: `base.en` for speed, `small.en` for a stronger default, `medium.en` for accuracy.
+Recommended model progression: `base.en` for speed, `small.en` for a stronger default, `medium.en` for accuracy. Translation uses Whisper's built-in translate task and needs translate-capable multilingual models; when `MICME_TRANSLATE_TO_ENGLISH` is enabled, Micme maps `.en` model names to multilingual defaults (`small.en` → `small`, `base.en` → `base`) and maps non-translation turbo models to the closest translate-capable model (`large-v3-turbo` → `large-v3`).
 
 Advanced users can replace the recorder or transcriber:
 

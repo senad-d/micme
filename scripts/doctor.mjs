@@ -102,16 +102,43 @@ function getTranscriptionMode() {
   return env("MICME_TRANSCRIPTION_MODE") === "stream" ? "stream" : "clip";
 }
 
+function getTranslateToEnglishLanguage() {
+  const value = env("MICME_TRANSLATE_TO_ENGLISH")?.trim();
+  if (!value || /^(0|false|no|off)$/i.test(value)) return undefined;
+  return value;
+}
+
+function toMultilingualWhisperModelName(modelName) {
+  return modelName.replace(/\.en$/i, "");
+}
+
+function getTranslationAwareWhisperModelName(modelName) {
+  return getTranslateToEnglishLanguage() ? toMultilingualWhisperModelName(modelName) : modelName;
+}
+
+function isEnglishOnlyWhisperModelName(modelName) {
+  return Boolean(modelName && /\.en$/i.test(modelName));
+}
+
+function inferWhisperCppModelName(modelPath) {
+  return modelPath.match(/(?:^|[/\\])ggml-(.+)\.(?:bin|gguf)$/i)?.[1];
+}
+
+function getPythonWhisperModelName() {
+  return getTranslationAwareWhisperModelName(env("MICME_WHISPER_MODEL") || "base.en");
+}
+
 function resolveWhisperCppModelSummary() {
   const explicit = envPath("MICME_WHISPER_CPP_MODEL");
   if (explicit) {
     return {
       path: explicit,
+      modelName: inferWhisperCppModelName(explicit),
       source: "MICME_WHISPER_CPP_MODEL explicit path",
       exists: existsSync(explicit),
     };
   }
-  const defaultModel = env("MICME_DEFAULT_WHISPER_CPP_MODEL") || "small.en";
+  const defaultModel = getTranslationAwareWhisperModelName(env("MICME_DEFAULT_WHISPER_CPP_MODEL") || "small.en");
   const modelDir = expandConfigValue(env("MICME_MODEL_DIR") || join(homedir(), ".cache", "whisper.cpp"));
   const path = join(modelDir, `ggml-${defaultModel}.bin`);
   return {
@@ -156,13 +183,13 @@ function resolveBackendPlan({ whisperCpp, whisperStream, whisper, transcribeComm
     return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "MICME_TRANSCRIBE_BACKEND=whisper.cpp but whisper.cpp was not found.", warnings };
   }
   if (requestedBackend === "python") {
-    if (pythonAvailable) return { requestedBackend, effectiveBackend: "python", binary: whisper, effectiveModel: env("MICME_WHISPER_MODEL") || "base.en", reason: "MICME_TRANSCRIBE_BACKEND=python", warnings };
+    if (pythonAvailable) return { requestedBackend, effectiveBackend: "python", binary: whisper, effectiveModel: getPythonWhisperModelName(), reason: "MICME_TRANSCRIBE_BACKEND=python", warnings };
     return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "MICME_TRANSCRIBE_BACKEND=python but the `whisper` CLI was not found.", warnings };
   }
 
   if (transcribeCommand?.trim()) return { requestedBackend, effectiveBackend: "custom", effectiveModel: "unknown", reason: "auto selected custom command because MICME_TRANSCRIBE_COMMAND is configured", warnings };
   if (whisperCppAvailable) return { requestedBackend, effectiveBackend: "whisper.cpp", binary: whisperCpp, model, effectiveModel: model.path, reason: "auto selected whisper.cpp because a whisper.cpp binary is available", warnings };
-  if (pythonAvailable) return { requestedBackend, effectiveBackend: "python", binary: whisper, effectiveModel: env("MICME_WHISPER_MODEL") || "base.en", reason: "auto selected Python Whisper because whisper.cpp is unavailable", warnings };
+  if (pythonAvailable) return { requestedBackend, effectiveBackend: "python", binary: whisper, effectiveModel: getPythonWhisperModelName(), reason: "auto selected Python Whisper because whisper.cpp is unavailable", warnings };
   return { requestedBackend, effectiveBackend: "none", effectiveModel: "unavailable", reason: "No Micme transcription backend found.", warnings };
 }
 
@@ -177,6 +204,16 @@ function printBackendPlanDiagnostics(plan) {
     if (plan.model && !plan.model.exists) warn("effective whisper.cpp model is missing", plan.effectiveModel);
   } else if (plan.effectiveBackend === "python") info("effective model", plan.effectiveModel);
   else info("effective model", "unavailable");
+
+  const translateLanguage = getTranslateToEnglishLanguage();
+  if (translateLanguage) {
+    ok("translation", `${translateLanguage} -> English`);
+    if (plan.effectiveBackend === "custom") warn("translation backend", "custom transcribe commands must implement translation themselves");
+    if (plan.effectiveBackend === "whisper.cpp" && isEnglishOnlyWhisperModelName(plan.model?.modelName)) warn("translation model", `${plan.model.modelName} appears to be English-only; use a multilingual model`);
+    if (plan.effectiveBackend === "python" && isEnglishOnlyWhisperModelName(plan.effectiveModel)) warn("translation model", `${plan.effectiveModel} appears to be English-only; use a multilingual model`);
+  } else {
+    info("translation", "off");
+  }
 
   for (const warning of plan.warnings) warn("backend warning", warning);
 }
@@ -229,7 +266,7 @@ async function main() {
       warn("MICME_WHISPER_CPP_MODEL is set but not readable", auto ? `${whisperCppModel} (Micme will try to download if it is a standard ggml model path)` : whisperCppModel);
     }
   } else {
-    const defaultModel = env("MICME_DEFAULT_WHISPER_CPP_MODEL") || "small.en";
+    const defaultModel = getTranslationAwareWhisperModelName(env("MICME_DEFAULT_WHISPER_CPP_MODEL") || "small.en");
     const modelDir = expandConfigValue(env("MICME_MODEL_DIR") || join(homedir(), ".cache", "whisper.cpp"));
     info("MICME_WHISPER_CPP_MODEL", `not set; Micme defaults to ${modelDir}/ggml-${defaultModel}.bin and auto-downloads when needed`);
   }
@@ -250,7 +287,7 @@ async function main() {
 
   console.log("\nRecommended macOS setup:");
   console.log("  brew install ffmpeg whisper-cpp");
-  console.log("  # Then use /micme conf, or let Micme auto-download ggml-small.en.bin on first use.");
+  console.log("  # Then use /micme conf, or let Micme auto-download the default model on first use.");
 
   if (process.platform === "darwin" && ffmpeg) {
     console.log("\nmacOS microphone devices:");

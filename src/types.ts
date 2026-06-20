@@ -13,6 +13,7 @@ export type ResolvedWhisperCppModel = {
 	configuredValue?: string;
 	exists: boolean;
 	downloadable: boolean;
+	translationFallbackFrom?: string;
 };
 
 export type ResolvedTranscriptionPlan = {

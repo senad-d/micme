@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { createWriteStream, existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { finished } from "node:stream/promises";
 import {
 	DEFAULT_PYTHON_WHISPER_MODEL_NAME,
@@ -13,7 +13,7 @@ import {
 	WHISPER_CPP_MODEL_BASE_URL,
 	WHISPER_CPP_MODEL_NAMES,
 } from "./constants.ts";
-import { env, expandConfigPath } from "./config.ts";
+import { env, expandConfigPath, getTranslateToEnglishLanguage } from "./config.ts";
 import { findExecutable, runProcess } from "./processes.ts";
 import type { ModelCandidate, ResolvedWhisperCppModel } from "./types.ts";
 
@@ -118,33 +118,90 @@ export function describeWhisperModel(name: string) {
 
 export function resolveWhisperCppModel(): ResolvedWhisperCppModel {
 	const explicitPath = env("MICME_WHISPER_CPP_MODEL")?.trim();
-	if (explicitPath) {
-		const path = expandConfigPath(explicitPath);
-		return {
-			path,
-			modelName: getWhisperCppModelNameFromPath(path),
-			source: "explicit-path",
-			configuredValue: explicitPath,
-			exists: existsSync(path),
-			downloadable: isDownloadableWhisperCppModelPath(path),
-		};
-	}
+	if (explicitPath) return resolveExplicitWhisperCppModel(expandConfigPath(explicitPath), explicitPath);
 
 	const configuredName = env("MICME_DEFAULT_WHISPER_CPP_MODEL")?.trim();
-	const modelName = configuredName || DEFAULT_WHISPER_CPP_MODEL_NAME;
+	const rawModelName = configuredName || DEFAULT_WHISPER_CPP_MODEL_NAME;
+	const modelName = getTranslationAwareWhisperModelName(rawModelName);
 	const path = join(getWhisperCppModelCacheDir(), `ggml-${modelName}.bin`);
-	return {
-		path,
+	return buildResolvedWhisperCppModel(path, {
 		modelName,
 		source: configuredName ? "configured-name" : "default-name",
 		configuredValue: configuredName,
+		translationFallbackFrom: getTranslationFallbackSource(rawModelName, modelName),
+	});
+}
+
+function resolveExplicitWhisperCppModel(path: string, configuredValue: string): ResolvedWhisperCppModel {
+	const modelName = getWhisperCppModelNameFromPath(path);
+	const translationModelName = modelName ? getTranslationAwareWhisperModelName(modelName) : undefined;
+	if (modelName && translationModelName && translationModelName !== modelName) {
+		const fallbackPath = getSiblingWhisperCppModelPath(path, translationModelName);
+		return buildResolvedWhisperCppModel(fallbackPath, {
+			modelName: translationModelName,
+			source: "explicit-path",
+			configuredValue,
+			translationFallbackFrom: modelName,
+		});
+	}
+
+	return buildResolvedWhisperCppModel(path, {
+		modelName,
+		source: "explicit-path",
+		configuredValue,
+	});
+}
+
+function buildResolvedWhisperCppModel(
+	path: string,
+	metadata: Pick<ResolvedWhisperCppModel, "source"> & Pick<Partial<ResolvedWhisperCppModel>, "modelName" | "configuredValue" | "translationFallbackFrom">,
+): ResolvedWhisperCppModel {
+	return {
+		path,
+		modelName: metadata.modelName,
+		source: metadata.source,
+		configuredValue: metadata.configuredValue,
 		exists: existsSync(path),
 		downloadable: isDownloadableWhisperCppModelPath(path),
+		translationFallbackFrom: metadata.translationFallbackFrom,
 	};
 }
 
+function getSiblingWhisperCppModelPath(modelPath: string, modelName: string) {
+	const extension = extname(modelPath) || ".bin";
+	return join(dirname(modelPath), `ggml-${modelName}${extension}`);
+}
+
+function getTranslationFallbackSource(rawModelName: string, modelName: string) {
+	return rawModelName !== modelName ? rawModelName : undefined;
+}
+
 export function getPythonWhisperModelName() {
-	return env("MICME_WHISPER_MODEL")?.trim() || DEFAULT_PYTHON_WHISPER_MODEL_NAME;
+	const modelName = env("MICME_WHISPER_MODEL")?.trim() || DEFAULT_PYTHON_WHISPER_MODEL_NAME;
+	return getTranslationAwareWhisperModelName(modelName);
+}
+
+export function getTranslationAwareWhisperModelName(modelName: string) {
+	return getTranslateToEnglishLanguage() ? toTranslationCapableWhisperModelName(modelName) : modelName;
+}
+
+export function toTranslationCapableWhisperModelName(modelName: string) {
+	const multilingualName = toMultilingualWhisperModelName(modelName);
+	return isTranslationUnsupportedWhisperModelName(multilingualName) ? "large-v3" : multilingualName;
+}
+
+export function toMultilingualWhisperModelName(modelName: string) {
+	return modelName.replace(/\.en$/i, "");
+}
+
+export function isEnglishOnlyWhisperModelName(modelName: string | undefined) {
+	return Boolean(modelName && /\.en$/i.test(modelName));
+}
+
+export function isTranslationUnsupportedWhisperModelName(modelName: string | undefined) {
+	if (!modelName) return false;
+	const normalized = modelName.toLowerCase();
+	return normalized === "turbo" || normalized === "large-v3-turbo" || normalized.startsWith("large-v3-turbo-");
 }
 
 export async function discoverPythonWhisperModels(): Promise<ModelCandidate[]> {
@@ -304,7 +361,8 @@ export function getWhisperCppModelCacheDir() {
 }
 
 export function getDefaultWhisperCppModelPath() {
-	const modelName = env("MICME_DEFAULT_WHISPER_CPP_MODEL")?.trim() || DEFAULT_WHISPER_CPP_MODEL_NAME;
+	const rawModelName = env("MICME_DEFAULT_WHISPER_CPP_MODEL")?.trim() || DEFAULT_WHISPER_CPP_MODEL_NAME;
+	const modelName = getTranslationAwareWhisperModelName(rawModelName);
 	return join(getWhisperCppModelCacheDir(), `ggml-${modelName}.bin`);
 }
 

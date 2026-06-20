@@ -3,6 +3,7 @@ import { MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import {
 	env,
 	envFlag,
+	getTranslateToEnglishLanguage,
 	getStreamFlushMs,
 	getStreamKeepContext,
 	getStreamKeepMs,
@@ -54,8 +55,13 @@ export function buildWhisperStreamCommand(binary: string, modelPath: string, tem
 	const capture = env("MICME_STREAM_CAPTURE");
 	if (capture?.trim()) args.push("--capture", capture.trim());
 
-	const language = env("MICME_LANGUAGE");
-	if (language?.trim()) args.push("-l", language.trim());
+	const translateLanguage = getTranslateToEnglishLanguage();
+	if (translateLanguage) {
+		args.push("-tr", "-l", translateLanguage);
+	} else {
+		const language = env("MICME_LANGUAGE");
+		if (language?.trim()) args.push("-l", language.trim());
+	}
 
 	return { command: binary, args, display: `${binary} ${args.map(shellQuote).join(" ")}` };
 }

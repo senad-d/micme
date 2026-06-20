@@ -34,7 +34,14 @@
     },
     "MICME_LANGUAGE": {
       "type": "string",
-      "default": "en"
+      "default": "en",
+      "description": "Transcription language when translation is off. Use auto for language detection."
+    },
+    "MICME_TRANSLATE_TO_ENGLISH": {
+      "type": "string",
+      "enum": ["off", "bs", "hr", "sr", "de", "es", "fr", "it", "pt", "nl", "pl", "tr"],
+      "default": "off",
+      "description": "Translate from control. off disables translation; any language code means translate speech in that source language to English."
     },
     "MICME_AUTO_DOWNLOAD_MODEL": {
       "$ref": "#/$defs/stringFlag"

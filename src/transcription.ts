@@ -3,8 +3,8 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
-import { env, getTranscribeTimeoutMs } from "./config.ts";
-import { ensureWhisperCppModel } from "./models.ts";
+import { env, getTranscribeTimeoutMs, getTranslateToEnglishLanguage } from "./config.ts";
+import { ensureWhisperCppModel, getPythonWhisperModelName } from "./models.ts";
 import { formatRunExit, replacePlaceholders, runProcess, runShell } from "./processes.ts";
 
 export { getWhisperCppBinary, getWhisperStreamBinary, resolveExecutableConfig } from "./backends.ts";
@@ -56,8 +56,13 @@ export async function transcribeWithWhisperCpp(
 	await ensureWhisperCppModel(modelPath, ctx, options);
 	const outputBase = join(tempDir, "whisper-cpp");
 	const args = ["-m", modelPath, "-f", audioPath, "-otxt", "-of", outputBase, "-nt", "-np", "-nf", "-sns"];
-	const language = env("MICME_LANGUAGE");
-	if (language?.trim()) args.push("-l", language.trim());
+	const translateLanguage = getTranslateToEnglishLanguage();
+	if (translateLanguage) {
+		args.push("-tr", "-l", translateLanguage);
+	} else {
+		const language = env("MICME_LANGUAGE");
+		if (language?.trim()) args.push("-l", language.trim());
+	}
 
 	const result = await runProcess(binary, args, getTranscribeTimeoutMs());
 	if (result.code !== 0) {
@@ -74,7 +79,7 @@ export async function transcribeWithWhisperCpp(
 }
 
 export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string) {
-	const model = modelName || env("MICME_WHISPER_MODEL") || "base.en";
+	const model = modelName || getPythonWhisperModelName();
 	const args = [
 		audioPath,
 		"--model",
@@ -89,8 +94,13 @@ export async function transcribeWithOpenAiWhisper(binary: string, audioPath: str
 		"False",
 	];
 
-	const language = env("MICME_LANGUAGE");
-	if (language?.trim() && language.trim().toLowerCase() !== "auto") args.push("--language", language.trim());
+	const translateLanguage = getTranslateToEnglishLanguage();
+	if (translateLanguage) {
+		args.push("--task", "translate", "--language", translateLanguage);
+	} else {
+		const language = env("MICME_LANGUAGE");
+		if (language?.trim() && language.trim().toLowerCase() !== "auto") args.push("--language", language.trim());
+	}
 
 	const device = env("MICME_WHISPER_DEVICE");
 	if (device?.trim()) args.push("--device", device.trim());

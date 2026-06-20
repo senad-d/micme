@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import type { TranscribeBackend, TranscriptionMode, ResolvedTranscriptionPlan, ResolvedWhisperCppModel } from "./types.ts";
 import { DEFAULT_TRANSCRIBE_BACKEND } from "./constants.ts";
-import { env, expandConfigPath, getTranscribeBackend, isTranscribeBackend } from "./config.ts";
-import { getPythonWhisperModelName, resolveWhisperCppModel } from "./models.ts";
+import { env, expandConfigPath, getTranscribeBackend, getTranslateToEnglishLanguage, isTranscribeBackend } from "./config.ts";
+import { getPythonWhisperModelName, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
 
 export type ResolveTranscriptionPlanOptions = {
@@ -174,6 +174,10 @@ function whisperCppPlan(requestedBackend: TranscribeBackend, binary: string, mod
 	} else if (!model.exists && !model.downloadable) {
 		warnings.push(`Whisper.cpp model is missing and is not a standard downloadable model: ${model.path}`);
 	}
+	if (model.translationFallbackFrom && model.modelName) {
+		warnings.push(`Translation to English uses ${model.modelName} instead of ${model.translationFallbackFrom} because the selected model does not support translation.`);
+	}
+	warnings.push(...getTranslationModelWarnings(model.modelName));
 	return {
 		requestedBackend,
 		effectiveBackend: "whisper.cpp",
@@ -195,8 +199,15 @@ function pythonPlan(requestedBackend: TranscribeBackend, binary: string, modelNa
 		binary,
 		modelName,
 		modelSource: "python-name",
-		warnings: [],
+		warnings: getTranslationModelWarnings(modelName),
 	};
+}
+
+function getTranslationModelWarnings(modelName: string | undefined) {
+	if (!getTranslateToEnglishLanguage()) return [];
+	if (isEnglishOnlyWhisperModelName(modelName)) return [`Translation to English requires a multilingual Whisper model; ${modelName} appears to be English-only.`];
+	if (isTranslationUnsupportedWhisperModelName(modelName)) return [`Translation to English is not supported by ${modelName}; choose large-v3 or another multilingual translate-capable model.`];
+	return [];
 }
 
 function nonePlan(requestedBackend: TranscribeBackend, reason: string, warnings: string[]): ResolvedTranscriptionPlan {
