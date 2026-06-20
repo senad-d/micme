@@ -173,24 +173,38 @@ async function startRecording(ctx: ExtensionContext, stopHint = getShortcut()) {
 	}
 
 	const tempDir = await createRecordingDirectory(ctx.cwd, envFlag("MICME_KEEP_AUDIO"), "micme-");
-	const audioPath = join(tempDir, "raw.wav");
-	const command = buildRecorderCommand(audioPath);
-	const active = spawnRecording(command, audioPath, tempDir);
-	recording = active;
+	let active: Recording | undefined;
 
-	const earlyExit = await raceWithTimeout(active.exitPromise, RECORDER_STARTUP_GRACE_MS);
-	if (earlyExit) {
-		if (active.stopRequested) return;
-		recording = undefined;
-		clearRecordingWidget(ctx);
-		await cleanup(tempDir).catch(() => undefined);
-		const stderr = active.stderr().trim();
-		const suffix = stderr ? `\n${stderr}` : "";
-		throw new Error(`Micme recorder exited early (${formatExit(earlyExit)}).${suffix}`);
+	try {
+		const audioPath = join(tempDir, "raw.wav");
+		const command = buildRecorderCommand(audioPath);
+		active = spawnRecording(command, audioPath, tempDir);
+		recording = active;
+
+		const earlyExit = await raceWithTimeout(active.exitPromise, RECORDER_STARTUP_GRACE_MS);
+		if (earlyExit) {
+			if (active.stopRequested) return;
+			const stderr = active.stderr().trim();
+			const suffix = stderr ? `\n${stderr}` : "";
+			throw new Error(`Micme recorder exited early (${formatExit(earlyExit)}).${suffix}`);
+		}
+
+		ctx.ui.setStatus(STATUS_KEY, `● recording (${stopHint} or /micme)`);
+		startRecordingWidget(ctx, active);
+	} catch (error) {
+		await cleanupFailedRecordingStart(ctx, tempDir, active);
+		throw error;
 	}
+}
 
-	ctx.ui.setStatus(STATUS_KEY, `● recording (${stopHint} or /micme)`);
-	startRecordingWidget(ctx, active);
+async function cleanupFailedRecordingStart(ctx: ExtensionContext, tempDir: string, active: Recording | undefined) {
+	if (active && recording === active) recording = undefined;
+	clearRecordingWidget(ctx);
+	if (active) {
+		await stopProcess(active).catch(() => undefined);
+		if (active.clipRecording) await stopProcess(active.clipRecording).catch(() => undefined);
+	}
+	await cleanup(tempDir).catch(() => undefined);
 }
 
 async function stopAndTranscribe(ctx: ExtensionContext, pi: ExtensionAPI) {
@@ -251,49 +265,53 @@ async function startStreamingTranscription(ctx: ExtensionContext, stopHint = get
 	await ensureWhisperCppModel(plan.modelPath, ctx, { allowDownload: plan.modelDownloadable !== false });
 
 	const tempDir = await createRecordingDirectory(ctx.cwd, envFlag("MICME_KEEP_AUDIO"), "micme-stream-");
-	const command = buildWhisperStreamCommand(plan.binary, plan.modelPath, tempDir);
-	const active = spawnRecording(command, "", tempDir);
-	const baseText = ctx.ui.getEditorText();
-	active.streaming = {
-		baseText,
-		previewText: baseText,
-		outputBuffer: "",
-		lastText: "",
-		emittedWords: [],
-		candidateWords: [],
-		lastHypothesisWords: [],
-		startedAt: Date.now(),
-	};
-	if (getStreamFinalizeWithClip()) {
-		const audioPath = join(tempDir, "raw.wav");
-		active.clipRecording = spawnRecording(buildRecorderCommand(audioPath), audioPath, tempDir);
+	let active: Recording | undefined;
+
+	try {
+		const command = buildWhisperStreamCommand(plan.binary, plan.modelPath, tempDir);
+		const clipAudioPath = getStreamFinalizeWithClip() ? join(tempDir, "raw.wav") : undefined;
+		const clipCommand = clipAudioPath ? buildRecorderCommand(clipAudioPath) : undefined;
+		active = spawnRecording(command, "", tempDir);
+		const streamRecording = active;
+		const baseText = ctx.ui.getEditorText();
+		streamRecording.streaming = {
+			baseText,
+			previewText: baseText,
+			outputBuffer: "",
+			lastText: "",
+			emittedWords: [],
+			candidateWords: [],
+			lastHypothesisWords: [],
+			startedAt: Date.now(),
+		};
+		if (clipCommand && clipAudioPath) {
+			streamRecording.clipRecording = spawnRecording(clipCommand, clipAudioPath, tempDir);
+		}
+		recording = streamRecording;
+
+		streamRecording.process.stdout?.on("data", (chunk: Buffer | string) => {
+			const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+			handleStreamingOutput(ctx, streamRecording, text);
+		});
+
+		const [earlyExit, recorderEarlyExit] = await Promise.all([
+			raceWithTimeout(streamRecording.exitPromise, RECORDER_STARTUP_GRACE_MS),
+			streamRecording.clipRecording ? raceWithTimeout(streamRecording.clipRecording.exitPromise, RECORDER_STARTUP_GRACE_MS) : Promise.resolve(undefined),
+		]);
+		if (earlyExit || recorderEarlyExit) {
+			if (streamRecording.stopRequested || streamRecording.clipRecording?.stopRequested) return;
+			const failed = earlyExit ? streamRecording : streamRecording.clipRecording;
+			const stderr = failed?.stderr().trim();
+			const suffix = stderr ? `\n${stderr}` : "";
+			throw new Error(`Micme streaming exited early (${formatExit(earlyExit ?? recorderEarlyExit!)}).${suffix}`);
+		}
+
+		ctx.ui.setStatus(STATUS_KEY, `● streaming (${stopHint} or /micme)`);
+		startRecordingWidget(ctx, streamRecording);
+	} catch (error) {
+		await cleanupFailedRecordingStart(ctx, tempDir, active);
+		throw error;
 	}
-	recording = active;
-
-	active.process.stdout?.on("data", (chunk: Buffer | string) => {
-		const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-		handleStreamingOutput(ctx, active, text);
-	});
-
-	const [earlyExit, recorderEarlyExit] = await Promise.all([
-		raceWithTimeout(active.exitPromise, RECORDER_STARTUP_GRACE_MS),
-		active.clipRecording ? raceWithTimeout(active.clipRecording.exitPromise, RECORDER_STARTUP_GRACE_MS) : Promise.resolve(undefined),
-	]);
-	if (earlyExit || recorderEarlyExit) {
-		if (active.stopRequested || active.clipRecording?.stopRequested) return;
-		recording = undefined;
-		clearRecordingWidget(ctx);
-		await stopProcess(active).catch(() => undefined);
-		if (active.clipRecording) await stopProcess(active.clipRecording).catch(() => undefined);
-		await cleanup(tempDir).catch(() => undefined);
-		const failed = earlyExit ? active : active.clipRecording;
-		const stderr = failed?.stderr().trim();
-		const suffix = stderr ? `\n${stderr}` : "";
-		throw new Error(`Micme streaming exited early (${formatExit(earlyExit ?? recorderEarlyExit!)}).${suffix}`);
-	}
-
-	ctx.ui.setStatus(STATUS_KEY, `● streaming (${stopHint} or /micme)`);
-	startRecordingWidget(ctx, active);
 }
 
 async function stopStreamingTranscription(ctx: ExtensionContext, pi: ExtensionAPI, active: Recording) {

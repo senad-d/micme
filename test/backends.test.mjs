@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 
 const { resolveTranscriptionPlan } = await import("../src/backends.ts");
 const { getPrintableShortcuts, getShortcutSettingValue, getTerminalShortcut, getTranscribeBackend, getTranslateToEnglishLanguage } = await import("../src/config.ts");
-const { getPythonWhisperModelName, resolveWhisperCppModel } = await import("../src/models.ts");
+const { getPythonWhisperModelName, getPythonWhisperModelQueryArgs, resolveWhisperCppModel } = await import("../src/models.ts");
 
 const fakeWhisperCppModel = {
 	path: "/models/ggml-small.en.bin",
@@ -123,6 +123,12 @@ test("translation uses translate-capable Whisper model names", () => {
 			assert.equal(getPythonWhisperModelName(), "large-v3");
 		},
 	);
+});
+
+test("Python Whisper model discovery uses isolated mode", () => {
+	const args = getPythonWhisperModelQueryArgs();
+	assert.deepEqual(args.slice(0, 2), ["-I", "-c"]);
+	assert.match(args[2], /whisper\.available_models\(\)/);
 });
 
 test("translation remaps explicit whisper.cpp turbo paths to the nearest translate-capable sibling", () => {

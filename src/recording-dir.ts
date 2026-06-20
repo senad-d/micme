@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,7 @@ export async function createRecordingDirectory(cwd: string, keepAudio: boolean, 
 export async function createProjectRecordingDirectory(cwd: string) {
 	const recordingsRoot = join(cwd, PROJECT_RECORDINGS_DIR);
 	await mkdir(recordingsRoot, { recursive: true });
+	await assertSafeRecordingsRoot(recordingsRoot);
 
 	const nextIndex = await getNextRecordingIndex(recordingsRoot);
 
@@ -29,6 +30,16 @@ export async function createProjectRecordingDirectory(cwd: string) {
 	}
 
 	throw new Error(`Unable to create a Micme recording directory under ${recordingsRoot}.`);
+}
+
+async function assertSafeRecordingsRoot(recordingsRoot: string) {
+	const stats = await lstat(recordingsRoot);
+	if (stats.isSymbolicLink()) {
+		throw new Error(`Refusing to keep Micme audio in a symbolic-link recordings directory: ${recordingsRoot}`);
+	}
+	if (!stats.isDirectory()) {
+		throw new Error(`Micme recordings path is not a directory: ${recordingsRoot}`);
+	}
 }
 
 async function getNextRecordingIndex(recordingsRoot: string) {

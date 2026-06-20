@@ -10,6 +10,7 @@ const {
 	drainStreamingOutput,
 	flushPendingStreamingWords,
 	getStreamingTranscript,
+	sanitizeStreamingText,
 	clearStreamingFlush,
 } = await import("../src/streaming.ts");
 
@@ -124,6 +125,10 @@ test("unstable corrections can change internally without editor churn", () => {
 	assertTranscript(harness, "Cat is white");
 	assert.ok(!harness.updates.some((text) => /\bThat\b/.test(text)), `did not expect visible correction: ${JSON.stringify(harness.updates)}`);
 	assertAppendOnly(harness.updates);
+});
+
+test("streaming text sanitization strips terminal control sequences", () => {
+	assert.equal(sanitizeStreamingText("\u001b]52;c;clipboard\u0007Cat \u001b[31mwhite"), "Cat white");
 });
 
 test("reset and noise frames do not delete committed text", () => {

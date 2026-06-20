@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { AUDIO_VALIDATION_TIMEOUT_MS } from "./constants.ts";
 import { env, envFlag, getAudioFilter, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
 import { findExecutable, formatRunExit, replacePlaceholders, runProcess, shellCommand, shellQuote } from "./processes.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { AudioDeviceCandidate, AudioDiagnostics, CommandSpec, RunResult } from "./types.ts";
 
 type DeviceBackend = "avfoundation" | "pulse" | "dshow" | "unsupported";
@@ -226,8 +227,8 @@ export function parseAvfoundationDevices(output: string): ParsedDeviceInventory 
 
 		const match = line.match(/\[(\d+)\]\s+(.+)$/);
 		if (!match) continue;
-		const id = match[1] ?? "";
-		const name = (match[2] ?? "").trim();
+		const id = sanitizeDeviceField(match[1] ?? "");
+		const name = sanitizeDeviceField(match[2] ?? "");
 		if (!name) continue;
 		inventory[section].push({ id, name });
 	}
@@ -251,9 +252,9 @@ function parsePulseAudioDevices(output: string): ParsedDeviceInventory {
 		const sourceLine = line.replace(/^\*\s*/, "");
 		const match = sourceLine.match(/^([^\s\[]+)(?:\s+\[(.+)\])?$/);
 		if (!match) continue;
-		const id = (match[1] ?? "").trim();
+		const id = sanitizeDeviceField(match[1] ?? "");
 		if (!id || id.includes(":")) continue;
-		let name = (match[2] ?? "").trim();
+		let name = sanitizeDeviceField(match[2] ?? "");
 		if (id === "default" && (!name || /^default$/i.test(name))) name = "PulseAudio default source";
 		inventory.audio.push({ id, name });
 	}
@@ -280,7 +281,7 @@ function parseDirectShowDevices(output: string): ParsedDeviceInventory {
 		if (!section || /Alternative name/i.test(line)) continue;
 
 		const match = line.match(/^"(.+)"$/) ?? line.match(/"([^"]+)"/);
-		const name = (match?.[1] ?? "").trim();
+		const name = sanitizeDeviceField(match?.[1] ?? "");
 		if (!name) continue;
 		inventory[section].push({ name });
 	}
@@ -290,6 +291,10 @@ function parseDirectShowDevices(output: string): ParsedDeviceInventory {
 
 function stripFfmpegLogPrefix(line: string) {
 	return line.replace(/^(?:\[[^\]]+\]\s*)+/, "");
+}
+
+function sanitizeDeviceField(value: string) {
+	return sanitizeTerminalText(value);
 }
 
 function hasMacosPermissionIssue(output: string) {

@@ -23,7 +23,7 @@ The default recorder uses `ffmpeg` and your operating system's microphone APIs:
 - Linux: PulseAudio through `ffmpeg -f pulse`
 - Windows: DirectShow through `ffmpeg -f dshow`
 
-Micme writes temporary audio files under the operating system temp directory by default. After successful transcription, those files are removed. Set `MICME_KEEP_AUDIO=1` only when you intentionally want to keep raw/preprocessed audio for debugging; kept recordings are written to per-recording project directories such as `./micme-rec/rec-001/`.
+Micme writes temporary audio files under the operating system temp directory by default. After successful transcription, those files are removed. Set `MICME_KEEP_AUDIO=1` only when you intentionally want to keep raw/preprocessed audio for debugging; kept recordings are written to per-recording project directories such as `./micme-rec/rec-001/`. Micme refuses to keep audio when the project `micme-rec` directory is a symbolic link.
 
 ## Local process execution
 
@@ -33,6 +33,7 @@ Micme spawns local processes for recording and transcription:
 - `whisper-cli` or `whisper-cpp` for whisper.cpp transcription.
 - `whisper-stream` for experimental streaming mode.
 - `whisper` for the optional Python openai-whisper fallback.
+- `python -I` only for optional Python Whisper model-name discovery in `/micme conf`; isolated mode avoids importing project-local Python files.
 - Optional user-provided shell commands in `MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`.
 
 The default process output is capped before it is shown to users or errors. Diagnostics should not print secret values.

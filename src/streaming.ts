@@ -15,6 +15,7 @@ import {
 } from "./config.ts";
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import { shellQuote } from "./processes.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { CommandSpec, Recording, StreamingState } from "./types.ts";
 
 export type StreamingFrameMode = "cumulative" | "incremental" | "rolling" | "duplicate" | "reset";
@@ -155,7 +156,7 @@ export function sanitizeStreamingText(text: string) {
 }
 
 export function stripStreamingControls(text: string) {
-	return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, " ").replace(/\s+/g, " ").trim();
+	return sanitizeTerminalText(text);
 }
 
 export function diffStreamingText(previous: string, current: string) {

@@ -88,6 +88,15 @@ const TRANSLATE_FROM_VALUE_LABELS: Record<string, string> = {
 	...Object.fromEntries(TRANSLATION_SOURCE_LANGUAGE_VALUES.map((language) => [language, `${LANGUAGE_LABELS[language] ?? language} → English`])),
 };
 
+type ConfigurationDiscoveryKey = "audio devices" | "whisper.cpp models" | "Python Whisper models";
+
+type ConfigurationDiscoveryState = {
+	audioDevices: AudioDeviceCandidate[];
+	modelCandidates: ModelCandidate[];
+	pythonModelCandidates: ModelCandidate[];
+	pending: Set<ConfigurationDiscoveryKey>;
+};
+
 export async function showConfiguration(ctx: ExtensionContext) {
 	if (ctx.mode !== "tui") {
 		ctx.ui.notify("/micme conf requires interactive TUI mode.", "warning");
@@ -98,27 +107,109 @@ export async function showConfiguration(ctx: ExtensionContext) {
 	if (configState.error) {
 		ctx.ui.notify(`Micme config is invalid at ${configState.path}: ${configState.error}. Fix it before saving settings.`, "warning");
 	}
-	const audioDevices = await discoverAudioDevices();
-	const modelCandidates = discoverWhisperCppModels(ctx.cwd);
-	const pythonModelCandidates = await discoverPythonWhisperModels();
-
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-		const items = buildConfigurationItems(modelCandidates, pythonModelCandidates, audioDevices, theme);
-		return new ConfigurationScreen({
+		const discovery = createInitialConfigurationDiscovery();
+		let closed = false;
+		const screen = new ConfigurationScreen({
 			configPath: configState.path,
-			items,
+			items: buildConfigurationItems(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme),
 			theme,
-			onDone: done,
+			onDone: () => {
+				closed = true;
+				done();
+			},
 			onError: (error) => ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"),
 			onSave: (id, newValue) => saveConfigurationValue(ctx, id, newValue),
 			requestRender: () => tui.requestRender(),
+			statusText: formatDiscoveryStatus(discovery.pending),
+		});
+
+		startConfigurationDiscovery({
+			ctx,
+			cwd: ctx.cwd,
+			theme,
+			discovery,
+			screen,
+			isClosed: () => closed,
+		});
+
+		return screen;
+	});
+}
+
+function createInitialConfigurationDiscovery(): ConfigurationDiscoveryState {
+	return {
+		audioDevices: [],
+		modelCandidates: [],
+		pythonModelCandidates: [],
+		pending: new Set(["audio devices", "whisper.cpp models", "Python Whisper models"]),
+	};
+}
+
+function startConfigurationDiscovery(options: {
+	ctx: ExtensionContext;
+	cwd: string;
+	theme: MicmeTheme;
+	discovery: ConfigurationDiscoveryState;
+	screen: ConfigurationScreen;
+	isClosed: () => boolean;
+}) {
+	void loadConfigurationDiscovery(options, "audio devices", deferDiscovery(discoverAudioDevices), (audioDevices) => {
+		options.discovery.audioDevices = audioDevices;
+	});
+	void loadConfigurationDiscovery(options, "whisper.cpp models", deferDiscovery(() => discoverWhisperCppModels(options.cwd)), (modelCandidates) => {
+		options.discovery.modelCandidates = modelCandidates;
+	});
+	void loadConfigurationDiscovery(options, "Python Whisper models", deferDiscovery(discoverPythonWhisperModels), (pythonModelCandidates) => {
+		options.discovery.pythonModelCandidates = pythonModelCandidates;
+	});
+}
+
+async function loadConfigurationDiscovery<T>(
+	options: {
+		ctx: ExtensionContext;
+		theme: MicmeTheme;
+		discovery: ConfigurationDiscoveryState;
+		screen: ConfigurationScreen;
+		isClosed: () => boolean;
+	},
+	key: ConfigurationDiscoveryKey,
+	promise: Promise<T>,
+	applyResult: (value: T) => void,
+) {
+	try {
+		applyResult(await promise);
+	} catch (error) {
+		if (!options.isClosed()) options.ctx.ui.notify(`Micme could not load ${key}: ${error instanceof Error ? error.message : String(error)}`, "warning");
+	} finally {
+		options.discovery.pending.delete(key);
+		if (!options.isClosed()) {
+			options.screen.updateDiscoveredItems(
+				buildConfigurationItems(options.discovery.modelCandidates, options.discovery.pythonModelCandidates, options.discovery.audioDevices, options.theme),
+				formatDiscoveryStatus(options.discovery.pending),
+			);
+		}
+	}
+}
+
+function deferDiscovery<T>(load: () => T | Promise<T>): Promise<T> {
+	return new Promise((resolve, reject) => {
+		setImmediate(() => {
+			Promise.resolve()
+				.then(load)
+				.then(resolve, reject);
 		});
 	});
 }
 
+function formatDiscoveryStatus(pending: Set<ConfigurationDiscoveryKey>) {
+	if (pending.size === 0) return "";
+	return `Loading ${[...pending].join(", ")}…`;
+}
+
 class ConfigurationScreen implements Component {
 	private readonly configPath: string;
-	private readonly items: ConfigurationItem[];
+	private items: ConfigurationItem[];
 	private readonly theme: MicmeTheme;
 	private readonly onDone: () => void;
 	private readonly onError: (error: unknown) => void;
@@ -144,6 +235,7 @@ class ConfigurationScreen implements Component {
 		onError: (error: unknown) => void;
 		onSave: (id: string, newValue: string) => Promise<Record<string, string>>;
 		requestRender: () => void;
+		statusText?: string;
 	}) {
 		this.configPath = options.configPath;
 		this.items = options.items;
@@ -152,7 +244,18 @@ class ConfigurationScreen implements Component {
 		this.onError = options.onError;
 		this.onSave = options.onSave;
 		this.requestRender = options.requestRender;
+		this.statusText = options.statusText ?? "";
 		for (const category of CONFIGURATION_CATEGORIES) this.selectedByCategory.set(category.id, 0);
+	}
+
+	updateDiscoveredItems(items: ConfigurationItem[], statusText: string) {
+		this.items = items;
+		this.refreshDerivedItems();
+		this.clampSelections();
+		if (!this.saving && (!this.statusText || this.statusText.startsWith("Loading "))) {
+			this.statusText = statusText;
+		}
+		this.requestRender();
 	}
 
 	render(width: number): string[] {
@@ -1091,6 +1194,7 @@ export function uniqueStrings(values: string[]) {
 function getConfigurationValuesToWrite(id: string, value: string) {
 	if (id === "MICME_TRANSCRIPTION_MODE") return getTranscriptionModeProfile(value === "stream" ? "stream" : "clip");
 	if (id === "MICME_SHORTCUT") return { MICME_SHORTCUT: value, MICME_PRINTABLE_SHORTCUTS: undefined };
+	if (id === "MICME_WHISPER_CPP_MODEL" && !value) return { MICME_WHISPER_CPP_MODEL: undefined };
 	return { [id]: value };
 }
 

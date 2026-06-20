@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } from "./constants.ts";
@@ -16,6 +16,8 @@ export function spawnRecording(command: CommandSpec, audioPath: string, tempDir:
 	let stderr = "";
 	let settled = false;
 	let audioLevel = 0;
+
+	child.stdin?.on("error", () => undefined);
 
 	if (command.meterFromStdout) {
 		child.stdout?.on("data", (chunk: Buffer) => {
@@ -163,12 +165,11 @@ export function normalizeTranscript(text: string) {
 }
 
 export function replacePlaceholders(template: string, values: Record<string, string>) {
-	let output = template;
-	for (const [key, value] of Object.entries(values)) {
-		output = output.replaceAll(`{${key}}`, shellQuote(value));
-		output = output.replaceAll(`{${key}Raw}`, value);
-	}
-	return output;
+	return template.replace(/\{([A-Za-z][A-Za-z0-9]*?)(Raw)?\}/g, (placeholder, key: string, rawSuffix: string | undefined) => {
+		if (!Object.prototype.hasOwnProperty.call(values, key)) return placeholder;
+		const value = values[key] ?? "";
+		return rawSuffix ? value : shellQuote(value);
+	});
 }
 
 export function findExecutable(names: string[]) {
@@ -179,11 +180,23 @@ export function findExecutable(names: string[]) {
 		for (const dir of dirs) {
 			for (const extension of extensions) {
 				const candidate = join(dir, process.platform === "win32" && !/\.[^.]+$/.test(name) ? `${name}${extension}` : name);
-				if (existsSync(candidate)) return candidate;
+				if (isExecutableFile(candidate)) return candidate;
 			}
 		}
 	}
 	return undefined;
+}
+
+export function isExecutableFile(path: string) {
+	try {
+		const stats = statSync(path);
+		if (!stats.isFile()) return false;
+		if (process.platform === "win32") return true;
+		accessSync(path, fsConstants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export function appendCapped(current: string, chunk: string) {

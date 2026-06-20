@@ -5,10 +5,21 @@ DC_DIRECTORY=$HOME/OWASP-Dependency-Check
 DC_PROJECT="dependency-check scan: $(pwd)"
 DATA_DIRECTORY="$DC_DIRECTORY/data"
 CACHE_DIRECTORY="$DC_DIRECTORY/data/cache"
-NVD_API_KEY="b51fc944-ba09-4e6e-a0e5-44b02cee1711"
+NVD_API_KEY="${NVD_API_KEY:-}"
+NVD_API_ARGS=()
+if [[ -n "$NVD_API_KEY" ]]; then
+  NVD_API_ARGS=(--nvdApiKey "$NVD_API_KEY")
+else
+  echo "NVD_API_KEY is not set; Dependency-Check may use slower public NVD rate limits."
+fi
+
+SUPPRESSION_ARGS=()
+if [[ -f "dependency-check-suppression.xml" ]]; then
+  SUPPRESSION_ARGS=(--suppression "dependency-check-suppression.xml")
+fi
 
 UPDATE_ONLY=false
-if [[ "$1" == "--update" ]]; then
+if [[ "${1:-}" == "--update" ]]; then
   UPDATE_ONLY=true
 fi
 
@@ -33,7 +44,7 @@ if [ "$UPDATE_ONLY" = true ]; then
       --volume "$(pwd)/odc-reports":/report:z \
       owasp/dependency-check:$DC_VERSION \
       --updateonly \
-      --nvdApiKey "$NVD_API_KEY"
+      "${NVD_API_ARGS[@]}"
 else
   echo "Running full Dependency-Check scan..."
   docker run --rm \
@@ -47,6 +58,6 @@ else
       --format "ALL" \
       --project "$DC_PROJECT" \
       --out /report \
-      --suppression "dependency-check-suppression.xml" \
-      --nvdApiKey "$NVD_API_KEY"
+      "${SUPPRESSION_ARGS[@]}" \
+      "${NVD_API_ARGS[@]}"
 fi

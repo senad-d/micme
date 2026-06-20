@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { buildFfmpegRecorderArgs } = await import("../src/audio.ts");
+const { buildFfmpegRecorderArgs, parseAvfoundationDevices } = await import("../src/audio.ts");
 const { getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getRecordMeter, getRecordSampleRate, getRecordSync, reloadMicmeConfig } = await import("../src/config.ts");
 
 function withEnv(values, fn) {
@@ -90,6 +90,12 @@ test("AVFoundation sample-rate fallback feeds both file and meter branches", () 
 
 	assert.equal(args[args.indexOf("-filter_complex") + 1], "[0:a]asetrate=44100,asplit=2[micme_file][micme_meter]");
 	assert.equal(args.at(-1), "pipe:1");
+});
+
+test("device parsing strips terminal control sequences from names", () => {
+	const parsed = parseAvfoundationDevices("AVFoundation audio devices:\n[0] \u001b]52;c;clipboard\u0007Studio \u001b[31mMic");
+
+	assert.deepEqual(parsed.audio, [{ id: "0", name: "Studio Mic" }]);
 });
 
 test("recording quality flags use safe defaults and explicit overrides", () => {

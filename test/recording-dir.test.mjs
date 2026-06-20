@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,26 @@ test("kept audio uses the next sequential project recording directory", async (t
 	await mkdir(join(cwd, "micme-rec", "rec-003"));
 	const fourth = await createProjectRecordingDirectory(cwd);
 	assert.equal(fourth, join(cwd, "micme-rec", "rec-004"));
+});
+
+test("kept audio refuses a symlinked project recordings directory", async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "micme-rec-test-"));
+	const outside = await mkdtemp(join(tmpdir(), "micme-rec-outside-"));
+	const linkPath = join(cwd, "micme-rec");
+	t.after(() => rm(cwd, { recursive: true, force: true }));
+	t.after(() => rm(outside, { recursive: true, force: true }));
+
+	try {
+		await symlink(outside, linkPath, "dir");
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && ["EACCES", "EPERM"].includes(error.code)) {
+			t.skip("directory symlinks are not permitted on this platform");
+			return;
+		}
+		throw error;
+	}
+
+	await assert.rejects(() => createProjectRecordingDirectory(cwd), /symbolic-link recordings directory/);
 });
 
 test("non-kept audio still uses the system temp directory", async (t) => {

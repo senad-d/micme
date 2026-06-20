@@ -18,6 +18,7 @@ import { findExecutable, runProcess } from "./processes.ts";
 import type { ModelCandidate, ResolvedWhisperCppModel } from "./types.ts";
 
 const modelDownloads = new Map<string, Promise<void>>();
+const PYTHON_WHISPER_MODELS_SCRIPT = "import whisper; print('\\n'.join(whisper.available_models()))";
 
 export function discoverWhisperCppModels(cwd: string): ModelCandidate[] {
 	const candidates: ModelCandidate[] = [];
@@ -222,12 +223,17 @@ export async function queryPythonWhisperModelNames(): Promise<string[]> {
 	if (!python) return [];
 
 	try {
-		const result = await runProcess(python, ["-c", "import whisper; print('\\n'.join(whisper.available_models()))"], 2_000);
+		const result = await runProcess(python, getPythonWhisperModelQueryArgs(), 2_000);
 		if (result.code !== 0 || result.timedOut) return [];
 		return uniqueModelNames(result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
 	} catch {
 		return [];
 	}
+}
+
+export function getPythonWhisperModelQueryArgs() {
+	// Isolated mode prevents project-local Python files (for example ./whisper.py) or PYTHONPATH from executing during model discovery.
+	return ["-I", "-c", PYTHON_WHISPER_MODELS_SCRIPT];
 }
 
 export function uniqueModelNames(names: string[]) {

@@ -3,7 +3,7 @@ import type { TranscribeBackend, TranscriptionMode, ResolvedTranscriptionPlan, R
 import { DEFAULT_TRANSCRIBE_BACKEND } from "./constants.ts";
 import { env, expandConfigPath, getTranscribeBackend, getTranslateToEnglishLanguage, isTranscribeBackend } from "./config.ts";
 import { getPythonWhisperModelName, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
-import { findExecutable } from "./processes.ts";
+import { findExecutable, isExecutableFile } from "./processes.ts";
 
 export type ResolveTranscriptionPlanOptions = {
 	requestedBackend?: TranscribeBackend | string;
@@ -88,6 +88,7 @@ export function resolveExecutableConfig(value: string, configName: string) {
 	const expanded = expandConfigPath(value);
 	if (/[/\\]/.test(expanded)) {
 		if (!existsSync(expanded)) throw new Error(`${configName} is set but not found: ${expanded}`);
+		if (!isExecutableFile(expanded)) throw new Error(`${configName} is set but is not an executable file: ${expanded}`);
 		return expanded;
 	}
 	const executable = findExecutable([expanded]);
