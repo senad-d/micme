@@ -120,7 +120,7 @@ Micme does not bundle recorder, transcriber, or model binaries.
 
 | OS | Install | Device setting |
 | --- | --- | --- |
-| macOS | `brew install ffmpeg whisper-cpp` | `MICME_AUDIO_DEVICE=0` or `MICME_AVFOUNDATION_INPUT=:0` |
+| macOS | `brew install ffmpeg whisper-cpp` | Run `/micme devices`, then set `MICME_AUDIO_DEVICE=<audio id>` or `MICME_AVFOUNDATION_INPUT=:<audio id>`. |
 | Linux | Install `ffmpeg` and `whisper.cpp` with your package manager, Nix, Homebrew, or source build. | `MICME_PULSE_SOURCE=default` |
 | Windows | `winget install Gyan.FFmpeg`, then install/build `whisper.cpp`. | `MICME_DSHOW_AUDIO_DEVICE=Microphone Name` |
 
@@ -184,6 +184,10 @@ Common settings:
 | `MICME_AUTO_SUBMIT=0` | Paste for review. Set `1` to send automatically. |
 | `MICME_SHORTCUT=alt+m` | Toggle shortcut. Use terminal syntax (`alt+m`, `ctrl+space`, `f8`) or a printable character such as `§`. Restart or `/reload` after changing. |
 | `MICME_VALIDATE_AUDIO=1` | Reject near-silent recordings. |
+| `MICME_RECORD_SAMPLE_RATE=auto` | Raw recording sample-rate override. Leave `auto` so ffmpeg uses the selected input's native rate. |
+| `MICME_RECORD_SYNC=1` | Automatically preserve wall-clock recording duration from ffmpeg timestamps. |
+| `MICME_RECORD_METER=0` | Quality-safe default: meter from `raw.wav` instead of a second ffmpeg stdout branch. Set `1` to restore the legacy live meter pipe. |
+| `MICME_AVFOUNDATION_DROP_LATE_FRAMES=0` | macOS only: ask AVFoundation not to drop late frames when capture lags. |
 | `MICME_KEEP_AUDIO=0` | Delete successful recording audio. Set `1` to keep each recording under `./micme-rec/rec-###/` for debugging. |
 | `MICME_MODEL_DIR=~/.cache/whisper.cpp` | Model cache/discovery directory. |
 
@@ -226,7 +230,7 @@ Recommended model progression: `base.en` for speed, `small.en` for a stronger de
 Advanced users can replace the recorder or transcriber:
 
 ```env
-MICME_RECORD_COMMAND=ffmpeg -hide_banner -loglevel error -f avfoundation -i :0 -ac 1 -ar 16000 -y {audio}
+MICME_RECORD_COMMAND=ffmpeg -hide_banner -loglevel error -f avfoundation -i :0 -af aresample=async=1:first_pts=0 -ac 1 -y {audio}
 MICME_TRANSCRIBE_COMMAND=whisper-cli -m /path/to/model.bin -f {audio} -otxt -of {tempDirRaw}/out -nt -np && cat {tempDirRaw}/out.txt
 ```
 
@@ -240,6 +244,7 @@ MICME_TRANSCRIBE_COMMAND=whisper-cli -m /path/to/model.bin -f {audio} -otxt -of 
 | --- | --- |
 | No backend found | Use `/micme conf` to choose `whisper.cpp` or Python Whisper, install the selected backend, or configure a trusted custom command manually. |
 | Wrong microphone | Run `/micme devices`, then set the OS-specific device variable. |
+| Crackling or shortened audio | Keep `MICME_RECORD_SYNC=1` and `MICME_RECORD_METER=0`; on macOS keep `MICME_AVFOUNDATION_DROP_LATE_FRAMES=0`, and avoid Aggregate/BlackHole devices unless intentionally routing audio. |
 | Unrelated transcript | You probably recorded silence. Set `MICME_KEEP_AUDIO=1` and check `/micme audio`. |
 | Slow transcription | Use `whisper.cpp`, a smaller model, and shorter recordings. |
 | Option/Alt inserts `§` or `µ` | Set `MICME_PRINTABLE_SHORTCUTS=§` or change `MICME_SHORTCUT`, then `/reload`. |

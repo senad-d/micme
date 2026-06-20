@@ -268,13 +268,33 @@ export function getStreamWordsPerChunk() {
 }
 
 export function getRecordSampleRate() {
-	const value = Number(env("MICME_RECORD_SAMPLE_RATE"));
-	return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_RECORD_SAMPLE_RATE;
+	const configured = env("MICME_RECORD_SAMPLE_RATE")?.trim();
+	if (!configured || /^auto$/i.test(configured)) return undefined;
+	const value = Number(configured);
+	return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
 }
 
 export function getTranscribeSampleRate() {
 	const value = Number(env("MICME_TRANSCRIBE_SAMPLE_RATE"));
 	return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_TRANSCRIBE_SAMPLE_RATE;
+}
+
+export function getRecordMeter() {
+	return envFlag("MICME_RECORD_METER");
+}
+
+export function getRecordSync() {
+	const value = env("MICME_RECORD_SYNC");
+	return value === undefined ? true : /^(1|true|yes|on)$/i.test(value);
+}
+
+export function getAvfoundationDropLateFrames() {
+	return envFlag("MICME_AVFOUNDATION_DROP_LATE_FRAMES");
+}
+
+export function getAvfoundationInputSampleRate() {
+	const value = Number(env("MICME_AVFOUNDATION_INPUT_SAMPLE_RATE"));
+	return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
 }
 
 export function getAudioFilter() {

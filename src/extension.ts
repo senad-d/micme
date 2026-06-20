@@ -165,6 +165,7 @@ function getHelpText() {
 
 async function startRecording(ctx: ExtensionContext, stopHint = getShortcut()) {
 	if (recording) return;
+	reloadMicmeConfig();
 
 	if (getTranscriptionMode() === "stream") {
 		await startStreamingTranscription(ctx, stopHint);

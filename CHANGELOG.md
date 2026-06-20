@@ -11,6 +11,7 @@ All notable changes to Micme will be documented in this file.
 - Keep publication on hold until package name, metadata, security review, validation, and smoke tests are complete.
 - Add explicit transcription backend selection with backend-specific `/micme conf` model rows, doctor diagnostics, schema, and docs.
 - Store kept audio in sequential project directories under `./micme-rec/rec-###/` instead of the system temp directory.
+- Make the recorder quality-safe by default: preserve recorder timing from ffmpeg timestamps, disable the stdout meter branch, and ask macOS AVFoundation not to drop late frames.
 
 ## 0.1.0 - 2026-06-18
 

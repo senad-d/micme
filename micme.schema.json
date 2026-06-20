@@ -65,6 +65,28 @@
       "type": "string",
       "default": "0"
     },
+    "MICME_RECORD_SAMPLE_RATE": {
+      "type": ["string", "number"],
+      "default": "auto",
+      "description": "Raw recording sample-rate override. Leave auto/unset so ffmpeg uses the selected input's native sample rate."
+    },
+    "MICME_RECORD_SYNC": {
+      "$ref": "#/$defs/stringFlag",
+      "default": "1",
+      "description": "Preserve wall-clock recording duration from ffmpeg timestamps with aresample async correction. Defaults on."
+    },
+    "MICME_RECORD_METER": {
+      "$ref": "#/$defs/stringFlag",
+      "description": "Enable the legacy ffmpeg stdout PCM branch for live metering. Defaults off to avoid recorder backpressure; the UI can still meter by polling raw.wav."
+    },
+    "MICME_AVFOUNDATION_DROP_LATE_FRAMES": {
+      "$ref": "#/$defs/stringFlag",
+      "description": "macOS AVFoundation only. Defaults off so ffmpeg is asked not to drop late frames when capture lags."
+    },
+    "MICME_AVFOUNDATION_INPUT_SAMPLE_RATE": {
+      "type": ["string", "number"],
+      "description": "Advanced macOS fallback used only when MICME_RECORD_SYNC=0. Reinterpret input samples with this source rate before resampling."
+    },
     "MICME_KEEP_AUDIO": {
       "$ref": "#/$defs/stringFlag"
     },
