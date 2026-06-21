@@ -4,6 +4,7 @@ import { rm, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } from "./constants.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
+import { sanitizeTerminalOutput, stripTerminalControlSequences } from "./terminal-text.ts";
 import type { CommandSpec, ExitResult, Recording, RunResult } from "./types.ts";
 
 export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string): Recording {
@@ -99,7 +100,7 @@ export async function stopRecorder(active: Recording) {
 
 	const audioStats = await stat(active.audioPath).catch(() => undefined);
 	if (!audioStats || audioStats.size < MIN_AUDIO_BYTES) {
-		const stderr = active.stderr().trim();
+		const stderr = formatProcessOutput(active.stderr());
 		const suffix = stderr ? `\nRecorder output:\n${stderr}` : "";
 		throw new Error(`Micme recorder did not produce usable audio.${suffix}`);
 	}
@@ -154,7 +155,7 @@ export function runProcess(command: string, args: string[], timeoutMs: number): 
 }
 
 export function normalizeTranscript(text: string) {
-	return text
+	return stripTerminalControlSequences(text)
 		.replace(/\r\n/g, "\n")
 		.split("\n")
 		.map((line) => line.trim())
@@ -202,6 +203,14 @@ export function isExecutableFile(path: string) {
 export function appendCapped(current: string, chunk: string) {
 	const next = current + chunk;
 	return next.length > MAX_CAPTURED_OUTPUT_CHARS ? next.slice(-MAX_CAPTURED_OUTPUT_CHARS) : next;
+}
+
+export function formatProcessOutput(...outputs: string[]) {
+	for (const output of outputs) {
+		const sanitized = sanitizeTerminalOutput(output);
+		if (sanitized) return sanitized;
+	}
+	return "";
 }
 
 export function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {

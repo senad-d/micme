@@ -32,6 +32,7 @@ import {
 } from "./config.ts";
 import { discoverAudioDevices } from "./audio.ts";
 import { formatBackendLabel, resolveTranscriptionPlan } from "./backends.ts";
+import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
 import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
@@ -105,20 +106,20 @@ export async function showConfiguration(ctx: ExtensionContext) {
 
 	const configState = reloadMicmeConfig();
 	if (configState.error) {
-		ctx.ui.notify(`Micme config is invalid at ${configState.path}: ${configState.error}. Fix it before saving settings.`, "warning");
+		notifySanitized(ctx, `Micme config is invalid at ${configState.path}: ${configState.error}. Fix it before saving settings.`, "warning");
 	}
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 		const discovery = createInitialConfigurationDiscovery();
 		let closed = false;
 		const screen = new ConfigurationScreen({
-			configPath: configState.path,
+			configPath: sanitizeTerminalOutput(configState.path) || "micme.json",
 			items: buildConfigurationItems(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme),
 			theme,
 			onDone: () => {
 				closed = true;
 				done();
 			},
-			onError: (error) => ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"),
+			onError: (error) => notifySanitized(ctx, error instanceof Error ? error.message : String(error), "error"),
 			onSave: (id, newValue) => saveConfigurationValue(ctx, id, newValue),
 			requestRender: () => tui.requestRender(),
 			statusText: formatDiscoveryStatus(discovery.pending),
@@ -180,7 +181,7 @@ async function loadConfigurationDiscovery<T>(
 	try {
 		applyResult(await promise);
 	} catch (error) {
-		if (!options.isClosed()) options.ctx.ui.notify(`Micme could not load ${key}: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		if (!options.isClosed()) notifySanitized(options.ctx, `Micme could not load ${key}: ${error instanceof Error ? error.message : String(error)}`, "warning");
 	} finally {
 		options.discovery.pending.delete(key);
 		if (!options.isClosed()) {
@@ -205,6 +206,10 @@ function deferDiscovery<T>(load: () => T | Promise<T>): Promise<T> {
 function formatDiscoveryStatus(pending: Set<ConfigurationDiscoveryKey>) {
 	if (pending.size === 0) return "";
 	return `Loading ${[...pending].join(", ")}…`;
+}
+
+function notifySanitized(ctx: ExtensionContext, message: string, level: "warning" | "error") {
+	ctx.ui.notify(sanitizeTerminalOutput(message) || "Micme configuration message was empty.", level);
 }
 
 class ConfigurationScreen implements Component {
@@ -272,6 +277,7 @@ class ConfigurationScreen implements Component {
 	handleInput(data: string): void {
 		if (this.submenuComponent) {
 			this.submenuComponent.handleInput?.(data);
+			this.requestRender();
 			return;
 		}
 
@@ -285,20 +291,26 @@ class ConfigurationScreen implements Component {
 			return;
 		}
 
-		if (this.handleSearchInput(data)) return;
+		if (this.handleSearchInput(data)) {
+			this.requestRender();
+			return;
+		}
 
 		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
 			this.focusedPane = this.focusedPane === "categories" ? "settings" : "categories";
+			this.requestRender();
 			return;
 		}
 
 		if (matchesKey(data, Key.up)) {
 			this.moveSelection(-1);
+			this.requestRender();
 			return;
 		}
 
 		if (matchesKey(data, Key.down)) {
 			this.moveSelection(1);
+			this.requestRender();
 			return;
 		}
 
@@ -308,17 +320,20 @@ class ConfigurationScreen implements Component {
 			} else {
 				this.activateSelectedSetting();
 			}
+			this.requestRender();
 			return;
 		}
 
 		if (matchesKey(data, Key.space) && this.focusedPane === "settings") {
 			this.activateSelectedSetting();
+			this.requestRender();
 			return;
 		}
 
 		if (matchesKey(data, Key.escape)) {
 			if (this.focusedPane === "settings") {
 				this.focusedPane = "categories";
+				this.requestRender();
 			} else {
 				this.onDone();
 			}
@@ -510,7 +525,7 @@ class ConfigurationScreen implements Component {
 
 	private formatSlider(item: ConfigurationItem, width: number) {
 		const value = Number(item.rawValue);
-		const valueText = Number.isFinite(value) ? value.toFixed(2) : item.rawValue;
+		const valueText = Number.isFinite(value) ? value.toFixed(2) : sanitizeTerminalText(item.rawValue);
 		if (width < valueText.length + 5) return fitAnsi(valueText, width);
 
 		const ratio = item.id === "MICME_STREAM_VAD_THRESHOLD" ? clamp(value, 0, 1) : clamp(value / 2, 0, 1);
@@ -1110,11 +1125,14 @@ export function buildConfigurationItems(
 }
 
 export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTheme, done: (selectedValue?: string) => void): Component {
-	const items: SelectItem[] = candidates.map((candidate) => ({
-		value: candidate.value,
-		label: candidate.installed ? `✓ ${candidate.label}` : `○ ${candidate.label}`,
-		description: candidate.description,
-	}));
+	const items: SelectItem[] = candidates.map((candidate) => {
+		const label = sanitizeTerminalText(candidate.label) || "model";
+		return {
+			value: candidate.value,
+			label: candidate.installed ? `✓ ${label}` : `○ ${label}`,
+			description: sanitizeTerminalText(candidate.description),
+		};
+	});
 
 	const container = new Container();
 	container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
@@ -1164,10 +1182,10 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 }
 
 export function displayConfigurationValue(id: string, value: string) {
-	if (id === "MICME_WHISPER_CPP_MODEL") return value ? basename(value) : "not set";
+	if (id === "MICME_WHISPER_CPP_MODEL") return value ? sanitizeTerminalText(basename(value)) || "model" : "not set";
 	if (id === "MICME_TRANSCRIBE_COMMAND") return value ? "configured" : "not set";
-	if (id === "MICME_AUDIO_FILTER") return value || "<empty>";
-	return value || "not set";
+	if (id === "MICME_AUDIO_FILTER") return sanitizeTerminalText(value) || "<empty>";
+	return sanitizeTerminalText(value) || "not set";
 }
 
 function getUiBackendValue(plan: ResolvedTranscriptionPlan): "whisper.cpp" | "python" {

@@ -60,6 +60,12 @@ test("explicit whisper.cpp does not silently fall back to Python", () => {
 	assert.match(plan.reason, /whisper\.cpp/i);
 });
 
+test("configured executable errors are included in backend warnings", () => {
+	const plan = resolveWith({ requestedBackend: "whisper.cpp", whisperCppBinaryError: "MICME_WHISPER_CPP_BIN is set but not executable", pythonWhisperBinary: "/bin/whisper" });
+	assert.equal(plan.effectiveBackend, "none");
+	assert.match(plan.warnings.join("\n"), /not executable/);
+});
+
 test("explicit custom requires MICME_TRANSCRIBE_COMMAND", () => {
 	const missing = resolveWith({ requestedBackend: "custom", customCommand: null, whisperCppBinary: "/bin/whisper-cli", pythonWhisperBinary: "/bin/whisper" });
 	assert.equal(missing.effectiveBackend, "none");
@@ -175,6 +181,7 @@ test("invalid requested backend falls back to auto without throwing", () => {
 	const plan = resolveWith({ requestedBackend: "bogus", customCommand: null, whisperCppBinary: null, pythonWhisperBinary: "/bin/whisper" });
 	assert.equal(plan.requestedBackend, "auto");
 	assert.equal(plan.effectiveBackend, "python");
+	assert.match(plan.warnings.join("\n"), /Invalid MICME_TRANSCRIBE_BACKEND=bogus/);
 });
 
 test("whisper.cpp model name maps through MICME_MODEL_DIR", () => {

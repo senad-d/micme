@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
 import { env, getTranscribeTimeoutMs, getTranslateToEnglishLanguage } from "./config.ts";
 import { ensureWhisperCppModel, getPythonWhisperModelName } from "./models.ts";
-import { formatRunExit, replacePlaceholders, runProcess, runShell } from "./processes.ts";
+import { formatProcessOutput, formatRunExit, replacePlaceholders, runProcess, runShell } from "./processes.ts";
 
 export { getWhisperCppBinary, getWhisperStreamBinary, resolveExecutableConfig } from "./backends.ts";
 
@@ -34,7 +34,7 @@ export async function transcribeWithCustomCommand(template: string, audioPath: s
 	const command = replacePlaceholders(template, { audio: audioPath, tempDir, transcript: transcriptPath });
 	const result = await runShell(command, getTranscribeTimeoutMs());
 	if (result.code !== 0) {
-		throw new Error(`MICME_TRANSCRIBE_COMMAND failed (${formatRunExit(result)}):\n${result.stderr || result.stdout}`);
+		throw new Error(`MICME_TRANSCRIBE_COMMAND failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
 	if (existsSync(transcriptPath)) {
@@ -66,7 +66,7 @@ export async function transcribeWithWhisperCpp(
 
 	const result = await runProcess(binary, args, getTranscribeTimeoutMs());
 	if (result.code !== 0) {
-		throw new Error(`whisper.cpp failed (${formatRunExit(result)}):\n${result.stderr || result.stdout}`);
+		throw new Error(`whisper.cpp failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
 	const outputPath = `${outputBase}.txt`;
@@ -111,7 +111,7 @@ export async function transcribeWithOpenAiWhisper(binary: string, audioPath: str
 
 	const result = await runProcess(binary, args, getTranscribeTimeoutMs());
 	if (result.code !== 0) {
-		throw new Error(`openai-whisper failed (${formatRunExit(result)}):\n${result.stderr || result.stdout}`);
+		throw new Error(`openai-whisper failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
 	const txtName = basename(audioPath).replace(/\.[^.]+$/, ".txt");

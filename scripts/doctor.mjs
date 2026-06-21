@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -8,6 +8,25 @@ import { execFileSync, spawnSync } from "node:child_process";
 const isWin = process.platform === "win32";
 const micmeConfig = loadMicmeConfig();
 const DEFAULT_TRANSCRIBE_BACKEND = "auto";
+
+function stripTerminalControlSequences(value) {
+  return String(value)
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, " ")
+    .replace(/\x1b[PX^_][\s\S]*?(?:\x07|\x1b\\)/g, " ")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, " ")
+    .replace(/\x1b[ -/]*[@-~]/g, " ")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ");
+}
+
+function sanitizeTerminalOutput(value) {
+  return stripTerminalControlSequences(value)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
 const TRANSCRIBE_BACKENDS = new Set(["auto", "whisper.cpp", "python", "custom"]);
 
 function getMicmeConfigPath() {
@@ -61,11 +80,31 @@ function which(names) {
     for (const dir of pathDirs) {
       for (const ext of exts) {
         const candidate = join(dir, isWin && !/\.[^.]+$/.test(name) ? `${name}${ext}` : name);
-        if (existsSync(candidate)) return candidate;
+        if (isExecutableFile(candidate)) return candidate;
       }
     }
   }
   return undefined;
+}
+
+function isExecutableFile(path) {
+  try {
+    const stats = statSync(path);
+    if (!stats.isFile()) return false;
+    if (isWin) return true;
+    accessSync(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isRegularFile(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function resolveExecutable(value) {
@@ -75,15 +114,21 @@ function resolveExecutable(value) {
 }
 
 function ok(label, detail = "") {
-  console.log(`✓ ${label}${detail ? `: ${detail}` : ""}`);
+  const safeLabel = sanitizeTerminalOutput(label);
+  const safeDetail = sanitizeTerminalOutput(detail);
+  console.log(`✓ ${safeLabel}${safeDetail ? `: ${safeDetail}` : ""}`);
 }
 
 function warn(label, detail = "") {
-  console.log(`! ${label}${detail ? `: ${detail}` : ""}`);
+  const safeLabel = sanitizeTerminalOutput(label);
+  const safeDetail = sanitizeTerminalOutput(detail);
+  console.log(`! ${safeLabel}${safeDetail ? `: ${safeDetail}` : ""}`);
 }
 
 function info(label, detail = "") {
-  console.log(`- ${label}${detail ? `: ${detail}` : ""}`);
+  const safeLabel = sanitizeTerminalOutput(label);
+  const safeDetail = sanitizeTerminalOutput(detail);
+  console.log(`- ${safeLabel}${safeDetail ? `: ${safeDetail}` : ""}`);
 }
 
 function summarizeConfiguredCommand(value) {
@@ -112,8 +157,19 @@ function toMultilingualWhisperModelName(modelName) {
   return modelName.replace(/\.en$/i, "");
 }
 
+function isTranslationUnsupportedWhisperModelName(modelName) {
+  if (!modelName) return false;
+  const normalized = modelName.toLowerCase();
+  return normalized === "turbo" || normalized === "large-v3-turbo" || normalized.startsWith("large-v3-turbo-");
+}
+
+function toTranslationCapableWhisperModelName(modelName) {
+  const multilingualName = toMultilingualWhisperModelName(modelName);
+  return isTranslationUnsupportedWhisperModelName(multilingualName) ? "large-v3" : multilingualName;
+}
+
 function getTranslationAwareWhisperModelName(modelName) {
-  return getTranslateToEnglishLanguage() ? toMultilingualWhisperModelName(modelName) : modelName;
+  return getTranslateToEnglishLanguage() ? toTranslationCapableWhisperModelName(modelName) : modelName;
 }
 
 function isEnglishOnlyWhisperModelName(modelName) {
@@ -135,7 +191,7 @@ function resolveWhisperCppModelSummary() {
       path: explicit,
       modelName: inferWhisperCppModelName(explicit),
       source: "MICME_WHISPER_CPP_MODEL explicit path",
-      exists: existsSync(explicit),
+      exists: isRegularFile(explicit),
     };
   }
   const defaultModel = getTranslationAwareWhisperModelName(env("MICME_DEFAULT_WHISPER_CPP_MODEL") || "small.en");
@@ -145,16 +201,16 @@ function resolveWhisperCppModelSummary() {
     path,
     modelName: defaultModel,
     source: env("MICME_DEFAULT_WHISPER_CPP_MODEL") ? "MICME_DEFAULT_WHISPER_CPP_MODEL" : "default whisper.cpp model name",
-    exists: existsSync(path),
+    exists: isRegularFile(path),
   };
 }
 
 function resolveBackendPlan({ whisperCpp, whisperStream, whisper, transcribeCommand }) {
   const requestedBackend = getTranscribeBackend();
   const mode = getTranscriptionMode();
-  const whisperCppAvailable = Boolean(whisperCpp && existsSync(whisperCpp));
-  const whisperStreamAvailable = Boolean(whisperStream && existsSync(whisperStream));
-  const pythonAvailable = Boolean(whisper && existsSync(whisper));
+  const whisperCppAvailable = Boolean(whisperCpp && isExecutableFile(whisperCpp));
+  const whisperStreamAvailable = Boolean(whisperStream && isExecutableFile(whisperStream));
+  const pythonAvailable = Boolean(whisper && isExecutableFile(whisper));
   const model = resolveWhisperCppModelSummary();
   const warnings = [];
 
@@ -247,23 +303,24 @@ async function main() {
   const configuredWhisperCpp = env("MICME_WHISPER_CPP_BIN");
   const whisperCpp = configuredWhisperCpp ? resolveExecutable(configuredWhisperCpp) : which(["whisper-cli", "whisper-cpp"]);
   const whisperCppModel = envPath("MICME_WHISPER_CPP_MODEL");
-  if (whisperCpp && existsSync(whisperCpp)) ok("whisper.cpp binary", whisperCpp);
-  else if (configuredWhisperCpp) warn("MICME_WHISPER_CPP_BIN is set but not found", resolveExecutable(configuredWhisperCpp));
+  if (whisperCpp && isExecutableFile(whisperCpp)) ok("whisper.cpp binary", whisperCpp);
+  else if (configuredWhisperCpp) warn("MICME_WHISPER_CPP_BIN is set but not executable or not found", resolveExecutable(configuredWhisperCpp));
   else warn("whisper.cpp binary missing", "recommended backend for portable local transcription");
 
   const configuredWhisperStream = env("MICME_WHISPER_STREAM_BIN");
   const whisperStream = configuredWhisperStream ? resolveExecutable(configuredWhisperStream) : which(["whisper-stream"]);
-  if (whisperStream && existsSync(whisperStream)) ok("whisper-stream binary", whisperStream);
-  else if (configuredWhisperStream) warn("MICME_WHISPER_STREAM_BIN is set but not found", resolveExecutable(configuredWhisperStream));
+  if (whisperStream && isExecutableFile(whisperStream)) ok("whisper-stream binary", whisperStream);
+  else if (configuredWhisperStream) warn("MICME_WHISPER_STREAM_BIN is set but not executable or not found", resolveExecutable(configuredWhisperStream));
   else info("whisper-stream binary", "not installed; only needed for MICME_TRANSCRIPTION_MODE=stream");
 
   if (whisperCppModel) {
     try {
+      if (!isRegularFile(whisperCppModel)) throw new Error("not a regular file");
       await access(whisperCppModel);
       ok("MICME_WHISPER_CPP_MODEL", whisperCppModel);
     } catch {
       const auto = env("MICME_AUTO_DOWNLOAD_MODEL") !== "0";
-      warn("MICME_WHISPER_CPP_MODEL is set but not readable", auto ? `${whisperCppModel} (Micme will try to download if it is a standard ggml model path)` : whisperCppModel);
+      warn("MICME_WHISPER_CPP_MODEL is set but not readable as a file", auto ? `${whisperCppModel} (Micme will try to download if it is a standard ggml model path)` : whisperCppModel);
     }
   } else {
     const defaultModel = getTranslationAwareWhisperModelName(env("MICME_DEFAULT_WHISPER_CPP_MODEL") || "small.en");
@@ -295,7 +352,7 @@ async function main() {
       encoding: "utf8",
       timeout: 8000,
     });
-    const deviceOutput = `${listed.stdout || ""}\n${listed.stderr || ""}`.trim();
+    const deviceOutput = sanitizeTerminalOutput(`${listed.stdout || ""}\n${listed.stderr || ""}`);
     if (deviceOutput) console.log(deviceOutput);
     const macbookMic = deviceOutput.match(/\[(\d+)\]\s+MacBook Pro Microphone/i);
     if (macbookMic) {
@@ -318,6 +375,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(sanitizeTerminalOutput(error instanceof Error ? error.message : String(error)));
   process.exitCode = 1;
 });

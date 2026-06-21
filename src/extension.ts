@@ -16,6 +16,7 @@ import { ensureWhisperCppModel } from "./models.ts";
 import {
 	cleanup,
 	formatExit,
+	formatProcessOutput,
 	normalizeTranscript,
 	raceWithTimeout,
 	spawnRecording,
@@ -37,6 +38,7 @@ import {
 	showStreamingDiagnostics,
 } from "./streaming.ts";
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
+import { sanitizeTerminalOutput } from "./terminal-text.ts";
 import { transcribe } from "./transcription.ts";
 import type { Recording } from "./types.ts";
 
@@ -86,13 +88,13 @@ export default function micmeExtension(pi: ExtensionAPI) {
 						await pasteOrSubmitTranscript(ctx, pi, lastTranscript);
 						return;
 					case "audio":
-						ctx.ui.notify(lastAudioDir ? `Last Micme audio directory: ${lastAudioDir}` : "No kept Micme audio yet. Set MICME_KEEP_AUDIO=1.", "info");
+						ctx.ui.notify(lastAudioDir ? `Last Micme audio directory: ${sanitizeTerminalOutput(lastAudioDir)}` : "No kept Micme audio yet. Set MICME_KEEP_AUDIO=1.", "info");
 						return;
 					case "help":
 						ctx.ui.notify(getHelpText(), "info");
 						return;
 					default:
-						ctx.ui.notify(`Unknown micme action: ${action}. Try /micme help`, "warning");
+						ctx.ui.notify(`Unknown micme action: ${sanitizeTerminalOutput(action) || "(empty)"}. Try /micme help`, "warning");
 				}
 			} catch (error) {
 				handleExtensionError(ctx, error);
@@ -121,6 +123,7 @@ export default function micmeExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearRecordingWidget(ctx);
 		if (!recording) return;
 		const active = recording;
@@ -143,7 +146,7 @@ function createMicmeEditorHandlers(ctx: ExtensionContext, toggle: (ctx: Extensio
 
 function handleExtensionError(ctx: ExtensionContext, error: unknown) {
 	ctx.ui.setStatus(STATUS_KEY, undefined);
-	ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+	ctx.ui.notify(sanitizeTerminalOutput(error instanceof Error ? error.message : String(error)) || "Micme failed with an empty error message.", "error");
 }
 
 function isStillStarting(active: Recording) {
@@ -158,7 +161,7 @@ function isShortcutAutoRepeat() {
 }
 
 function getHelpText() {
-	const shortcut = getShortcut();
+	const shortcut = sanitizeTerminalOutput(getShortcut()) || "not set";
 	const actions = MICME_ACTIONS.filter((action) => action !== "help").join("|");
 	return `Usage: /micme [${actions}]. Shortcut: ${shortcut} toggles recording; tap once to start, tap again to stop/transcribe.`;
 }
@@ -184,12 +187,12 @@ async function startRecording(ctx: ExtensionContext, stopHint = getShortcut()) {
 		const earlyExit = await raceWithTimeout(active.exitPromise, RECORDER_STARTUP_GRACE_MS);
 		if (earlyExit) {
 			if (active.stopRequested) return;
-			const stderr = active.stderr().trim();
+			const stderr = formatProcessOutput(active.stderr());
 			const suffix = stderr ? `\n${stderr}` : "";
 			throw new Error(`Micme recorder exited early (${formatExit(earlyExit)}).${suffix}`);
 		}
 
-		ctx.ui.setStatus(STATUS_KEY, `● recording (${stopHint} or /micme)`);
+		ctx.ui.setStatus(STATUS_KEY, `● recording (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
 		startRecordingWidget(ctx, active);
 	} catch (error) {
 		await cleanupFailedRecordingStart(ctx, tempDir, active);
@@ -247,8 +250,8 @@ async function stopAndTranscribe(ctx: ExtensionContext, pi: ExtensionAPI) {
 	} catch (error) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		lastAudioDir = active.tempDir;
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`${message}\nAudio kept for debugging: ${active.tempDir}`);
+		const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error));
+		throw new Error(`${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`);
 	} finally {
 		if (completed && !envFlag("MICME_KEEP_AUDIO")) {
 			await cleanup(active.tempDir).catch(() => undefined);
@@ -301,12 +304,12 @@ async function startStreamingTranscription(ctx: ExtensionContext, stopHint = get
 		if (earlyExit || recorderEarlyExit) {
 			if (streamRecording.stopRequested || streamRecording.clipRecording?.stopRequested) return;
 			const failed = earlyExit ? streamRecording : streamRecording.clipRecording;
-			const stderr = failed?.stderr().trim();
+			const stderr = failed ? formatProcessOutput(failed.stderr()) : "";
 			const suffix = stderr ? `\n${stderr}` : "";
 			throw new Error(`Micme streaming exited early (${formatExit(earlyExit ?? recorderEarlyExit!)}).${suffix}`);
 		}
 
-		ctx.ui.setStatus(STATUS_KEY, `● streaming (${stopHint} or /micme)`);
+		ctx.ui.setStatus(STATUS_KEY, `● streaming (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
 		startRecordingWidget(ctx, streamRecording);
 	} catch (error) {
 		await cleanupFailedRecordingStart(ctx, tempDir, active);
@@ -369,8 +372,8 @@ async function stopStreamingTranscription(ctx: ExtensionContext, pi: ExtensionAP
 			if (liveTranscript) lastTranscript = liveTranscript;
 			lastAudioDir = active.tempDir;
 			keepTempDir = true;
-			const message = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`Micme kept the live append-only stream transcript because final clip transcription failed: ${message}\nAudio kept for debugging: ${active.tempDir}`, "warning");
+			const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error));
+			ctx.ui.notify(`Micme kept the live append-only stream transcript because final clip transcription failed: ${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`, "warning");
 		}
 	}
 

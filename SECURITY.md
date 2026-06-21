@@ -36,7 +36,7 @@ Micme spawns local processes for recording and transcription:
 - `python -I` only for optional Python Whisper model-name discovery in `/micme conf`; isolated mode avoids importing project-local Python files.
 - Optional user-provided shell commands in `MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`.
 
-The default process output is capped before it is shown to users or errors. Diagnostics should not print secret values.
+The default process output is capped, and terminal control sequences are stripped from process output, transcript text, device panels, and configuration display values before they are shown or inserted into pi. Diagnostics should not print secret values.
 
 ## Custom command risks
 

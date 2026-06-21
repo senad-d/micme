@@ -32,34 +32,34 @@ export function resolveTranscriptionPlan(options: ResolveTranscriptionPlanOption
 			customCommand: customCommand ?? undefined,
 			whisperCppModel,
 			warnings,
-			whisperStreamBinary: getExecutableOption(options, "whisperStreamBinary", "whisperStreamBinaryError", getWhisperStreamBinary),
+			whisperStreamBinary: getExecutableOption(options, "whisperStreamBinary", "whisperStreamBinaryError", getWhisperStreamBinary, warnings),
 		});
 	}
 
-	const whisperCppBinary = getExecutableOption(options, "whisperCppBinary", "whisperCppBinaryError", getWhisperCppBinary);
+	const whisperCppBinary = getExecutableOption(options, "whisperCppBinary", "whisperCppBinaryError", getWhisperCppBinary, warnings);
 	const pythonWhisperBinary = getOptionValue(options, "pythonWhisperBinary", getPythonWhisperBinary);
 
 	if (requestedBackend === "custom") {
 		return customCommand
-			? customPlan(requestedBackend, customCommand, "MICME_TRANSCRIBE_BACKEND=custom")
+			? customPlan(requestedBackend, customCommand, "MICME_TRANSCRIBE_BACKEND=custom", warnings)
 			: nonePlan(requestedBackend, "MICME_TRANSCRIBE_BACKEND=custom but MICME_TRANSCRIBE_COMMAND is not set.", warnings);
 	}
 
 	if (requestedBackend === "whisper.cpp") {
 		return whisperCppBinary
-			? whisperCppPlan(requestedBackend, whisperCppBinary, whisperCppModel, "MICME_TRANSCRIBE_BACKEND=whisper.cpp")
+			? whisperCppPlan(requestedBackend, whisperCppBinary, whisperCppModel, "MICME_TRANSCRIBE_BACKEND=whisper.cpp", warnings)
 			: nonePlan(requestedBackend, "MICME_TRANSCRIBE_BACKEND=whisper.cpp but whisper.cpp was not found.", warnings);
 	}
 
 	if (requestedBackend === "python") {
 		return pythonWhisperBinary
-			? pythonPlan(requestedBackend, pythonWhisperBinary, pythonModelName, "MICME_TRANSCRIBE_BACKEND=python")
+			? pythonPlan(requestedBackend, pythonWhisperBinary, pythonModelName, "MICME_TRANSCRIBE_BACKEND=python", warnings)
 			: nonePlan(requestedBackend, "MICME_TRANSCRIBE_BACKEND=python but the `whisper` CLI was not found.", warnings);
 	}
 
-	if (customCommand) return customPlan(requestedBackend, customCommand, "auto selected custom command because MICME_TRANSCRIBE_COMMAND is configured");
-	if (whisperCppBinary) return whisperCppPlan(requestedBackend, whisperCppBinary, whisperCppModel, "auto selected whisper.cpp because a whisper.cpp binary is available");
-	if (pythonWhisperBinary) return pythonPlan(requestedBackend, pythonWhisperBinary, pythonModelName, "auto selected Python Whisper because whisper.cpp is unavailable");
+	if (customCommand) return customPlan(requestedBackend, customCommand, "auto selected custom command because MICME_TRANSCRIBE_COMMAND is configured", warnings);
+	if (whisperCppBinary) return whisperCppPlan(requestedBackend, whisperCppBinary, whisperCppModel, "auto selected whisper.cpp because a whisper.cpp binary is available", warnings);
+	if (pythonWhisperBinary) return pythonPlan(requestedBackend, pythonWhisperBinary, pythonModelName, "auto selected Python Whisper because whisper.cpp is unavailable", warnings);
 
 	return nonePlan(
 		requestedBackend,
@@ -153,10 +153,10 @@ function resolveStreamingPlan(options: {
 			: "MICME_TRANSCRIBE_BACKEND=whisper.cpp and MICME_TRANSCRIPTION_MODE=stream but whisper-stream was not found.";
 		return nonePlan(requestedBackend, reason, warnings);
 	}
-	return whisperCppPlan(requestedBackend, whisperStreamBinary, whisperCppModel, "streaming selected whisper.cpp because whisper-stream is available");
+	return whisperCppPlan(requestedBackend, whisperStreamBinary, whisperCppModel, "streaming selected whisper.cpp because whisper-stream is available", warnings);
 }
 
-function customPlan(requestedBackend: TranscribeBackend, command: string, reason: string): ResolvedTranscriptionPlan {
+function customPlan(requestedBackend: TranscribeBackend, command: string, reason: string, inheritedWarnings: string[] = []): ResolvedTranscriptionPlan {
 	return {
 		requestedBackend,
 		effectiveBackend: "custom",
@@ -164,12 +164,12 @@ function customPlan(requestedBackend: TranscribeBackend, command: string, reason
 		command,
 		modelName: "unknown",
 		modelSource: "custom-command",
-		warnings: [],
+		warnings: [...inheritedWarnings],
 	};
 }
 
-function whisperCppPlan(requestedBackend: TranscribeBackend, binary: string, model: ResolvedWhisperCppModel, reason: string): ResolvedTranscriptionPlan {
-	const warnings: string[] = [];
+function whisperCppPlan(requestedBackend: TranscribeBackend, binary: string, model: ResolvedWhisperCppModel, reason: string, inheritedWarnings: string[] = []): ResolvedTranscriptionPlan {
+	const warnings: string[] = [...inheritedWarnings];
 	if (model.source === "explicit-path" && !model.exists && !model.downloadable) {
 		warnings.push(`MICME_WHISPER_CPP_MODEL is set but not found: ${model.path}`);
 	} else if (!model.exists && !model.downloadable) {
@@ -192,7 +192,7 @@ function whisperCppPlan(requestedBackend: TranscribeBackend, binary: string, mod
 	};
 }
 
-function pythonPlan(requestedBackend: TranscribeBackend, binary: string, modelName: string, reason: string): ResolvedTranscriptionPlan {
+function pythonPlan(requestedBackend: TranscribeBackend, binary: string, modelName: string, reason: string, inheritedWarnings: string[] = []): ResolvedTranscriptionPlan {
 	return {
 		requestedBackend,
 		effectiveBackend: "python",
@@ -200,7 +200,7 @@ function pythonPlan(requestedBackend: TranscribeBackend, binary: string, modelNa
 		binary,
 		modelName,
 		modelSource: "python-name",
-		warnings: getTranslationModelWarnings(modelName),
+		warnings: [...inheritedWarnings, ...getTranslationModelWarnings(modelName)],
 	};
 }
 
@@ -246,16 +246,21 @@ function getExecutableOption(
 	key: "whisperCppBinary" | "whisperStreamBinary",
 	errorKey: "whisperCppBinaryError" | "whisperStreamBinaryError",
 	fallback: () => string | undefined,
+	warnings: string[] = [],
 ) {
 	const error = options[errorKey];
-	if (error) return undefined;
+	if (error) {
+		warnings.push(error);
+		return undefined;
+	}
 	if (Object.prototype.hasOwnProperty.call(options, key)) {
 		const value = options[key];
 		return typeof value === "string" && value.trim() ? value.trim() : undefined;
 	}
 	try {
 		return fallback();
-	} catch {
+	} catch (error) {
+		warnings.push(error instanceof Error ? error.message : String(error));
 		return undefined;
 	}
 }

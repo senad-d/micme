@@ -110,6 +110,17 @@ test("incremental stream frames preserve fast short phrases", () => {
 	assertAppendOnly(harness.updates);
 });
 
+test("streaming preview separates existing editor text from dictated words", () => {
+	const harness = createHarness("Please");
+	feedFrame(harness, "write");
+	feedFrame(harness, "write tests");
+	finish(harness);
+
+	assertTranscript(harness, "write tests");
+	assert.deepEqual(harness.updates, ["Please write", "Please write tests "]);
+	assertAppendOnly(harness.updates);
+});
+
 test("rolling window frames do not duplicate overlap words", () => {
 	const harness = runFrames(["Cat is", "is white"]);
 

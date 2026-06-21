@@ -1,9 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AUDIO_VALIDATION_TIMEOUT_MS } from "./constants.ts";
 import { env, envFlag, getAudioFilter, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
-import { findExecutable, formatRunExit, replacePlaceholders, runProcess, shellCommand, shellQuote } from "./processes.ts";
+import { findExecutable, formatProcessOutput, formatRunExit, replacePlaceholders, runProcess, shellCommand, shellQuote } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { AudioDeviceCandidate, AudioDiagnostics, CommandSpec, RunResult } from "./types.ts";
 
@@ -378,23 +378,43 @@ function isDeviceBackend(value: unknown): value is DeviceBackend {
 }
 
 export function renderDevicePanel(options: DevicePanelOptions, width = getDevicePanelWidth()) {
+	const safeOptions = sanitizeDevicePanelOptions(options);
 	const style = getDevicePanelStyle();
 	const panelWidth = Math.max(2, Math.floor(width));
-	const lines = [buildDevicePanelHeader(panelWidth, options.sourceLabel, style)];
-	const hasInventory = options.audio !== undefined || options.video !== undefined || !options.errorLines?.length;
+	const lines = [buildDevicePanelHeader(panelWidth, safeOptions.sourceLabel, style)];
+	const hasInventory = safeOptions.audio !== undefined || safeOptions.video !== undefined || !safeOptions.errorLines?.length;
 
 	if (hasInventory) {
-		lines.push(buildDeviceRow("audio", options.audio ?? [], style, panelWidth));
-		if (options.includeVideo) lines.push(buildDeviceRow("video", options.video ?? [], style, panelWidth));
+		lines.push(buildDeviceRow("audio", safeOptions.audio ?? [], style, panelWidth));
+		if (safeOptions.includeVideo) lines.push(buildDeviceRow("video", safeOptions.video ?? [], style, panelWidth));
 	}
 
-	if (options.warning) lines.push(buildStatusRow("warning", options.warning, style, panelWidth));
-	for (const [index, line] of (options.errorLines ?? []).entries()) {
+	if (safeOptions.warning) lines.push(buildStatusRow("warning", safeOptions.warning, style, panelWidth));
+	for (const [index, line] of (safeOptions.errorLines ?? []).entries()) {
 		lines.push(buildErrorRow(line, index === 0, style, panelWidth));
 	}
 	lines.push(buildDevicePanelFooter(panelWidth, style));
 
 	return lines.filter(Boolean).join("\n");
+}
+
+function sanitizeDevicePanelOptions(options: DevicePanelOptions): DevicePanelOptions {
+	const errorLines = Array.isArray(options.errorLines) ? options.errorLines.map((line) => sanitizeTerminalText(String(line))).filter(Boolean) : undefined;
+	return {
+		...options,
+		sourceLabel: sanitizeTerminalText(options.sourceLabel) || "unknown",
+		warning: typeof options.warning === "string" ? sanitizeTerminalText(options.warning) : undefined,
+		errorLines,
+		audio: sanitizeListedDevices(options.audio),
+		video: sanitizeListedDevices(options.video),
+	};
+}
+
+function sanitizeListedDevices(devices: ListedDevice[] | undefined) {
+	if (!Array.isArray(devices)) return undefined;
+	return devices
+		.map((device) => ({ id: device.id ? sanitizeDeviceField(String(device.id)) : undefined, name: sanitizeDeviceField(String(device.name ?? "")) }))
+		.filter((device) => device.id || device.name);
 }
 
 function getDevicePanelWidth() {
@@ -600,7 +620,7 @@ export async function prepareAudioForTranscription(inputPath: string, tempDir: s
 
 	const result = await runProcess(ffmpeg, args, AUDIO_VALIDATION_TIMEOUT_MS);
 	if (result.code !== 0) {
-		throw new Error(`Micme audio preprocessing failed (${formatRunExit(result)}):\n${result.stderr || result.stdout}`);
+		throw new Error(`Micme audio preprocessing failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
 	return outputPath;
@@ -613,7 +633,7 @@ export async function validateRecordedAudio(audioPath: string): Promise<AudioDia
 	if (!ffmpeg) return undefined;
 
 	const result = await runProcess(ffmpeg, ["-hide_banner", "-nostats", "-i", audioPath, "-af", "volumedetect", "-f", "null", "-"], AUDIO_VALIDATION_TIMEOUT_MS);
-	const raw = `${result.stdout}\n${result.stderr}`.trim();
+	const raw = formatProcessOutput(`${result.stdout}\n${result.stderr}`);
 	if (result.code !== 0) {
 		throw new Error(`Micme could not inspect recorded audio (${formatRunExit(result)}):\n${raw}`);
 	}
@@ -642,10 +662,10 @@ export function parseVolumeDb(output: string, label: "mean_volume" | "max_volume
 	return match[1]?.toLowerCase() === "-inf" ? Number.NEGATIVE_INFINITY : Number(match[1]);
 }
 
-export function buildRecorderCommand(audioPath: string): CommandSpec {
+export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioPath)): CommandSpec {
 	const custom = env("MICME_RECORD_COMMAND");
 	if (custom?.trim()) {
-		const expanded = replacePlaceholders(custom, { audio: audioPath });
+		const expanded = replacePlaceholders(custom, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") });
 		return shellCommand(expanded);
 	}
 

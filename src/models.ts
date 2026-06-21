@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { once } from "node:events";
-import { createWriteStream, existsSync, readdirSync, statSync } from "node:fs";
+import { createWriteStream, existsSync, readdirSync, statSync, type WriteStream } from "node:fs";
 import { mkdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
@@ -15,6 +15,7 @@ import {
 } from "./constants.ts";
 import { env, expandConfigPath, getTranslateToEnglishLanguage } from "./config.ts";
 import { findExecutable, runProcess } from "./processes.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { ModelCandidate, ResolvedWhisperCppModel } from "./types.ts";
 
 const modelDownloads = new Map<string, Promise<void>>();
@@ -33,11 +34,12 @@ export function discoverWhisperCppModels(cwd: string): ModelCandidate[] {
 	const current = env("MICME_WHISPER_CPP_MODEL");
 	if (current) {
 		const expanded = expandConfigPath(current);
+		const installed = isRegularFile(expanded);
 		add({
 			label: basename(expanded),
 			value: expanded,
-			description: existsSync(expanded) ? `current explicit path: ${expanded}` : `current explicit path is missing: ${expanded}`,
-			installed: existsSync(expanded),
+			description: installed ? `current explicit path: ${expanded}` : `current explicit path is missing or not a file: ${expanded}`,
+			installed,
 			kind: "path",
 		});
 	}
@@ -49,11 +51,12 @@ export function discoverWhisperCppModels(cwd: string): ModelCandidate[] {
 	const cacheDir = getWhisperCppModelCacheDir();
 	for (const modelName of WHISPER_CPP_MODEL_NAMES) {
 		const path = join(cacheDir, `ggml-${modelName}.bin`);
+		const installed = isRegularFile(path);
 		add({
 			label: modelName,
 			value: path,
-			description: `${describeWhisperModel(modelName)} • ${basename(path)}${existsSync(path) ? "" : " (expected path; download model first)"}`,
-			installed: existsSync(path),
+			description: `${describeWhisperModel(modelName)} • ${basename(path)}${installed ? "" : " (expected path; download model first)"}`,
+			installed,
 			kind: "model-name",
 		});
 	}
@@ -162,7 +165,7 @@ function buildResolvedWhisperCppModel(
 		modelName: metadata.modelName,
 		source: metadata.source,
 		configuredValue: metadata.configuredValue,
-		exists: existsSync(path),
+		exists: isRegularFile(path),
 		downloadable: isDownloadableWhisperCppModelPath(path),
 		translationFallbackFrom: metadata.translationFallbackFrom,
 	};
@@ -249,7 +252,8 @@ export function uniqueModelNames(names: string[]) {
 }
 
 export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionContext, options: { allowDownload?: boolean } = {}) {
-	if (existsSync(modelPath)) return;
+	assertDownloadTargetIsUsable(modelPath, "Micme model path");
+	if (isRegularFile(modelPath)) return;
 	if (options.allowDownload === false) {
 		throw new Error(`Micme model is missing: ${modelPath}`);
 	}
@@ -259,7 +263,7 @@ export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionCo
 
 	const existingDownload = modelDownloads.get(modelPath);
 	if (existingDownload) {
-		ctx?.ui.setStatus(STATUS_KEY, `waiting for ${basename(modelPath)} download…`);
+		ctx?.ui.setStatus(STATUS_KEY, `waiting for ${safeBasename(modelPath)} download…`);
 		try {
 			await existingDownload;
 		} finally {
@@ -284,16 +288,19 @@ export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionCo
 }
 
 export async function downloadWhisperCppModel(modelName: string, modelPath: string, ctx?: ExtensionContext) {
-	if (existsSync(modelPath)) return;
+	assertDownloadTargetIsUsable(modelPath, "Micme model path");
+	if (isRegularFile(modelPath)) return;
 	const url = getWhisperCppModelUrl(modelName);
-	ctx?.ui.setStatus(STATUS_KEY, `downloading ${basename(modelPath)}…`);
-	ctx?.ui.notify(`Downloading ${basename(modelPath)}. This can take a while the first time.`, "info");
+	const displayName = safeBasename(modelPath);
+	ctx?.ui.setStatus(STATUS_KEY, `downloading ${displayName}…`);
+	ctx?.ui.notify(`Downloading ${displayName}. This can take a while the first time.`, "info");
 	await downloadFile(url, modelPath, ctx);
-	ctx?.ui.notify(`Downloaded ${basename(modelPath)}.`, "info");
+	ctx?.ui.notify(`Downloaded ${displayName}.`, "info");
 }
 
 export async function downloadFile(url: string, targetPath: string, ctx?: ExtensionContext) {
-	if (existsSync(targetPath)) return;
+	assertDownloadTargetIsUsable(targetPath, "Download target");
+	if (isRegularFile(targetPath)) return;
 	await mkdir(dirname(targetPath), { recursive: true });
 	const tempPath = `${targetPath}.download-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -305,6 +312,8 @@ export async function downloadFile(url: string, targetPath: string, ctx?: Extens
 	const totalBytes = Number(response.headers.get("content-length") || "0");
 	const reader = response.body.getReader();
 	const output = createWriteStream(tempPath, { flags: "wx" });
+	const outputFinished = finished(output);
+	outputFinished.catch(() => undefined);
 	let downloadedBytes = 0;
 	let lastUpdate = 0;
 
@@ -314,29 +323,36 @@ export async function downloadFile(url: string, targetPath: string, ctx?: Extens
 			if (done) break;
 			if (!value) continue;
 			downloadedBytes += value.byteLength;
-			if (!output.write(Buffer.from(value))) {
-				await once(output, "drain");
-			}
+			await writeDownloadChunk(output, Buffer.from(value), outputFinished);
 
 			const now = Date.now();
 			if (ctx && now - lastUpdate > 1_000) {
-				ctx.ui.setStatus(STATUS_KEY, `downloading ${basename(targetPath)} ${formatDownloadProgress(downloadedBytes, totalBytes)}`);
+				ctx.ui.setStatus(STATUS_KEY, `downloading ${safeBasename(targetPath)} ${formatDownloadProgress(downloadedBytes, totalBytes)}`);
 				lastUpdate = now;
 			}
 		}
 
 		output.end();
-		await finished(output);
-		if (existsSync(targetPath)) {
+		await outputFinished;
+		if (isRegularFile(targetPath)) {
 			await unlink(tempPath).catch(() => undefined);
 			return;
 		}
+		assertDownloadTargetIsUsable(targetPath, "Download target");
 		await rename(tempPath, targetPath);
 	} catch (error) {
+		await reader.cancel().catch(() => undefined);
 		output.destroy();
+		await outputFinished.catch(() => undefined);
 		await unlink(tempPath).catch(() => undefined);
 		throw error;
 	}
+}
+
+async function writeDownloadChunk(output: WriteStream, chunk: Buffer, outputFinished: Promise<void>) {
+	if (output.destroyed) await outputFinished;
+	if (output.write(chunk)) return;
+	await Promise.race([once(output, "drain"), outputFinished]);
 }
 
 export function getWhisperCppModelNameFromPath(modelPath: string) {
@@ -388,4 +404,30 @@ export function formatBytes(bytes: number) {
 		unit = units[index];
 	}
 	return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+}
+
+function safeBasename(path: string) {
+	return sanitizeTerminalText(basename(path)) || "model";
+}
+
+function isRegularFile(path: string) {
+	try {
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
+}
+
+function assertDownloadTargetIsUsable(path: string, label: string) {
+	try {
+		if (statSync(path).isFile()) return;
+	} catch (error) {
+		if (isNotFoundError(error)) return;
+		throw error;
+	}
+	throw new Error(`${label} exists but is not a file: ${path}`);
+}
+
+function isNotFoundError(error: unknown) {
+	return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }

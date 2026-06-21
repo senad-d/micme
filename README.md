@@ -196,7 +196,7 @@ Common settings:
 
 See [`micme.example.json`](micme.example.json) for the full JSON template.
 
-Streaming mode treats `whisper-stream` output as repeated, overlapping hypotheses rather than committed word deltas. Micme only appends committed words to the editor during live streaming; tentative words are held internally and committed after agreement, overlap, stop, or the quiet interval configured by `MICME_STREAM_FLUSH_MS`. If `MICME_STREAM_FINALIZE_WITH_CLIP=1`, the stop-time clip transcript can intentionally replace the live append-only text.
+Streaming mode treats `whisper-stream` output as repeated, overlapping hypotheses rather than committed word deltas. Micme only appends committed words to the editor during live streaming; tentative words are held internally and committed after agreement, overlap, stop, or the quiet interval configured by `MICME_STREAM_FLUSH_MS`. If the editor already contains text, Micme separates the existing text from dictated words with a space when needed. If `MICME_STREAM_FINALIZE_WITH_CLIP=1`, the stop-time clip transcript can intentionally replace the live append-only text.
 
 ---
 
@@ -222,7 +222,7 @@ Micme supports these backend values in JSON/env config:
 
 `/micme conf` keeps the interactive backend picker focused on `whisper.cpp` and `Python Whisper`, then shows only the model/binary fields for the selected backend. For whisper.cpp, `MICME_WHISPER_CPP_MODEL` is the selected ggml/gguf model path; if it is unset, Micme falls back to `${MICME_MODEL_DIR}/ggml-${MICME_DEFAULT_WHISPER_CPP_MODEL}.bin`. For Python Whisper, `MICME_WHISPER_MODEL` is passed as the CLI model name.
 
-With `MICME_AUTO_DOWNLOAD_MODEL=1`, Micme downloads missing standard whisper.cpp models into `MICME_MODEL_DIR`. Disable downloads with:
+With `MICME_AUTO_DOWNLOAD_MODEL=1`, Micme downloads missing standard whisper.cpp models into `MICME_MODEL_DIR`. Existing model paths must point to regular files; directories are rejected before download or transcription. Disable downloads with:
 
 ```env
 MICME_AUTO_DOWNLOAD_MODEL=0
@@ -288,6 +288,9 @@ pi remove npm:@senad-d/micme -l       # remove project-local install
 
 ```bash
 npm ci
+npm run typecheck
+npm run lint
+npm run format:check
 npm run validate
 ```
 

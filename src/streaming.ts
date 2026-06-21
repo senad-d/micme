@@ -328,8 +328,7 @@ export function getStreamingTranscript(state: StreamingState) {
 
 export function renderStreamingPreview(ctx: ExtensionContext, state: StreamingState, trailingSpace: boolean) {
 	const transcript = getStreamingTranscript(state);
-	const suffix = transcript ? `${transcript}${trailingSpace ? " " : ""}` : "";
-	const nextText = `${state.baseText}${suffix}`;
+	const nextText = appendTranscriptToBaseText(state.baseText, transcript, trailingSpace);
 	if (nextText === state.previewText) return;
 	ctx.ui.setEditorText(nextText);
 	state.previewText = nextText;
@@ -355,8 +354,7 @@ export async function pasteOrSubmitFinalStreamingTranscript(ctx: ExtensionContex
 		return;
 	}
 
-	const suffix = /\s$/.test(transcript) ? transcript : `${transcript} `;
-	const nextText = `${state.baseText}${suffix}`;
+	const nextText = appendTranscriptToBaseText(state.baseText, transcript, true);
 	ctx.ui.setEditorText(nextText);
 	state.previewText = nextText;
 }
@@ -365,6 +363,17 @@ export function clearStreamingFlush(state: StreamingState) {
 	if (!state.flushTimer) return;
 	clearTimeout(state.flushTimer);
 	state.flushTimer = undefined;
+}
+
+function appendTranscriptToBaseText(baseText: string, transcript: string, trailingSpace: boolean) {
+	if (!transcript) return baseText;
+	const separator = needsStreamingSeparator(baseText, transcript) ? " " : "";
+	const suffix = /\s$/.test(transcript) || !trailingSpace ? transcript : `${transcript} `;
+	return `${baseText}${separator}${suffix}`;
+}
+
+function needsStreamingSeparator(baseText: string, transcript: string) {
+	return Boolean(baseText && transcript && !/\s$/u.test(baseText) && !/^[\s.,!?;:)}\]]/u.test(transcript));
 }
 
 function queueRollingStreamingWords(state: StreamingState, words: string[]) {

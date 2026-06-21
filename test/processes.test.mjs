@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 
-const { findExecutable, replacePlaceholders, shellQuote } = await import("../src/processes.ts");
+const { findExecutable, formatProcessOutput, normalizeTranscript, replacePlaceholders, shellQuote } = await import("../src/processes.ts");
 
 function withEnv(values, fn) {
 	const previous = new Map();
@@ -30,6 +30,16 @@ test("replacePlaceholders does not expand placeholders introduced by values", ()
 	const output = replacePlaceholders("cmd {audio} {audioRaw} {tempDir} {missing}", { audio: audioPath, tempDir });
 
 	assert.equal(output, `cmd ${shellQuote(audioPath)} ${audioPath} ${shellQuote(tempDir)} {missing}`);
+});
+
+test("formatProcessOutput strips terminal control sequences and falls back to safe output", () => {
+	assert.equal(formatProcessOutput("\x1b]52;c;clipboard\x07ok\x1b[31m!\x1b[0m"), "ok !");
+	assert.equal(formatProcessOutput("before\x1bPignored payload\x1b\\after"), "before after");
+	assert.equal(formatProcessOutput("\x1b]52;c;clipboard\x07", "safe fallback"), "safe fallback");
+});
+
+test("normalizeTranscript strips terminal control sequences from transcriber output", () => {
+	assert.equal(normalizeTranscript("Hello\x1b]52;c;clipboard\x07\n\x1b[31mworld\x1b[0m"), "Hello world");
 });
 
 test("findExecutable ignores non-executable PATH entries", async (t) => {

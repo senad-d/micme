@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { buildFfmpegRecorderArgs, parseAvfoundationDevices } = await import("../src/audio.ts");
+const { buildFfmpegRecorderArgs, buildRecorderCommand, parseAvfoundationDevices, renderDevicePanel } = await import("../src/audio.ts");
 const { getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getRecordMeter, getRecordSampleRate, getRecordSync, reloadMicmeConfig } = await import("../src/config.ts");
 
 function withEnv(values, fn) {
@@ -96,6 +96,32 @@ test("device parsing strips terminal control sequences from names", () => {
 	const parsed = parseAvfoundationDevices("AVFoundation audio devices:\n[0] \u001b]52;c;clipboard\u0007Studio \u001b[31mMic");
 
 	assert.deepEqual(parsed.audio, [{ id: "0", name: "Studio Mic" }]);
+});
+
+test("device panel rendering strips terminal control sequences from persisted details", () => {
+	const panel = renderDevicePanel(
+		{
+			sourceLabel: "macOS\u001b]52;c;clipboard\u0007",
+			backend: "avfoundation",
+			audio: [{ id: "0", name: "\u001b[31mStudio Mic\u001b[0m" }],
+			warning: "\u001bPignored\u001b\\warning",
+		},
+		80,
+	);
+
+	assert.equal(panel.includes("\u001b"), false);
+	assert.match(panel, /Studio Mic/);
+	assert.match(panel, /warning/);
+});
+
+test("custom record commands receive the shared Micme placeholders", () => {
+	withEnv({ MICME_RECORD_COMMAND: "rec {audio} {tempDir} {transcript}" }, () => {
+		const command = buildRecorderCommand("/tmp/micme-record/raw.wav");
+		assert.equal(command.display.includes("{tempDir}"), false);
+		assert.equal(command.display.includes("{transcript}"), false);
+		assert.match(command.display, /raw\.wav/);
+		assert.match(command.display, /transcript\.txt/);
+	});
 });
 
 test("recording quality flags use safe defaults and explicit overrides", () => {

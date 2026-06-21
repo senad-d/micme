@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const { reloadMicmeConfig } = await import("../src/config.ts");
-const { saveConfigurationValue } = await import("../src/settings.ts");
+const { displayConfigurationValue, saveConfigurationValue } = await import("../src/settings.ts");
 
 function createCtx() {
 	return {
@@ -15,6 +15,11 @@ function createCtx() {
 		},
 	};
 }
+
+test("configuration display values strip terminal control sequences", () => {
+	assert.equal(displayConfigurationValue("MICME_LANGUAGE", "en\x1b]52;c;clipboard\x07\x1b[31m-US\x1b[0m"), "en -US");
+	assert.equal(displayConfigurationValue("MICME_WHISPER_CPP_MODEL", "/tmp/\x1b[31mggml-small.en.bin\x1b[0m"), "ggml-small.en.bin");
+});
 
 test("clearing the whisper.cpp model removes the explicit override from micme.json", async (t) => {
 	const agentDir = await mkdtemp(join(tmpdir(), "micme-settings-test-"));
