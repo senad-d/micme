@@ -5,6 +5,7 @@ node_modules/
 dist/
 build/
 coverage/
+lcov.info
 .nyc_output/
 *.tsbuildinfo
 *.tgz
@@ -39,3 +40,4 @@ trivy-reports
 odc-reports
 
 .local
+.env
