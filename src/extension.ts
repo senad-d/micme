@@ -253,7 +253,7 @@ async function stopAndTranscribe(ctx: ExtensionContext, pi: ExtensionAPI) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		lastAudioDir = active.tempDir;
 		const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error));
-		throw new Error(`${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`);
+		throw new Error(`${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`, { cause: error });
 	} finally {
 		if (completed && !envFlag("MICME_KEEP_AUDIO")) {
 			await cleanup(active.tempDir).catch(() => undefined);

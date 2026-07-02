@@ -6,7 +6,6 @@ import { dirname, join, resolve } from "node:path";
 import type { MicmeConfigState, TranscribeBackend, TranscriptionMode } from "./types.ts";
 import {
 	DEFAULT_MACOS_PRINTABLE_SHORTCUT,
-	DEFAULT_RECORD_SAMPLE_RATE,
 	DEFAULT_SHORTCUT,
 	DEFAULT_STREAM_KEEP_MS,
 	DEFAULT_STREAM_LENGTH_MS,
@@ -387,7 +386,7 @@ function readMicmeJsonObjectForWrite(configPath: string): JsonObject {
 		return parsed;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Cannot save Micme config: ${configPath} is invalid JSON (${message}). Fix or remove it first.`);
+		throw new Error(`Cannot save Micme config: ${configPath} is invalid JSON (${message}). Fix or remove it first.`, { cause: error });
 	}
 }
 

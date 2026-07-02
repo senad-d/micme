@@ -1,0 +1,5 @@
+version: 1
+
+allowCommands:
+  - pattern: "script-content:package.json"
+    reason: "Saved from GuardMe approval decision 'allow-local'."

@@ -7,6 +7,7 @@ const roots = ["src", "test", "scripts"];
 const rootFiles = [
   ".github/workflows/ci.yml",
   ".gitignore",
+  "eslint.config.mjs",
   "CHANGELOG.md",
   "CONTRIBUTING.md",
   "README.md",

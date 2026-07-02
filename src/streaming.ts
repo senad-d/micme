@@ -34,7 +34,7 @@ type StreamingDiagnosticDetails = {
 	reason?: string;
 };
 
-export function buildWhisperStreamCommand(binary: string, modelPath: string, tempDir: string): CommandSpec {
+export function buildWhisperStreamCommand(binary: string, modelPath: string, _tempDir: string): CommandSpec {
 	const args = [
 		"-m",
 		modelPath,

@@ -61,7 +61,7 @@ const DEVICE_PANEL_MAX_WIDTH = 100;
 const DEVICE_PANEL_MIN_WIDTH = 36;
 const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
 const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
-const PULSE_SOURCE_LINE_PATTERN = /^([^\s\[]+)(?:\s+\[(.+)\])?$/;
+const PULSE_SOURCE_LINE_PATTERN = /^([^\s[]+)(?:\s+\[(.+)\])?$/;
 
 let deviceMessageRendererRegistered = false;
 
@@ -458,7 +458,7 @@ function buildDevicePanelHeader(width: number, sourceLabel: string, style: Devic
 	const availableTextWidth = Math.max(1, width - overhead - 1);
 	const sourceBudget = Math.max(4, Math.min(visibleWidth(sourceLabel), Math.floor(availableTextWidth * 0.45)));
 	let source = ellipsize(formatSourceLabel(sourceLabel, style), sourceBudget, style);
-	let titleText = ellipsize(title, Math.max(4, availableTextWidth - visibleWidth(source)), style);
+	const titleText = ellipsize(title, Math.max(4, availableTextWidth - visibleWidth(source)), style);
 	if (visibleWidth(titleText) + visibleWidth(source) > availableTextWidth) {
 		source = ellipsize(source, Math.max(1, availableTextWidth - visibleWidth(titleText)), style);
 	}

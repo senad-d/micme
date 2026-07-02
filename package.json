@@ -59,14 +59,15 @@
     "check": "node --check scripts/doctor.mjs && node --check scripts/check-format.mjs && node --check scripts/check-package-contents.mjs && node --check scripts/publish-npm.mjs",
     "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "npm run typecheck && npm run check",
+    "lint": "npm run lint:eslint && npm run typecheck && npm run check",
     "format:check": "node scripts/check-format.mjs",
     "pack:dry-run": "npm pack --dry-run --json",
     "check:pack": "node scripts/check-package-contents.mjs",
     "validate": "npm run lint && npm run format:check && npm run test && npm run check:pack",
     "publish:npm": "node scripts/publish-npm.mjs",
     "prepublishOnly": "npm run validate",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=src/**/*.ts --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=lcov.info test/*.test.mjs"
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=src/**/*.ts --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=lcov.info test/*.test.mjs",
+    "lint:eslint": "eslint eslint.config.mjs \"scripts/**/*.mjs\" \"test/**/*.mjs\" \"src/**/*.ts\""
   },
   "pi": {
     "extensions": [
@@ -81,7 +82,11 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "file:./dev-shims/pi-coding-agent",
     "@earendil-works/pi-tui": "*",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.0.0",
-    "typescript": "^6.0.3"
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.1"
   }
 }
