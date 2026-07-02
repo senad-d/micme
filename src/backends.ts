@@ -5,8 +5,10 @@ import { env, expandConfigPath, getTranscribeBackend, getTranslateToEnglishLangu
 import { getPythonWhisperModelName, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable, isExecutableFile } from "./processes.ts";
 
+export type RequestedTranscribeBackend = TranscribeBackend | (string & Record<never, never>);
+
 export type ResolveTranscriptionPlanOptions = {
-	requestedBackend?: TranscribeBackend | string;
+	requestedBackend?: RequestedTranscribeBackend;
 	transcriptionMode?: TranscriptionMode;
 	customCommand?: string | null;
 	whisperCppBinary?: string | null;
@@ -220,7 +222,7 @@ function nonePlan(requestedBackend: TranscribeBackend, reason: string, warnings:
 	};
 }
 
-function parseRequestedBackend(value: TranscribeBackend | string | undefined, warnings: string[]) {
+function parseRequestedBackend(value: RequestedTranscribeBackend | undefined, warnings: string[]) {
 	const raw = value ?? env("MICME_TRANSCRIBE_BACKEND")?.trim();
 	if (!raw) return getTranscribeBackend();
 	if (isTranscribeBackend(raw)) return raw;
@@ -233,7 +235,7 @@ function getOptionValue<K extends keyof ResolveTranscriptionPlanOptions>(
 	key: K,
 	fallback: () => Extract<ResolveTranscriptionPlanOptions[K], string | null | undefined>,
 ) {
-	if (Object.prototype.hasOwnProperty.call(options, key)) {
+	if (Object.hasOwn(options, key)) {
 		const value = options[key];
 		return typeof value === "string" && value.trim() ? value.trim() : undefined;
 	}
@@ -253,7 +255,7 @@ function getExecutableOption(
 		warnings.push(error);
 		return undefined;
 	}
-	if (Object.prototype.hasOwnProperty.call(options, key)) {
+	if (Object.hasOwn(options, key)) {
 		const value = options[key];
 		return typeof value === "string" && value.trim() ? value.trim() : undefined;
 	}

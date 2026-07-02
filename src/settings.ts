@@ -275,45 +275,60 @@ class ConfigurationScreen implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (this.submenuComponent) {
-			this.submenuComponent.handleInput?.(data);
-			this.requestRender();
-			return;
-		}
-
-		if (this.editingShortcutItem) {
-			this.handleShortcutCaptureInput(data);
-			return;
-		}
-
-		if (matchesKey(data, Key.ctrl("c")) || data === "q" || data === "Q") {
-			this.onDone();
-			return;
-		}
+		if (this.forwardSubmenuInput(data)) return;
+		if (this.forwardShortcutCaptureInput(data)) return;
+		if (this.handleCloseInput(data)) return;
 
 		if (this.handleSearchInput(data)) {
 			this.requestRender();
 			return;
 		}
 
-		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
-			this.focusedPane = this.focusedPane === "categories" ? "settings" : "categories";
-			this.requestRender();
-			return;
-		}
+		if (this.handlePaneSwitchInput(data)) return;
+		if (this.handleSelectionMoveInput(data)) return;
+		if (this.handleSettingActivationInput(data)) return;
+		this.handleEscapeNavigation(data);
+	}
 
+	private forwardSubmenuInput(data: string) {
+		if (!this.submenuComponent) return false;
+		this.submenuComponent.handleInput?.(data);
+		this.requestRender();
+		return true;
+	}
+
+	private forwardShortcutCaptureInput(data: string) {
+		if (!this.editingShortcutItem) return false;
+		this.handleShortcutCaptureInput(data);
+		return true;
+	}
+
+	private handleCloseInput(data: string) {
+		if (!matchesKey(data, Key.ctrl("c")) && data !== "q" && data !== "Q") return false;
+		this.onDone();
+		return true;
+	}
+
+	private handlePaneSwitchInput(data: string) {
+		if (!matchesKey(data, Key.tab) && !matchesKey(data, Key.shift("tab"))) return false;
+		this.focusedPane = this.focusedPane === "categories" ? "settings" : "categories";
+		this.requestRender();
+		return true;
+	}
+
+	private handleSelectionMoveInput(data: string) {
 		if (matchesKey(data, Key.up)) {
 			this.moveSelection(-1);
 			this.requestRender();
-			return;
+			return true;
 		}
+		if (!matchesKey(data, Key.down)) return false;
+		this.moveSelection(1);
+		this.requestRender();
+		return true;
+	}
 
-		if (matchesKey(data, Key.down)) {
-			this.moveSelection(1);
-			this.requestRender();
-			return;
-		}
-
+	private handleSettingActivationInput(data: string) {
 		if (matchesKey(data, Key.enter)) {
 			if (this.focusedPane === "categories") {
 				this.focusedPane = "settings";
@@ -321,22 +336,22 @@ class ConfigurationScreen implements Component {
 				this.activateSelectedSetting();
 			}
 			this.requestRender();
-			return;
+			return true;
 		}
 
-		if (matchesKey(data, Key.space) && this.focusedPane === "settings") {
-			this.activateSelectedSetting();
+		if (!matchesKey(data, Key.space) || this.focusedPane !== "settings") return false;
+		this.activateSelectedSetting();
+		this.requestRender();
+		return true;
+	}
+
+	private handleEscapeNavigation(data: string) {
+		if (!matchesKey(data, Key.escape)) return;
+		if (this.focusedPane === "settings") {
+			this.focusedPane = "categories";
 			this.requestRender();
-			return;
-		}
-
-		if (matchesKey(data, Key.escape)) {
-			if (this.focusedPane === "settings") {
-				this.focusedPane = "categories";
-				this.requestRender();
-			} else {
-				this.onDone();
-			}
+		} else {
+			this.onDone();
 		}
 	}
 
@@ -1219,11 +1234,17 @@ function getConfigurationValuesToWrite(id: string, value: string) {
 function formatSaveStatus(id: string, value: string) {
 	const writtenKeys = Object.keys(getConfigurationValuesToWrite(id, value));
 	const overriddenKeys = writtenKeys.filter((key) => process.env[key] !== undefined);
-	const reloadHint = id === "MICME_SHORTCUT" ? "/reload required for shortcut changes" : id === "MICME_PRINTABLE_SHORTCUTS" ? "/reload recommended for printable shortcuts" : "";
+	const reloadHint = getConfigurationReloadHint(id);
 
 	if (id === "MICME_TRANSCRIPTION_MODE" && overriddenKeys.length) return `Shell env still overrides ${overriddenKeys.join(", ")}`;
 	if (overriddenKeys.length) return reloadHint ? `Shell env still overrides ${overriddenKeys.join(", ")} • ${reloadHint}` : `Shell env still overrides ${overriddenKeys.join(", ")}`;
 	return reloadHint;
+}
+
+function getConfigurationReloadHint(id: string) {
+	if (id === "MICME_SHORTCUT") return "/reload required for shortcut changes";
+	if (id === "MICME_PRINTABLE_SHORTCUTS") return "/reload recommended for printable shortcuts";
+	return "";
 }
 
 function fitAnsi(text: string, width: number, ellipsis = "…") {

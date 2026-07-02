@@ -167,25 +167,49 @@ export function normalizeTranscript(text: string) {
 
 export function replacePlaceholders(template: string, values: Record<string, string>) {
 	return template.replace(/\{([A-Za-z][A-Za-z0-9]*?)(Raw)?\}/g, (placeholder, key: string, rawSuffix: string | undefined) => {
-		if (!Object.prototype.hasOwnProperty.call(values, key)) return placeholder;
+		if (!Object.hasOwn(values, key)) return placeholder;
 		const value = values[key] ?? "";
 		return rawSuffix ? value : shellQuote(value);
 	});
 }
 
 export function findExecutable(names: string[]) {
-	const dirs = (process.env.PATH || "").split(delimiter).filter(Boolean);
-	const extensions = process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+	const dirs = getPathDirectories();
+	const extensions = getExecutableExtensions();
 
 	for (const name of names) {
-		for (const dir of dirs) {
-			for (const extension of extensions) {
-				const candidate = join(dir, process.platform === "win32" && !/\.[^.]+$/.test(name) ? `${name}${extension}` : name);
-				if (isExecutableFile(candidate)) return candidate;
-			}
-		}
+		const executable = findExecutableByName(name, dirs, extensions);
+		if (executable) return executable;
 	}
 	return undefined;
+}
+
+function getPathDirectories() {
+	return (process.env.PATH || "").split(delimiter).filter(Boolean);
+}
+
+function getExecutableExtensions() {
+	return process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+}
+
+function findExecutableByName(name: string, dirs: string[], extensions: string[]) {
+	for (const dir of dirs) {
+		const executable = findExecutableInDirectory(name, dir, extensions);
+		if (executable) return executable;
+	}
+	return undefined;
+}
+
+function findExecutableInDirectory(name: string, dir: string, extensions: string[]) {
+	for (const extension of extensions) {
+		const candidate = join(dir, getExecutableFileName(name, extension));
+		if (isExecutableFile(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+function getExecutableFileName(name: string, extension: string) {
+	return process.platform === "win32" && !/\.[^.]+$/.test(name) ? `${name}${extension}` : name;
 }
 
 export function isExecutableFile(path: string) {

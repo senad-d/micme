@@ -190,13 +190,32 @@ export function isTranscribeBackend(value: string | undefined): value is Transcr
 	return value === "auto" || value === "whisper.cpp" || value === "python" || value === "custom";
 }
 
+const NAMED_TERMINAL_KEYS = new Set([
+	"escape",
+	"esc",
+	"enter",
+	"return",
+	"tab",
+	"space",
+	"backspace",
+	"delete",
+	"insert",
+	"clear",
+	"home",
+	"end",
+	"pageup",
+	"pagedown",
+	"up",
+	"down",
+	"left",
+	"right",
+]);
+const FUNCTION_TERMINAL_KEY_PATTERN = /^f\d{1,2}$/i;
+const MODIFIED_TERMINAL_KEY_PATTERN = /^(?:(?:ctrl|control|alt|option|meta|cmd|command|shift|super)\+)+.+$/i;
+
 export function getPrintableShortcuts() {
 	const shortcut = env("MICME_SHORTCUT");
-	if (shortcut !== undefined) {
-		if (shortcut && !isTerminalShortcut(shortcut)) return splitShortcutValues(shortcut);
-		const legacyConfigured = env("MICME_PRINTABLE_SHORTCUTS");
-		return legacyConfigured !== undefined ? splitShortcutValues(legacyConfigured) : [];
-	}
+	if (shortcut !== undefined) return getPrintableShortcutsForUnifiedShortcut(shortcut);
 
 	const legacyConfigured = env("MICME_PRINTABLE_SHORTCUTS");
 	if (legacyConfigured !== undefined) return splitShortcutValues(legacyConfigured);
@@ -209,7 +228,29 @@ export function matchesPrintableMicmeShortcut(data: string) {
 
 export function isTerminalShortcut(value: string) {
 	const normalized = value.trim();
-	return /^[\x20-\x7E]$/.test(normalized) || /^(?:escape|esc|enter|return|tab|space|backspace|delete|insert|clear|home|end|pageUp|pageDown|up|down|left|right|f\d{1,2}|(?:(?:ctrl|control|alt|option|meta|cmd|command|shift|super)\+)+.+)$/i.test(normalized);
+	return isPrintableAsciiCharacter(normalized) || isNamedTerminalKey(normalized) || FUNCTION_TERMINAL_KEY_PATTERN.test(normalized) || MODIFIED_TERMINAL_KEY_PATTERN.test(normalized);
+}
+
+function getPrintableShortcutsForUnifiedShortcut(shortcut: string) {
+	if (shortcut && isTerminalShortcut(shortcut)) return getConfiguredLegacyPrintableShortcuts();
+	if (shortcut) return splitShortcutValues(shortcut);
+	return getConfiguredLegacyPrintableShortcuts();
+}
+
+function getConfiguredLegacyPrintableShortcuts() {
+	const legacyConfigured = env("MICME_PRINTABLE_SHORTCUTS");
+	return legacyConfigured !== undefined ? splitShortcutValues(legacyConfigured) : [];
+}
+
+function isPrintableAsciiCharacter(value: string) {
+	const characters = Array.from(value);
+	if (characters.length !== 1) return false;
+	const codePoint = characters[0]?.codePointAt(0);
+	return codePoint !== undefined && codePoint >= 0x20 && codePoint <= 0x7E;
+}
+
+function isNamedTerminalKey(value: string) {
+	return NAMED_TERMINAL_KEYS.has(value.toLowerCase());
 }
 
 function firstShortcutValue(value: string | undefined) {

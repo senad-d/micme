@@ -60,6 +60,8 @@ const DEVICE_PANEL_DEFAULT_WIDTH = 92;
 const DEVICE_PANEL_MAX_WIDTH = 100;
 const DEVICE_PANEL_MIN_WIDTH = 36;
 const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
+const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
+const PULSE_SOURCE_LINE_PATTERN = /^([^\s\[]+)(?:\s+\[(.+)\])?$/;
 
 let deviceMessageRendererRegistered = false;
 
@@ -225,10 +227,10 @@ export function parseAvfoundationDevices(output: string): ParsedDeviceInventory 
 		}
 		if (!section) continue;
 
-		const match = line.match(/\[(\d+)\]\s+(.+)$/);
+		const match = AVFOUNDATION_DEVICE_PREFIX_PATTERN.exec(line);
 		if (!match) continue;
 		const id = sanitizeDeviceField(match[1] ?? "");
-		const name = sanitizeDeviceField(match[2] ?? "");
+		const name = sanitizeDeviceField(line.slice(match[0].length));
 		if (!name) continue;
 		inventory[section].push({ id, name });
 	}
@@ -250,7 +252,7 @@ function parsePulseAudioDevices(output: string): ParsedDeviceInventory {
 		if (!inSources || !line || /^(Cannot|Error|Failed|Unknown)\b/i.test(line)) continue;
 
 		const sourceLine = line.replace(/^\*\s*/, "");
-		const match = sourceLine.match(/^([^\s\[]+)(?:\s+\[(.+)\])?$/);
+		const match = PULSE_SOURCE_LINE_PATTERN.exec(sourceLine);
 		if (!match) continue;
 		const id = sanitizeDeviceField(match[1] ?? "");
 		if (!id || id.includes(":")) continue;
@@ -685,7 +687,7 @@ export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioP
 		const args = buildFfmpegRecorderArgs("avfoundation", input, audioPath, recordSampleRate, {
 			meter: recordMeter,
 			inputOptions: ["-drop_late_frames", getAvfoundationDropLateFrames() ? "true" : "false"],
-			audioFilters: recordSync ? timingFilters : avfoundationInputSampleRate ? [`asetrate=${avfoundationInputSampleRate}`] : [],
+			audioFilters: getAvfoundationAudioFilters(recordSync, avfoundationInputSampleRate),
 		});
 		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n" };
 	}
@@ -710,6 +712,12 @@ type FfmpegRecorderOptions = {
 	inputOptions?: string[];
 	audioFilters?: string[];
 };
+
+function getAvfoundationAudioFilters(recordSync: boolean, avfoundationInputSampleRate: number | undefined) {
+	if (recordSync) return [RECORD_TIMING_SYNC_FILTER];
+	if (avfoundationInputSampleRate) return [`asetrate=${avfoundationInputSampleRate}`];
+	return [];
+}
 
 export function buildFfmpegRecorderArgs(inputFormat: string, input: string, audioPath: string, recordSampleRate: string | undefined, options: FfmpegRecorderOptions = {}) {
 	const inputArgs = [

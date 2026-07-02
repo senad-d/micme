@@ -19,7 +19,7 @@ import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { ModelCandidate, ResolvedWhisperCppModel } from "./types.ts";
 
 const modelDownloads = new Map<string, Promise<void>>();
-const PYTHON_WHISPER_MODELS_SCRIPT = "import whisper; print('\\n'.join(whisper.available_models()))";
+const PYTHON_WHISPER_MODELS_SCRIPT = String.raw`import whisper; print('\n'.join(whisper.available_models()))`;
 
 export function discoverWhisperCppModels(cwd: string): ModelCandidate[] {
 	const candidates: ModelCandidate[] = [];
@@ -203,9 +203,11 @@ export function isEnglishOnlyWhisperModelName(modelName: string | undefined) {
 }
 
 export function isTranslationUnsupportedWhisperModelName(modelName: string | undefined) {
-	if (!modelName) return false;
-	const normalized = modelName.toLowerCase();
-	return normalized === "turbo" || normalized === "large-v3-turbo" || normalized.startsWith("large-v3-turbo-");
+	if (modelName) {
+		const normalized = modelName.toLowerCase();
+		return normalized === "turbo" || normalized === "large-v3-turbo" || normalized.startsWith("large-v3-turbo-");
+	}
+	return false;
 }
 
 export async function discoverPythonWhisperModels(): Promise<ModelCandidate[]> {
@@ -356,12 +358,12 @@ async function writeDownloadChunk(output: WriteStream, chunk: Buffer, outputFini
 }
 
 export function getWhisperCppModelNameFromPath(modelPath: string) {
-	const match = basename(modelPath).match(/^ggml-(.+)\.(?:bin|gguf)$/i);
+	const match = /^ggml-(.+)\.(?:bin|gguf)$/i.exec(basename(modelPath));
 	return match?.[1];
 }
 
 export function getDownloadableWhisperCppModelName(modelPath: string) {
-	const match = basename(modelPath).match(/^ggml-(.+)\.bin$/i);
+	const match = /^ggml-(.+)\.bin$/i.exec(basename(modelPath));
 	const modelName = match?.[1];
 	return modelName && isKnownWhisperCppModelName(modelName) ? modelName : undefined;
 }

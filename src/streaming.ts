@@ -171,26 +171,36 @@ export function extractStreamingCandidate(state: StreamingState, frameWords: str
 	const words = frameWords.filter(Boolean);
 	if (words.length === 0) return { mode: "reset", newWords: [] };
 
+	const emittedExtraction = extractEmittedStreamingCandidate(state, words);
+	if (emittedExtraction) return emittedExtraction;
+
+	const candidateExtraction = extractReferencedStreamingCandidate(state.candidateWords, words, words);
+	if (candidateExtraction) return candidateExtraction;
+
+	const hypothesisExtraction = extractReferencedStreamingCandidate(state.lastHypothesisWords, words, trimCommittedStreamingPrefix(state, words));
+	if (hypothesisExtraction) return hypothesisExtraction;
+
+	return { mode: isFirstStreamingHypothesis(state) ? "cumulative" : "incremental", newWords: words };
+}
+
+function extractEmittedStreamingCandidate(state: StreamingState, words: string[]): StreamingExtraction | undefined {
 	const emittedOverlap = streamingWordOverlap(state.emittedWords.slice(-160), words);
 	if (emittedOverlap === words.length) return { mode: "duplicate", newWords: [] };
 	if (emittedOverlap > 0) return { mode: "cumulative", newWords: words.slice(emittedOverlap) };
+	return undefined;
+}
 
-	if (state.candidateWords.length > 0) {
-		if (streamingWordsEqual(state.candidateWords, words)) return { mode: "duplicate", newWords: words };
-		if (isStreamingWordsPrefix(state.candidateWords, words)) return { mode: "cumulative", newWords: words };
-		if (streamingWordOverlap(state.candidateWords, words) > 0) return { mode: "rolling", newWords: words };
-		if (looksLikeStreamingCorrection(state.candidateWords, words)) return { mode: "reset", newWords: words };
-	}
+function extractReferencedStreamingCandidate(referenceWords: string[], words: string[], prefixWords: string[]): StreamingExtraction | undefined {
+	if (referenceWords.length === 0) return undefined;
+	if (streamingWordsEqual(referenceWords, words)) return { mode: "duplicate", newWords: words };
+	if (isStreamingWordsPrefix(referenceWords, words)) return { mode: "cumulative", newWords: prefixWords };
+	if (streamingWordOverlap(referenceWords, words) > 0) return { mode: "rolling", newWords: words };
+	if (looksLikeStreamingCorrection(referenceWords, words)) return { mode: "reset", newWords: words };
+	return undefined;
+}
 
-	if (state.lastHypothesisWords.length > 0) {
-		if (streamingWordsEqual(state.lastHypothesisWords, words)) return { mode: "duplicate", newWords: words };
-		if (isStreamingWordsPrefix(state.lastHypothesisWords, words)) return { mode: "cumulative", newWords: trimCommittedStreamingPrefix(state, words) };
-		if (streamingWordOverlap(state.lastHypothesisWords, words) > 0) return { mode: "rolling", newWords: words };
-		if (looksLikeStreamingCorrection(state.lastHypothesisWords, words)) return { mode: "reset", newWords: words };
-	}
-
-	const isFirstHypothesis = state.emittedWords.length === 0 && state.candidateWords.length === 0 && state.lastHypothesisWords.length === 0;
-	return { mode: isFirstHypothesis ? "cumulative" : "incremental", newWords: words };
+function isFirstStreamingHypothesis(state: StreamingState) {
+	return state.emittedWords.length === 0 && state.candidateWords.length === 0 && state.lastHypothesisWords.length === 0;
 }
 
 export function isLikelyStreamingHallucination(text: string) {

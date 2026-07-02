@@ -40,11 +40,13 @@ import {
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import { sanitizeTerminalOutput } from "./terminal-text.ts";
 import { transcribe } from "./transcription.ts";
-import type { Recording } from "./types.ts";
+import type { Recording, ResolvedTranscriptionPlan } from "./types.ts";
 
 const MICME_ACTIONS = ["devices", "conf", "last", "audio", "help"] as const;
 
 const SHORTCUT_REPEAT_GUARD_MS = 1_000;
+
+type StreamingTranscriptionPlan = ResolvedTranscriptionPlan & { effectiveBackend: "whisper.cpp"; binary: string; modelPath: string };
 
 let recording: Recording | undefined;
 let lastTranscript = "";
@@ -260,55 +262,20 @@ async function stopAndTranscribe(ctx: ExtensionContext, pi: ExtensionAPI) {
 }
 
 async function startStreamingTranscription(ctx: ExtensionContext, stopHint = getShortcut()) {
-	const plan = resolveTranscriptionPlan({ transcriptionMode: "stream" });
-	if (plan.effectiveBackend !== "whisper.cpp" || !plan.binary || !plan.modelPath) {
-		throw new Error(formatTranscriptionPlan(plan));
-	}
-
+	const plan = resolveStreamingTranscriptionPlan();
 	await ensureWhisperCppModel(plan.modelPath, ctx, { allowDownload: plan.modelDownloadable !== false });
 
 	const tempDir = await createRecordingDirectory(ctx.cwd, envFlag("MICME_KEEP_AUDIO"), "micme-stream-");
 	let active: Recording | undefined;
 
 	try {
-		const command = buildWhisperStreamCommand(plan.binary, plan.modelPath, tempDir);
-		const clipAudioPath = getStreamFinalizeWithClip() ? join(tempDir, "raw.wav") : undefined;
-		const clipCommand = clipAudioPath ? buildRecorderCommand(clipAudioPath) : undefined;
-		active = spawnRecording(command, "", tempDir);
-		const streamRecording = active;
-		const baseText = ctx.ui.getEditorText();
-		streamRecording.streaming = {
-			baseText,
-			previewText: baseText,
-			outputBuffer: "",
-			lastText: "",
-			emittedWords: [],
-			candidateWords: [],
-			lastHypothesisWords: [],
-			startedAt: Date.now(),
-		};
-		if (clipCommand && clipAudioPath) {
-			streamRecording.clipRecording = spawnRecording(clipCommand, clipAudioPath, tempDir);
-		}
+		const streamRecording = spawnWhisperStreamingRecording(plan, tempDir);
+		active = streamRecording;
+		initializeStreamingRecording(ctx, streamRecording);
+		startOptionalClipRecording(streamRecording, tempDir);
 		recording = streamRecording;
 
-		streamRecording.process.stdout?.on("data", (chunk: Buffer | string) => {
-			const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-			handleStreamingOutput(ctx, streamRecording, text);
-		});
-
-		const [earlyExit, recorderEarlyExit] = await Promise.all([
-			raceWithTimeout(streamRecording.exitPromise, RECORDER_STARTUP_GRACE_MS),
-			streamRecording.clipRecording ? raceWithTimeout(streamRecording.clipRecording.exitPromise, RECORDER_STARTUP_GRACE_MS) : Promise.resolve(undefined),
-		]);
-		if (earlyExit || recorderEarlyExit) {
-			if (streamRecording.stopRequested || streamRecording.clipRecording?.stopRequested) return;
-			const failed = earlyExit ? streamRecording : streamRecording.clipRecording;
-			const stderr = failed ? formatProcessOutput(failed.stderr()) : "";
-			const suffix = stderr ? `\n${stderr}` : "";
-			throw new Error(`Micme streaming exited early (${formatExit(earlyExit ?? recorderEarlyExit!)}).${suffix}`);
-		}
-
+		await ensureStreamingRecorderStarted(streamRecording);
 		ctx.ui.setStatus(STATUS_KEY, `● streaming (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
 		startRecordingWidget(ctx, streamRecording);
 	} catch (error) {
@@ -317,68 +284,163 @@ async function startStreamingTranscription(ctx: ExtensionContext, stopHint = get
 	}
 }
 
+function resolveStreamingTranscriptionPlan(): StreamingTranscriptionPlan {
+	const plan = resolveTranscriptionPlan({ transcriptionMode: "stream" });
+	if (plan.effectiveBackend !== "whisper.cpp" || !plan.binary || !plan.modelPath) {
+		throw new Error(formatTranscriptionPlan(plan));
+	}
+	return plan as StreamingTranscriptionPlan;
+}
+
+function spawnWhisperStreamingRecording(plan: StreamingTranscriptionPlan, tempDir: string) {
+	const command = buildWhisperStreamCommand(plan.binary, plan.modelPath, tempDir);
+	return spawnRecording(command, "", tempDir);
+}
+
+function initializeStreamingRecording(ctx: ExtensionContext, streamRecording: Recording) {
+	const baseText = ctx.ui.getEditorText();
+	streamRecording.streaming = {
+		baseText,
+		previewText: baseText,
+		outputBuffer: "",
+		lastText: "",
+		emittedWords: [],
+		candidateWords: [],
+		lastHypothesisWords: [],
+		startedAt: Date.now(),
+	};
+	streamRecording.process.stdout?.on("data", (chunk: Buffer | string) => {
+		const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+		handleStreamingOutput(ctx, streamRecording, text);
+	});
+}
+
+function startOptionalClipRecording(streamRecording: Recording, tempDir: string) {
+	const clipAudioPath = getStreamFinalizeWithClip() ? join(tempDir, "raw.wav") : undefined;
+	if (!clipAudioPath) return;
+	streamRecording.clipRecording = spawnRecording(buildRecorderCommand(clipAudioPath), clipAudioPath, tempDir);
+}
+
+async function ensureStreamingRecorderStarted(streamRecording: Recording) {
+	const [earlyExit, recorderEarlyExit] = await Promise.all([
+		raceWithTimeout(streamRecording.exitPromise, RECORDER_STARTUP_GRACE_MS),
+		streamRecording.clipRecording ? raceWithTimeout(streamRecording.clipRecording.exitPromise, RECORDER_STARTUP_GRACE_MS) : Promise.resolve(undefined),
+	]);
+	const failedExit = earlyExit ?? recorderEarlyExit;
+	if (!failedExit) return;
+	if (streamRecording.stopRequested || streamRecording.clipRecording?.stopRequested) return;
+	const failed = earlyExit ? streamRecording : streamRecording.clipRecording;
+	const stderr = failed ? formatProcessOutput(failed.stderr()) : "";
+	const suffix = stderr ? `\n${stderr}` : "";
+	throw new Error(`Micme streaming exited early (${formatExit(failedExit)}).${suffix}`);
+}
+
 async function stopStreamingTranscription(ctx: ExtensionContext, pi: ExtensionAPI, active: Recording) {
 	const state = active.streaming;
-	let keepTempDir = false;
-	const clipStopPromise = active.clipRecording ? stopRecorder(active.clipRecording).then(() => undefined, (error: unknown) => error) : undefined;
+	const clipStopPromise = stopClipRecording(active);
 
-	if (state) {
-		drainStreamingOutput(ctx, active, false);
-		renderStreamingPreview(ctx, state, false);
-		clearStreamingFlush(state);
-	}
-
+	prepareStreamingStop(ctx, active, state);
 	await stopProcess(active);
 
-	if (state) {
-		drainStreamingOutput(ctx, active, true);
-		showStreamingDiagnostics(ctx, state);
-		if (!active.clipRecording) {
-			flushPendingStreamingWords(ctx, state);
-			const liveTranscript = normalizeTranscript(getStreamingTranscript(state));
-			if (liveTranscript) {
-				lastTranscript = liveTranscript;
-				if (envFlag("MICME_AUTO_SUBMIT")) {
-					ctx.ui.setEditorText(state.baseText);
-					await pasteOrSubmitTranscript(ctx, pi, liveTranscript);
-				}
-			}
-		} else {
-			renderStreamingPreview(ctx, state, false);
-		}
-		clearStreamingFlush(state);
-	}
-
-	if (active.clipRecording && state) {
-		ctx.ui.setStatus(STATUS_KEY, "finalizing stream…");
-		try {
-			const clipStopError = await clipStopPromise;
-			if (clipStopError) throw clipStopError;
-			const preparedAudioPath = await prepareAudioForTranscription(active.clipRecording.audioPath, active.tempDir);
-			await validateRecordedAudio(preparedAudioPath);
-			const transcript = await transcribe(preparedAudioPath, active.tempDir, ctx);
-			const normalized = normalizeTranscript(transcript);
-			if (!normalized) throw new Error("Micme did not receive any final transcript text.");
-
-			lastTranscript = normalized;
-			await pasteOrSubmitFinalStreamingTranscript(ctx, pi, state, normalized);
-			if (envFlag("MICME_KEEP_AUDIO")) {
-				lastAudioDir = active.tempDir;
-				keepTempDir = true;
-			}
-		} catch (error) {
-			flushPendingStreamingWords(ctx, state);
-			const liveTranscript = normalizeTranscript(getStreamingTranscript(state));
-			if (liveTranscript) lastTranscript = liveTranscript;
-			lastAudioDir = active.tempDir;
-			keepTempDir = true;
-			const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error));
-			ctx.ui.notify(`Micme kept the live append-only stream transcript because final clip transcription failed: ${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`, "warning");
-		}
-	}
-
+	const keepTempDir = state ? await completeStreamingStop(ctx, pi, active, state, clipStopPromise) : false;
 	if (!keepTempDir) await cleanup(active.tempDir).catch(() => undefined);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
+}
+
+function stopClipRecording(active: Recording) {
+	return active.clipRecording ? stopRecorder(active.clipRecording).then(() => undefined, (error: unknown) => error) : undefined;
+}
+
+function prepareStreamingStop(ctx: ExtensionContext, active: Recording, state: Recording["streaming"]) {
+	if (!state) return;
+	drainStreamingOutput(ctx, active, false);
+	renderStreamingPreview(ctx, state, false);
+	clearStreamingFlush(state);
+}
+
+async function completeStreamingStop(
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+	active: Recording,
+	state: NonNullable<Recording["streaming"]>,
+	clipStopPromise: ReturnType<typeof stopClipRecording>,
+) {
+	drainStreamingOutput(ctx, active, true);
+	showStreamingDiagnostics(ctx, state);
+	const clipRecording = active.clipRecording;
+	if (!clipRecording) {
+		await useLiveStreamingTranscript(ctx, pi, state);
+		clearStreamingFlush(state);
+		return false;
+	}
+
+	renderStreamingPreview(ctx, state, false);
+	clearStreamingFlush(state);
+	return finalizeStreamingClip(ctx, pi, active, clipRecording, state, clipStopPromise);
+}
+
+async function useLiveStreamingTranscript(ctx: ExtensionContext, pi: ExtensionAPI, state: NonNullable<Recording["streaming"]>) {
+	flushPendingStreamingWords(ctx, state);
+	const liveTranscript = normalizeTranscript(getStreamingTranscript(state));
+	if (!liveTranscript) return;
+
+	lastTranscript = liveTranscript;
+	if (!envFlag("MICME_AUTO_SUBMIT")) return;
+	ctx.ui.setEditorText(state.baseText);
+	await pasteOrSubmitTranscript(ctx, pi, liveTranscript);
+}
+
+async function finalizeStreamingClip(
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+	active: Recording,
+	clipRecording: Recording,
+	state: NonNullable<Recording["streaming"]>,
+	clipStopPromise: ReturnType<typeof stopClipRecording>,
+) {
+	ctx.ui.setStatus(STATUS_KEY, "finalizing stream…");
+	try {
+		await transcribeFinalStreamingClip(ctx, pi, active, clipRecording, state, clipStopPromise);
+		return keepCompletedStreamingClipAudio(active);
+	} catch (error) {
+		handleFinalStreamingClipError(ctx, active, state, error);
+		return true;
+	}
+}
+
+async function transcribeFinalStreamingClip(
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+	active: Recording,
+	clipRecording: Recording,
+	state: NonNullable<Recording["streaming"]>,
+	clipStopPromise: ReturnType<typeof stopClipRecording>,
+) {
+	const clipStopError = clipStopPromise ? await clipStopPromise : undefined;
+	if (clipStopError) throw clipStopError;
+	const preparedAudioPath = await prepareAudioForTranscription(clipRecording.audioPath, active.tempDir);
+	await validateRecordedAudio(preparedAudioPath);
+	const transcript = await transcribe(preparedAudioPath, active.tempDir, ctx);
+	const normalized = normalizeTranscript(transcript);
+	if (!normalized) throw new Error("Micme did not receive any final transcript text.");
+
+	lastTranscript = normalized;
+	await pasteOrSubmitFinalStreamingTranscript(ctx, pi, state, normalized);
+}
+
+function keepCompletedStreamingClipAudio(active: Recording) {
+	if (!envFlag("MICME_KEEP_AUDIO")) return false;
+	lastAudioDir = active.tempDir;
+	return true;
+}
+
+function handleFinalStreamingClipError(ctx: ExtensionContext, active: Recording, state: NonNullable<Recording["streaming"]>, error: unknown) {
+	flushPendingStreamingWords(ctx, state);
+	const liveTranscript = normalizeTranscript(getStreamingTranscript(state));
+	if (liveTranscript) lastTranscript = liveTranscript;
+	lastAudioDir = active.tempDir;
+	const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error));
+	ctx.ui.notify(`Micme kept the live append-only stream transcript because final clip transcription failed: ${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`, "warning");
 }
 
 
