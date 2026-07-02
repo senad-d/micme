@@ -24,12 +24,31 @@ function withEnv(values, fn) {
 	}
 }
 
+function withPlatform(platform, fn) {
+	const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", { value: platform, configurable: true });
+	try {
+		return fn();
+	} finally {
+		Object.defineProperty(process, "platform", descriptor);
+	}
+}
+
 test("replacePlaceholders does not expand placeholders introduced by values", () => {
 	const audioPath = "/tmp/{tempDir}/raw.wav";
 	const tempDir = "/tmp/micme-real-dir";
 	const output = replacePlaceholders("cmd {audio} {audioRaw} {tempDir} {missing}", { audio: audioPath, tempDir });
 
 	assert.equal(output, `cmd ${shellQuote(audioPath)} ${audioPath} ${shellQuote(tempDir)} {missing}`);
+});
+
+test("shellQuote escapes platform quote characters byte-for-byte", () => {
+	withPlatform("win32", () => {
+		assert.equal(shellQuote('a"b'), String.raw`"a\"b"`);
+	});
+	withPlatform("linux", () => {
+		assert.equal(shellQuote("a'b"), String.raw`'a'\''b'`);
+	});
 });
 
 test("formatProcessOutput strips terminal control sequences and falls back to safe output", () => {

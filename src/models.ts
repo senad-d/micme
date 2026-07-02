@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createWriteStream, existsSync, readdirSync, statSync, type WriteStream } from "node:fs";
 import { mkdir, rename, unlink } from "node:fs/promises";
@@ -177,7 +178,7 @@ function getSiblingWhisperCppModelPath(modelPath: string, modelName: string) {
 }
 
 function getTranslationFallbackSource(rawModelName: string, modelName: string) {
-	return rawModelName !== modelName ? rawModelName : undefined;
+	return rawModelName === modelName ? undefined : rawModelName;
 }
 
 export function getPythonWhisperModelName() {
@@ -304,7 +305,7 @@ export async function downloadFile(url: string, targetPath: string, ctx?: Extens
 	assertDownloadTargetIsUsable(targetPath, "Download target");
 	if (isRegularFile(targetPath)) return;
 	await mkdir(dirname(targetPath), { recursive: true });
-	const tempPath = `${targetPath}.download-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+	const tempPath = `${targetPath}.download-${process.pid}-${Date.now()}-${randomUUID()}`;
 
 	const response = await fetch(url);
 	if (!response.ok || !response.body) {

@@ -130,8 +130,8 @@ export function readStreamingOutputFrames(state: StreamingState, chunk: string, 
 	const frames: string[] = [];
 
 	while (true) {
-		const match = state.outputBuffer.match(/[\r\n]/);
-		if (!match || match.index === undefined) break;
+		const match = /[\r\n]/.exec(state.outputBuffer);
+		if (match?.index === undefined) break;
 		frames.push(state.outputBuffer.slice(0, match.index));
 		state.outputBuffer = state.outputBuffer.slice(match.index + 1).replace(/^[\r\n]+/, "");
 	}
@@ -145,9 +145,9 @@ export function readStreamingOutputFrames(state: StreamingState, chunk: string, 
 }
 
 export function sanitizeStreamingText(text: string) {
-	const cleaned = stripStreamingControls(text)
-		.replace(/<\|[^|]*\|>/g, " ")
-		.replace(/^\s*#+\s*Transcription\s+\d+\s+END\s*$/i, " ")
+	const textWithoutTokens = stripWhisperControlTokens(stripStreamingControls(text));
+	const textWithoutHeading = removeTranscriptionEndHeading(textWithoutTokens);
+	const cleaned = textWithoutHeading
 		.replace(/\[[^\]]*\]/g, " ")
 		.replace(/\([^)]*\)/g, " ")
 		.replace(/\s+/g, " ")
@@ -157,6 +157,59 @@ export function sanitizeStreamingText(text: string) {
 
 export function stripStreamingControls(text: string) {
 	return sanitizeTerminalText(text);
+}
+
+function stripWhisperControlTokens(text: string) {
+	let cleaned = "";
+	let index = 0;
+
+	while (index < text.length) {
+		const startIndex = text.indexOf("<|", index);
+		if (startIndex === -1) return `${cleaned}${text.slice(index)}`;
+
+		const endIndex = text.indexOf("|>", startIndex + 2);
+		if (endIndex === -1) return `${cleaned}${text.slice(index)}`;
+
+		const tokenBody = text.slice(startIndex + 2, endIndex);
+		if (tokenBody.includes("|")) {
+			cleaned = `${cleaned}${text.slice(index, startIndex + 2)}`;
+			index = startIndex + 2;
+			continue;
+		}
+
+		cleaned = `${cleaned}${text.slice(index, startIndex)} `;
+		index = endIndex + 2;
+	}
+
+	return cleaned;
+}
+
+function removeTranscriptionEndHeading(text: string) {
+	return isTranscriptionEndHeading(text) ? " " : text;
+}
+
+function isTranscriptionEndHeading(text: string) {
+	const trimmed = text.trim();
+	if (!trimmed.startsWith("#")) return false;
+
+	let index = 0;
+	while (trimmed.at(index) === "#") index++;
+	while (isWhitespaceCharacter(trimmed.at(index))) index++;
+
+	const words = trimmed.slice(index).split(/\s+/u);
+	return words.length === 3 && words[0].toLowerCase() === "transcription" && isAsciiDigits(words[1]) && words[2].toLowerCase() === "end";
+}
+
+function isAsciiDigits(value: string) {
+	if (!value) return false;
+	for (const character of value) {
+		if (character < "0" || character > "9") return false;
+	}
+	return true;
+}
+
+function isWhitespaceCharacter(character: string | undefined) {
+	return character !== undefined && character.trim() === "";
 }
 
 export function diffStreamingText(previous: string, current: string) {
@@ -216,7 +269,17 @@ export function shouldResetStreamingPending(text: string) {
 	const cleaned = stripStreamingControls(text);
 	if (!cleaned) return false;
 	if (isLikelyStreamingHallucination(cleaned)) return true;
-	return /^\[[^\]]+\]$/.test(cleaned) || /^\([^)]*\)$/.test(cleaned);
+	return isBracketedStreamingResetFrame(cleaned) || isParenthesizedStreamingResetFrame(cleaned);
+}
+
+function isBracketedStreamingResetFrame(text: string) {
+	if (text.length <= 2) return false;
+	return text.startsWith("[") && text.endsWith("]") && !text.slice(1, -1).includes("]");
+}
+
+function isParenthesizedStreamingResetFrame(text: string) {
+	if (text.length < 2) return false;
+	return text.startsWith("(") && text.endsWith(")") && !text.slice(1, -1).includes(")");
 }
 
 export function queueStableStreamingWords(ctx: ExtensionContext, state: StreamingState, currentWords: string[], mode: StreamingFrameMode = "cumulative") {
@@ -383,7 +446,13 @@ function appendTranscriptToBaseText(baseText: string, transcript: string, traili
 }
 
 function needsStreamingSeparator(baseText: string, transcript: string) {
-	return Boolean(baseText && transcript && !/\s$/u.test(baseText) && !/^[\s.,!?;:)}\]]/u.test(transcript));
+	if (!baseText || !transcript) return false;
+	return !isWhitespaceCharacter(baseText.at(-1)) && !isStreamingLeadingSeparator(transcript.at(0));
+}
+
+function isStreamingLeadingSeparator(character: string | undefined) {
+	if (isWhitespaceCharacter(character)) return true;
+	return character !== undefined && ".,!?;:)}]".includes(character);
 }
 
 function queueRollingStreamingWords(state: StreamingState, words: string[]) {

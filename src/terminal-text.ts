@@ -1,5 +1,5 @@
-const ESCAPE_CONTROL_CHARACTER = String.fromCharCode(0x1B);
-const BELL_CONTROL_CHARACTER = String.fromCharCode(0x07);
+const ESCAPE_CONTROL_CHARACTER = String.fromCodePoint(0x1B);
+const BELL_CONTROL_CHARACTER = String.fromCodePoint(0x07);
 const NON_PRINTABLE_CONTROL_CHARACTER_RANGES = [
 	[0x00, 0x08],
 	[0x0B, 0x0C],
@@ -7,14 +7,14 @@ const NON_PRINTABLE_CONTROL_CHARACTER_RANGES = [
 	[0x7F, 0x7F],
 ] as const;
 const OPERATING_SYSTEM_COMMAND_SEQUENCE_PATTERN = new RegExp(
-	`${ESCAPE_CONTROL_CHARACTER}\\][^${BELL_CONTROL_CHARACTER}]*(?:${BELL_CONTROL_CHARACTER}|${ESCAPE_CONTROL_CHARACTER}\\\\)`,
+	String.raw`${ESCAPE_CONTROL_CHARACTER}\][^${BELL_CONTROL_CHARACTER}]*(?:${BELL_CONTROL_CHARACTER}|${ESCAPE_CONTROL_CHARACTER}\\)`,
 	"g",
 );
 const TERMINAL_STRING_CONTROL_SEQUENCE_PATTERN = new RegExp(
-	`${ESCAPE_CONTROL_CHARACTER}[PX^_][\\s\\S]*?(?:${BELL_CONTROL_CHARACTER}|${ESCAPE_CONTROL_CHARACTER}\\\\)`,
+	String.raw`${ESCAPE_CONTROL_CHARACTER}[PX^_][\s\S]*?(?:${BELL_CONTROL_CHARACTER}|${ESCAPE_CONTROL_CHARACTER}\\)`,
 	"g",
 );
-const CONTROL_SEQUENCE_INTRODUCER_PATTERN = new RegExp(`${ESCAPE_CONTROL_CHARACTER}\\[[0-?]*[ -/]*[@-~]`, "g");
+const CONTROL_SEQUENCE_INTRODUCER_PATTERN = new RegExp(String.raw`${ESCAPE_CONTROL_CHARACTER}\[[0-?]*[ -/]*[@-~]`, "g");
 const ESCAPE_SEQUENCE_PATTERN = new RegExp(`${ESCAPE_CONTROL_CHARACTER}[ -/]*[@-~]`, "g");
 const NON_PRINTABLE_CONTROL_CHARACTER_PATTERN = new RegExp(`[${NON_PRINTABLE_CONTROL_CHARACTER_RANGES.map(formatControlCharacterRange).join("")}]`, "g");
 
@@ -29,8 +29,8 @@ export function stripTerminalControlSequences(value: string) {
 
 function formatControlCharacterRange(range: readonly [number, number]) {
 	const [first, last] = range;
-	const firstCharacter = String.fromCharCode(first);
-	const lastCharacter = String.fromCharCode(last);
+	const firstCharacter = String.fromCodePoint(first);
+	const lastCharacter = String.fromCodePoint(last);
 	return first === last ? firstCharacter : `${firstCharacter}-${lastCharacter}`;
 }
 

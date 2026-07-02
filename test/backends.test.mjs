@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const { resolveTranscriptionPlan } = await import("../src/backends.ts");
-const { getPrintableShortcuts, getShortcutSettingValue, getTerminalShortcut, getTranscribeBackend, getTranslateToEnglishLanguage } = await import("../src/config.ts");
+const { expandEnvReferences, getPrintableShortcuts, getShortcutSettingValue, getTerminalShortcut, getTranscribeBackend, getTranslateToEnglishLanguage } = await import("../src/config.ts");
 const { getPythonWhisperModelName, getPythonWhisperModelQueryArgs, resolveWhisperCppModel } = await import("../src/models.ts");
 
 const fakeWhisperCppModel = {
@@ -93,6 +93,12 @@ test("translation to English is a single off-or-language option", () => {
 	});
 	withEnv({ MICME_TRANSLATE_TO_ENGLISH: "bs" }, () => {
 		assert.equal(getTranslateToEnglishLanguage(), "bs");
+	});
+});
+
+test("environment references expand braced and bare names with word characters", () => {
+	withEnv({ MICME_TEST_BRACED: "from-env", MICME_TEST_NOT_SET: undefined }, () => {
+		assert.equal(expandEnvReferences("${MICME_TEST_BRACED}/$MICME_TEST_BARE/$MICME_TEST_NOT_SET", { MICME_TEST_BARE: "from-config" }), "from-env/from-config/");
 	});
 });
 

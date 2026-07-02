@@ -30,7 +30,12 @@ class MicmeEditor extends CustomEditor {
 
 function handleMicmeEditorInput(data: string, handlers: MicmeEditorInputHandlers) {
 	const printable = decodeKittyPrintable(data);
-	const printableShortcut = matchesPrintableMicmeShortcut(data) ? data : printable !== undefined && matchesPrintableMicmeShortcut(printable) ? printable : undefined;
+	let printableShortcut: string | undefined;
+	if (matchesPrintableMicmeShortcut(data)) {
+		printableShortcut = data;
+	} else if (printable !== undefined && matchesPrintableMicmeShortcut(printable)) {
+		printableShortcut = printable;
+	}
 	if (printableShortcut !== undefined) {
 		if (!isPrintableShortcutAutoRepeat(printableShortcut)) void handlers.toggle();
 		return true;

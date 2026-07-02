@@ -61,7 +61,9 @@ export function spawnRecording(command: CommandSpec, audioPath: string, tempDir:
 }
 
 export async function stopProcess(active: Recording) {
-	if (!active.isSettled()) {
+	if (active.isSettled()) {
+		await active.exitPromise;
+	} else {
 		active.stopRequested = true;
 		let exit: ExitResult | undefined;
 		if (sendStopInput(active)) {
@@ -79,8 +81,6 @@ export async function stopProcess(active: Recording) {
 			active.process.kill("SIGKILL");
 			await active.exitPromise;
 		}
-	} else {
-		await active.exitPromise;
 	}
 }
 
@@ -156,7 +156,7 @@ export function runProcess(command: string, args: string[], timeoutMs: number): 
 
 export function normalizeTranscript(text: string) {
 	return stripTerminalControlSequences(text)
-		.replace(/\r\n/g, "\n")
+		.replaceAll("\r\n", "\n")
 		.split("\n")
 		.map((line) => line.trim())
 		.filter(Boolean)
@@ -271,7 +271,9 @@ export function formatRunExit(result: RunResult) {
 
 export function shellQuote(value: string) {
 	if (process.platform === "win32") {
-		return `"${value.replace(/"/g, '\\"')}"`;
+		const escapedValue = value.replaceAll('"', String.raw`\"`);
+		return `"${escapedValue}"`;
 	}
-	return `'${value.replace(/'/g, `'\\''`)}'`;
+	const escapedValue = value.replaceAll("'", String.raw`'\''`);
+	return `'${escapedValue}'`;
 }

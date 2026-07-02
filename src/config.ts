@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -93,7 +94,7 @@ export async function writeMicmeConfigValues(values: Record<string, string | und
 	}
 
 	await mkdir(configDir, { recursive: true });
-	const tempPath = join(configDir, `.micme.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+	const tempPath = join(configDir, `.micme.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
 	try {
 		await writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 		await rename(tempPath, configPath);
@@ -142,7 +143,7 @@ export function expandConfigPath(value: string) {
 
 export function expandEnvReferences(value: string, configValues: Record<string, string>) {
 	const withHome = value.startsWith("~/") && process.env.HOME ? `${process.env.HOME}${value.slice(1)}` : value;
-	return withHome.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_match, braced: string | undefined, bare: string | undefined) => {
+	return withHome.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (_match, braced: string | undefined, bare: string | undefined) => {
 		const key = braced ?? bare ?? "";
 		return process.env[key] ?? configValues[key] ?? "";
 	});
@@ -238,7 +239,7 @@ function getPrintableShortcutsForUnifiedShortcut(shortcut: string) {
 
 function getConfiguredLegacyPrintableShortcuts() {
 	const legacyConfigured = env("MICME_PRINTABLE_SHORTCUTS");
-	return legacyConfigured !== undefined ? splitShortcutValues(legacyConfigured) : [];
+	return legacyConfigured === undefined ? [] : splitShortcutValues(legacyConfigured);
 }
 
 function isPrintableAsciiCharacter(value: string) {

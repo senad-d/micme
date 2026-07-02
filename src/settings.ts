@@ -222,7 +222,7 @@ class ConfigurationScreen implements Component {
 	private readonly requestRender: () => void;
 	private focusedPane: FocusedPane = "categories";
 	private categoryIndex = 0;
-	private selectedByCategory = new Map<ConfigurationCategoryId, number>();
+	private readonly selectedByCategory = new Map<ConfigurationCategoryId, number>();
 	private searchActive = false;
 	private searchQuery = "";
 	private selectedSearchIndex = 0;
@@ -365,10 +365,12 @@ class ConfigurationScreen implements Component {
 		const paneHeight = Math.max(categoryLines.length, settingsLines.length, 8);
 		const lines: string[] = [];
 
-		lines.push(this.renderTitleBorder(width, this.currentHeaderLabel()));
-		lines.push(this.renderFullLine(width, this.renderConfigSourceText(width)));
-		lines.push(this.renderFullLine(width, "↑↓ move  Tab pane  Enter edit  / search  Esc back  q quit"));
-		lines.push(this.renderPaneSeparator(width, leftWidth, rightWidth, "top"));
+		lines.push(
+			this.renderTitleBorder(width, this.currentHeaderLabel()),
+			this.renderFullLine(width, this.renderConfigSourceText(width)),
+			this.renderFullLine(width, "↑↓ move  Tab pane  Enter edit  / search  Esc back  q quit"),
+			this.renderPaneSeparator(width, leftWidth, rightWidth, "top"),
+		);
 
 		for (let index = 0; index < paneHeight; index++) {
 			const left = categoryLines[index] ?? "";
@@ -376,9 +378,11 @@ class ConfigurationScreen implements Component {
 			lines.push(this.renderPaneLine(left, right, leftWidth, rightWidth));
 		}
 
-		lines.push(this.renderPaneSeparator(width, leftWidth, rightWidth, "bottom"));
-		lines.push(this.renderFullLine(width, this.renderFooterText()));
-		lines.push(this.colorBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`, width));
+		lines.push(
+			this.renderPaneSeparator(width, leftWidth, rightWidth, "bottom"),
+			this.renderFullLine(width, this.renderFooterText()),
+			this.colorBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`, width),
+		);
 		return lines.map((line) => truncateToWidth(line, width, ""));
 	}
 
@@ -390,14 +394,18 @@ class ConfigurationScreen implements Component {
 		const bodyLines = showCategories ? this.renderCategoryPaneLines(innerWidth) : this.renderSettingsPaneLines(innerWidth);
 		const lines: string[] = [];
 
-		lines.push(this.renderTitleBorder(width, this.currentHeaderLabel()));
-		lines.push(this.renderFullLine(width, this.renderConfigSourceText(width)));
-		lines.push(this.renderFullLine(width, showCategories ? "↑↓ category  Enter open  / search  q quit" : "↑↓ move  Enter edit  Esc categories  / search  q quit"));
-		lines.push(this.colorBorder(`├${"─".repeat(innerWidth)}┤`, width));
+		lines.push(
+			this.renderTitleBorder(width, this.currentHeaderLabel()),
+			this.renderFullLine(width, this.renderConfigSourceText(width)),
+			this.renderFullLine(width, showCategories ? "↑↓ category  Enter open  / search  q quit" : "↑↓ move  Enter edit  Esc categories  / search  q quit"),
+			this.colorBorder(`├${"─".repeat(innerWidth)}┤`, width),
+		);
 		for (const line of bodyLines) lines.push(this.renderFullLine(width, line));
-		lines.push(this.colorBorder(`├${"─".repeat(innerWidth)}┤`, width));
-		lines.push(this.renderFullLine(width, this.renderFooterText()));
-		lines.push(this.colorBorder(`╰${"─".repeat(innerWidth)}╯`, width));
+		lines.push(
+			this.colorBorder(`├${"─".repeat(innerWidth)}┤`, width),
+			this.renderFullLine(width, this.renderFooterText()),
+			this.colorBorder(`╰${"─".repeat(innerWidth)}╯`, width),
+		);
 		return lines.map((line) => truncateToWidth(line, width, ""));
 	}
 
@@ -462,10 +470,12 @@ class ConfigurationScreen implements Component {
 		return CONFIGURATION_CATEGORIES.map((category, index) => {
 			const selected = index === this.categoryIndex;
 			const focused = this.focusedPane === "categories";
+			const selectedColor = focused ? "accent" : "muted";
 			const prefix = selected ? "▶ " : "  ";
-			const styledPrefix = selected ? this.theme.fg(focused ? "accent" : "muted", prefix) : prefix;
+			const styledPrefix = selected ? this.theme.fg(selectedColor, prefix) : prefix;
 			const label = fitAnsi(category.label, Math.max(0, width - 2));
-			const styledLabel = selected ? this.theme.fg(focused ? "accent" : "muted", focused ? this.theme.bold(label) : label) : this.theme.fg("dim", label);
+			const selectedLabel = focused ? this.theme.bold(label) : label;
+			const styledLabel = selected ? this.theme.fg(selectedColor, selectedLabel) : this.theme.fg("dim", label);
 			return padRightAnsi(`${styledPrefix}${styledLabel}`, width);
 		});
 	}
@@ -495,13 +505,15 @@ class ConfigurationScreen implements Component {
 
 	private renderSettingLine(item: ConfigurationItem, selected: boolean, width: number) {
 		const focused = this.focusedPane === "settings";
+		const selectedColor = focused ? "accent" : "muted";
 		const prefix = selected ? "▶ " : "  ";
-		const styledPrefix = selected ? this.theme.fg(focused ? "accent" : "muted", prefix) : prefix;
+		const styledPrefix = selected ? this.theme.fg(selectedColor, prefix) : prefix;
 		const valueWidth = Math.max(0, Math.min(28, Math.floor(width * 0.4)));
 		const labelWidth = Math.max(1, width - 2 - 1 - valueWidth);
 		const labelText = this.hasSearchQuery() ? `${item.label} (${this.getCategory(item.categoryId).label})` : item.label;
 		const label = fitAnsi(labelText, labelWidth);
-		const styledLabel = selected ? this.theme.fg(focused ? "accent" : "muted", focused ? this.theme.bold(label) : label) : label;
+		const selectedLabel = focused ? this.theme.bold(label) : label;
+		const styledLabel = selected ? this.theme.fg(selectedColor, selectedLabel) : label;
 		const value = this.formatValue(item, valueWidth);
 		return padRightAnsi(`${styledPrefix}${padRightAnsi(styledLabel, labelWidth)} ${padLeftAnsi(value, valueWidth)}`, width);
 	}

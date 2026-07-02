@@ -11,6 +11,7 @@ const {
 	flushPendingStreamingWords,
 	getStreamingTranscript,
 	sanitizeStreamingText,
+	shouldResetStreamingPending,
 	clearStreamingFlush,
 } = await import("../src/streaming.ts");
 
@@ -121,6 +122,15 @@ test("streaming preview separates existing editor text from dictated words", () 
 	assertAppendOnly(harness.updates);
 });
 
+test("streaming preview does not add a separator before leading punctuation", () => {
+	const harness = createHarness("Hello");
+	feedFrame(harness, ", world");
+	finish(harness);
+
+	assertTranscript(harness, ", world");
+	assert.deepEqual(harness.updates, ["Hello, world "]);
+});
+
 test("rolling window frames do not duplicate overlap words", () => {
 	const harness = runFrames(["Cat is", "is white"]);
 
@@ -140,6 +150,19 @@ test("unstable corrections can change internally without editor churn", () => {
 
 test("streaming text sanitization strips terminal control sequences", () => {
 	assert.equal(sanitizeStreamingText("\u001b]52;c;clipboard\u0007Cat \u001b[31mwhite"), "Cat white");
+});
+
+test("streaming text sanitization strips whisper tokens and transcription headings", () => {
+	assert.equal(sanitizeStreamingText("<|startoftranscript|> Cat <|notimestamps|>"), "Cat");
+	assert.equal(sanitizeStreamingText("### Transcription 42 END"), "");
+	assert.equal(sanitizeStreamingText("###Transcription 42 END"), "");
+});
+
+test("streaming reset detection recognizes bracketed and parenthesized frames", () => {
+	assert.equal(shouldResetStreamingPending("[BLANK_AUDIO]"), true);
+	assert.equal(shouldResetStreamingPending("(silence)"), true);
+	assert.equal(shouldResetStreamingPending("[]"), false);
+	assert.equal(shouldResetStreamingPending("[BLANK_AUDIO] trailing"), false);
 });
 
 test("reset and noise frames do not delete committed text", () => {

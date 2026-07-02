@@ -61,6 +61,9 @@ const DEVICE_PANEL_MAX_WIDTH = 100;
 const DEVICE_PANEL_MIN_WIDTH = 36;
 const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
 const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
+const DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN = /^"(.+)"$/;
+const DIRECT_SHOW_DEVICE_NAME_PATTERN = /"([^"]+)"/;
+const FFMPEG_WARNING_WORDS = new Set(["warning", "error", "failed", "cannot", "unable"]);
 const PULSE_SOURCE_LINE_PATTERN = /^([^\s[]+)(?:\s+\[(.+)\])?$/;
 
 let deviceMessageRendererRegistered = false;
@@ -264,7 +267,7 @@ function parsePulseAudioDevices(output: string): ParsedDeviceInventory {
 	return inventory;
 }
 
-function parseDirectShowDevices(output: string): ParsedDeviceInventory {
+export function parseDirectShowDevices(output: string): ParsedDeviceInventory {
 	const inventory: ParsedDeviceInventory = { audio: [], video: [], sawDeviceSection: false };
 	let section: DeviceKind | undefined;
 
@@ -282,7 +285,7 @@ function parseDirectShowDevices(output: string): ParsedDeviceInventory {
 		}
 		if (!section || /Alternative name/i.test(line)) continue;
 
-		const match = line.match(/^"(.+)"$/) ?? line.match(/"([^"]+)"/);
+		const match = DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
 		const name = sanitizeDeviceField(match?.[1] ?? "");
 		if (!name) continue;
 		inventory[section].push({ name });
@@ -317,7 +320,10 @@ function hasAvfoundationIoWarning(output: string) {
 }
 
 function hasFfmpegWarningAfterScan(output: string) {
-	return /\b(?:warning|error|failed|cannot|unable)\b/i.test(output);
+	return output
+		.toLowerCase()
+		.split(/\W+/)
+		.some((word) => FFMPEG_WARNING_WORDS.has(word));
 }
 
 function getNoParseableDeviceMessage(backend: Exclude<DeviceBackend, "unsupported">) {
@@ -355,7 +361,9 @@ class DevicePanelMessageComponent implements Component {
 		return renderDevicePanel(this.options, Math.min(width, DEVICE_PANEL_MAX_WIDTH)).split("\n");
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		// Device panel messages render immutable options directly, so there is no cached state to invalidate.
+	}
 }
 
 function readDevicePanelOptions(value: unknown): DevicePanelOptions {
@@ -475,7 +483,8 @@ function buildDevicePanelFooter(width: number, style: DevicePanelStyle) {
 }
 
 function buildDeviceRow(kind: DeviceKind, devices: ListedDevice[], style: DevicePanelStyle, width: number) {
-	const prefix = style.plain ? `  ${kind.padEnd(5)} ${devices.length}` : `  ${kind === "audio" ? style.audioLabel : style.videoLabel} ${devices.length}`;
+	const deviceLabel = kind === "audio" ? style.audioLabel : style.videoLabel;
+	const prefix = style.plain ? `  ${kind.padEnd(5)} ${devices.length}` : `  ${deviceLabel} ${devices.length}`;
 	if (devices.length === 0) return fitLine(`${prefix}${style.separator}no ${kind} devices found`, width, style);
 
 	const displayNames = compactDeviceNames(devices);
@@ -659,7 +668,8 @@ export async function validateRecordedAudio(audioPath: string): Promise<AudioDia
 }
 
 export function parseVolumeDb(output: string, label: "mean_volume" | "max_volume") {
-	const match = output.match(new RegExp(`${label}:\\s*(-?(?:\\d+(?:\\.\\d+)?|inf))\\s*dB`, "i"));
+	const pattern = new RegExp(String.raw`${label}:\s*(-?(?:\d+(?:\.\d+)?|inf))\s*dB`, "i");
+	const match = pattern.exec(output);
 	if (!match) return undefined;
 	return match[1]?.toLowerCase() === "-inf" ? Number.NEGATIVE_INFINITY : Number(match[1]);
 }

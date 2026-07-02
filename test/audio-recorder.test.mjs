@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { buildFfmpegRecorderArgs, buildRecorderCommand, parseAvfoundationDevices, renderDevicePanel } = await import("../src/audio.ts");
+const { buildFfmpegRecorderArgs, buildRecorderCommand, parseAvfoundationDevices, parseDirectShowDevices, parseVolumeDb, renderDevicePanel } = await import("../src/audio.ts");
 const { getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getRecordMeter, getRecordSampleRate, getRecordSync, reloadMicmeConfig } = await import("../src/config.ts");
 
 function withEnv(values, fn) {
@@ -96,6 +96,27 @@ test("device parsing strips terminal control sequences from names", () => {
 	const parsed = parseAvfoundationDevices("AVFoundation audio devices:\n[0] \u001b]52;c;clipboard\u0007Studio \u001b[31mMic");
 
 	assert.deepEqual(parsed.audio, [{ id: "0", name: "Studio Mic" }]);
+});
+
+test("DirectShow device parsing handles whole-line and fallback quoted names", () => {
+	const parsed = parseDirectShowDevices([
+		"DirectShow video devices",
+		'"Integrated Camera"',
+		"DirectShow audio devices",
+		'    Some prefix "Studio Mic" extra text',
+		'Alternative name "@device_pnp_ignored"',
+	].join("\n"));
+
+	assert.deepEqual(parsed.video, [{ name: "Integrated Camera" }]);
+	assert.deepEqual(parsed.audio, [{ name: "Studio Mic" }]);
+});
+
+test("volume parsing handles finite and negative-infinite ffmpeg volumes", () => {
+	const output = "[Parsed_volumedetect_0] mean_volume: -inf dB\n[Parsed_volumedetect_0] max_volume: -12.4 dB";
+
+	assert.equal(parseVolumeDb(output, "mean_volume"), Number.NEGATIVE_INFINITY);
+	assert.equal(parseVolumeDb(output, "max_volume"), -12.4);
+	assert.equal(parseVolumeDb("mean_volume: 0 dB", "mean_volume"), 0);
 });
 
 test("device panel rendering strips terminal control sequences from persisted details", () => {
