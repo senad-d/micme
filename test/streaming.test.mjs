@@ -152,6 +152,10 @@ test("streaming text sanitization strips terminal control sequences", () => {
 	assert.equal(sanitizeStreamingText("\u001b]52;c;clipboard\u0007Cat \u001b[31mwhite"), "Cat white");
 });
 
+test("streaming text sanitization strips bracketed and parenthesized segments", () => {
+	assert.equal(sanitizeStreamingText("Cat [noise] (laughs) white"), "Cat white");
+});
+
 test("streaming text sanitization strips whisper tokens and transcription headings", () => {
 	assert.equal(sanitizeStreamingText("<|startoftranscript|> Cat <|notimestamps|>"), "Cat");
 	assert.equal(sanitizeStreamingText("### Transcription 42 END"), "");

@@ -147,12 +147,28 @@ export function readStreamingOutputFrames(state: StreamingState, chunk: string, 
 export function sanitizeStreamingText(text: string) {
 	const textWithoutTokens = stripWhisperControlTokens(stripStreamingControls(text));
 	const textWithoutHeading = removeTranscriptionEndHeading(textWithoutTokens);
-	const cleaned = textWithoutHeading
-		.replace(/\[[^\]]*\]/g, " ")
-		.replace(/\([^)]*\)/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+	const textWithoutBracketedSegments = stripStreamingDelimitedSegments(textWithoutHeading, "[", "]");
+	const textWithoutParenthesizedSegments = stripStreamingDelimitedSegments(textWithoutBracketedSegments, "(", ")");
+	const cleaned = textWithoutParenthesizedSegments.replace(/\s+/g, " ").trim();
 	return isLikelyStreamingHallucination(cleaned) ? "" : cleaned;
+}
+
+function stripStreamingDelimitedSegments(text: string, startDelimiter: string, endDelimiter: string) {
+	let cleaned = "";
+	let index = 0;
+
+	while (index < text.length) {
+		const startIndex = text.indexOf(startDelimiter, index);
+		if (startIndex === -1) return `${cleaned}${text.slice(index)}`;
+
+		const endIndex = text.indexOf(endDelimiter, startIndex + startDelimiter.length);
+		if (endIndex === -1) return `${cleaned}${text.slice(index)}`;
+
+		cleaned = `${cleaned}${text.slice(index, startIndex)} `;
+		index = endIndex + endDelimiter.length;
+	}
+
+	return cleaned;
 }
 
 export function stripStreamingControls(text: string) {
@@ -209,7 +225,7 @@ function isAsciiDigits(value: string) {
 }
 
 function isWhitespaceCharacter(character: string | undefined) {
-	return character !== undefined && character.trim() === "";
+	return character?.trim() === "";
 }
 
 export function diffStreamingText(previous: string, current: string) {
@@ -258,7 +274,7 @@ function isFirstStreamingHypothesis(state: StreamingState) {
 
 export function isLikelyStreamingHallucination(text: string) {
 	if (!text) return true;
-	const normalized = text.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+	const normalized = trimStreamingWordEdges(text.toLowerCase());
 	if (/^(?:start speaking|blank audio)$/i.test(normalized)) return true;
 	if (/^(?:you|yeah|okay|ok|uh|um|hmm)$/i.test(normalized)) return true;
 	if (/^(?:thank you|thanks for watching|thank you very much)$/i.test(normalized)) return true;
@@ -391,8 +407,23 @@ export function streamingWordsEqual(left: string[], right: string[]) {
 }
 
 export function normalizeStreamingWord(word: string) {
-	const normalized = word.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+	const normalized = trimStreamingWordEdges(word.toLowerCase());
 	return normalized || word.toLowerCase();
+}
+
+function trimStreamingWordEdges(text: string) {
+	const characters = Array.from(text);
+	let start = 0;
+	while (start < characters.length && !isStreamingWordCharacter(characters[start] ?? "")) start++;
+
+	let end = characters.length;
+	while (end > start && !isStreamingWordCharacter(characters[end - 1] ?? "")) end--;
+
+	return characters.slice(start, end).join("");
+}
+
+function isStreamingWordCharacter(character: string) {
+	return /[\p{L}\p{N}]/u.test(character);
 }
 
 export function getStreamingTranscript(state: StreamingState) {

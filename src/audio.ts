@@ -455,7 +455,27 @@ function shouldUsePlainDevicePanel() {
 }
 
 function formatSourceLabel(sourceLabel: string, style: DevicePanelStyle) {
-	return style.plain ? sourceLabel.replace(/\s*·\s*/g, " - ") : sourceLabel;
+	return style.plain ? replaceMiddleDotSeparators(sourceLabel) : sourceLabel;
+}
+
+function replaceMiddleDotSeparators(text: string) {
+	let formatted = "";
+	let index = 0;
+
+	while (index < text.length) {
+		const middleDotIndex = text.indexOf("·", index);
+		if (middleDotIndex === -1) return `${formatted}${text.slice(index)}`;
+
+		formatted = `${formatted}${text.slice(index, middleDotIndex).trimEnd()} - `;
+		index = middleDotIndex + 1;
+		while (index < text.length && isLabelWhitespace(text[index] ?? "")) index++;
+	}
+
+	return formatted;
+}
+
+function isLabelWhitespace(character: string) {
+	return character.trim() === "";
 }
 
 function buildDevicePanelHeader(width: number, sourceLabel: string, style: DevicePanelStyle) {

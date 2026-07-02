@@ -135,6 +135,22 @@ test("device panel rendering strips terminal control sequences from persisted de
 	assert.match(panel, /warning/);
 });
 
+test("plain device panel renders source separators as ASCII", () => {
+	withEnv({ MICME_PLAIN: "1" }, () => {
+		const panel = renderDevicePanel(
+			{
+				sourceLabel: "macOS · AVF",
+				backend: "avfoundation",
+				audio: [],
+			},
+			80,
+		);
+
+		assert.match(panel, /macOS - AVF/);
+		assert.equal(panel.includes("·"), false);
+	});
+});
+
 test("custom record commands receive the shared Micme placeholders", () => {
 	withEnv({ MICME_RECORD_COMMAND: "rec {audio} {tempDir} {transcript}" }, () => {
 		const command = buildRecorderCommand("/tmp/micme-record/raw.wav");
