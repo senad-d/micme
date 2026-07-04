@@ -49,7 +49,7 @@ jobs:
           cache: npm
 
       - name: Set up npm with trusted publishing support
-        run: npm install --global npm@11 --ignore-scripts
+        run: npm install --global npm@11.18.0 --ignore-scripts
 
       - name: Read package metadata
         id: package
