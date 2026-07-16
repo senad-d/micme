@@ -118,6 +118,9 @@ function createExtensionHarness(cwd) {
 		sentMessages,
 		ctx,
 		owner,
+		hasEditorOverride() {
+			return editorFactory !== undefined;
+		},
 		getEditor() {
 			assert.ok(editorFactory);
 			return editorFactory({}, theme, {});
@@ -273,6 +276,27 @@ function modelResponse() {
 		{ status: 200, headers: { "content-length": String(bytes.byteLength) } },
 	);
 }
+
+test("terminal-only shortcut preserves Pi's default editor", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-shortcut-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			MICME_SHORTCUT: "ctrl+space",
+			MICME_PRINTABLE_SHORTCUTS: "",
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			await emit(harness, "session_start", { reason: "startup" });
+
+			assert.ok(harness.shortcuts.get("ctrl+space"));
+			assert.equal(harness.hasEditorOverride(), false);
+			await emit(harness, "session_shutdown", { reason: "quit" });
+		},
+	);
+});
 
 test("registered command, terminal shortcut, and printable fallback serialize delayed startup", async (t) => {
 	if (process.platform === "win32") {

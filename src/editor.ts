@@ -1,6 +1,6 @@
 import { CustomEditor, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AutocompleteProvider, decodeKittyPrintable } from "@earendil-works/pi-tui";
-import { matchesPrintableMicmeShortcut } from "./config.ts";
+import { getPrintableShortcuts, matchesPrintableMicmeShortcut } from "./config.ts";
 
 type CustomEditorArgs = ConstructorParameters<typeof CustomEditor>;
 // Printable Option-key fallbacks auto-repeat while held; debounce them so one hold is one toggle.
@@ -51,7 +51,7 @@ function isPrintableShortcutAutoRepeat(printableShortcut: string) {
 }
 
 export function installMicmeEditorFallback(ctx: ExtensionContext, micmeHandlers: MicmeEditorInputHandlers) {
-	if (ctx.mode !== "tui") return;
+	if (ctx.mode !== "tui" || getPrintableShortcuts().length === 0) return;
 
 	const previousEditor = ctx.ui.getEditorComponent();
 	if (previousEditor) {
