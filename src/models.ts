@@ -299,7 +299,7 @@ export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionCo
 	let download = modelDownloads.get(modelPath);
 	if (download?.controller.signal.aborted) download = await waitForActiveModelDownload(modelPath, download, options.signal);
 	const created = !download;
-	if (!download) download = createSharedModelDownload(modelName, modelPath, options.inactivityTimeoutMs);
+	download ??= createSharedModelDownload(modelName, modelPath, options.inactivityTimeoutMs);
 	await waitForSharedModelDownload(download, modelPath, ctx, options.signal, created);
 }
 
@@ -502,11 +502,7 @@ function getDownloadInactivityTimeout(value: number | undefined) {
 
 function cancelDownloadReader(reader: ReadableStreamDefaultReader<Uint8Array> | undefined) {
 	if (!reader) return;
-	try {
-		void reader.cancel().catch(ignoreDownloadFailure);
-	} catch {
-		// The original download failure remains authoritative.
-	}
+	void Promise.resolve().then(reader.cancel.bind(reader)).catch(ignoreDownloadFailure);
 }
 
 async function writeDownloadChunk(output: WriteStream, chunk: Buffer, outputFinished: Promise<void>) {
@@ -515,7 +511,9 @@ async function writeDownloadChunk(output: WriteStream, chunk: Buffer, outputFini
 	await Promise.race([once(output, "drain"), outputFinished]);
 }
 
-function ignoreDownloadFailure() {}
+function ignoreDownloadFailure() {
+	// Best-effort cleanup must not replace the download failure already being handled.
+}
 
 export function getWhisperCppModelNameFromPath(modelPath: string) {
 	const match = /^ggml-(.+)\.(?:bin|gguf)$/i.exec(basename(modelPath));

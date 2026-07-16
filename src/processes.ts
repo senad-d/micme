@@ -92,7 +92,8 @@ async function stopProcessOnce(active: Recording) {
 function sendStopSignal(active: Recording, signal: NodeJS.Signals) {
 	try {
 		if (!active.process.kill(signal)) return;
-		(active.stopSignals ??= new Set()).add(signal);
+		active.stopSignals ??= new Set();
+		active.stopSignals.add(signal);
 	} catch {
 		// The exit promise remains authoritative when the process settles during escalation.
 	}

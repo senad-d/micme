@@ -237,7 +237,9 @@ function isNodeError(error: unknown, code: string) {
 	return error instanceof Error && "code" in error && error.code === code;
 }
 
-function ignoreConfigWriteFailure() {}
+function ignoreConfigWriteFailure() {
+	// Best-effort cleanup must not replace the config write failure already being handled.
+}
 
 function removeConfigWriteTail(configPath: string, pending: Promise<void>) {
 	if (configWriteTails.get(configPath) === pending) configWriteTails.delete(configPath);
