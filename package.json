@@ -1,6 +1,6 @@
 {
   "name": "@senad-d/micme",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "description": "Local voice dictation for Pi coding prompts. Press Alt+M, speak, review, send.",
   "license": "MIT",
@@ -58,6 +58,7 @@
     "doctor": "node scripts/doctor.mjs",
     "check": "node --check scripts/doctor.mjs && node --check scripts/check-format.mjs && node --check scripts/check-package-contents.mjs && node --check scripts/publish-npm.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:pi-contract": "node --test test/pi-contract.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "npm run lint:eslint && npm run typecheck && npm run check",
     "format:check": "node scripts/check-format.mjs",
@@ -76,12 +77,12 @@
     "image": "https://raw.githubusercontent.com/senad-d/micme/main/img/demo.gif"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": ">=0.80.7 <0.81.0",
+    "@earendil-works/pi-tui": ">=0.80.7 <0.81.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "file:./dev-shims/pi-coding-agent",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-coding-agent": "0.80.7",
+    "@earendil-works/pi-tui": "0.80.7",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.0.0",
     "eslint": "^10.6.0",

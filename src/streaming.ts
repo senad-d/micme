@@ -3,6 +3,7 @@ import { MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import {
 	env,
 	envFlag,
+	getStreamCapture,
 	getTranslateToEnglishLanguage,
 	getStreamFlushMs,
 	getStreamKeepContext,
@@ -53,8 +54,7 @@ export function buildWhisperStreamCommand(binary: string, modelPath: string, _te
 
 	if (getStreamKeepContext()) args.push("--keep-context");
 
-	const capture = env("MICME_STREAM_CAPTURE");
-	if (capture?.trim()) args.push("--capture", capture.trim());
+	args.push("--capture", String(getStreamCapture()));
 
 	const translateLanguage = getTranslateToEnglishLanguage();
 	if (translateLanguage) {

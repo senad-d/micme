@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { dirname, join } from "node:path";
-import { AUDIO_VALIDATION_TIMEOUT_MS } from "./constants.ts";
+import { AUDIO_VALIDATION_TIMEOUT_MS, MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import { env, envFlag, getAudioFilter, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
-import { findExecutable, formatProcessOutput, formatRunExit, replacePlaceholders, runProcess, shellCommand, shellQuote } from "./processes.ts";
+import { appendCapped, findExecutable, formatProcessOutput, formatRunExit, replacePlaceholders, runProcess, shellCommand, shellQuote } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
-import type { AudioDeviceCandidate, AudioDiagnostics, CommandSpec, RunResult } from "./types.ts";
+import type { AudioDeviceCandidate, AudioDiagnostics, AudioValidationOutcome, CommandSpec, RunResult } from "./types.ts";
 
 type DeviceBackend = "avfoundation" | "pulse" | "dshow" | "unsupported";
 type DeviceKind = "audio" | "video";
@@ -637,19 +637,16 @@ export function parseAvfoundationAudioDevices(output: string): AudioDeviceCandid
 	}));
 }
 
-export async function prepareAudioForTranscription(inputPath: string, tempDir: string) {
+export async function prepareAudioForTranscription(inputPath: string, tempDir: string, signal?: AbortSignal) {
 	if (env("MICME_PROCESS_AUDIO") === "0") return inputPath;
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
 	if (!ffmpeg) return inputPath;
 
 	const outputPath = join(tempDir, "clip.wav");
-	const filter = getAudioFilter();
-	const args = ["-hide_banner", "-loglevel", "error", "-y", "-i", inputPath];
-	if (filter) args.push("-af", filter);
-	args.push("-ac", "1", "-ar", String(getTranscribeSampleRate()), "-c:a", "pcm_s16le", outputPath);
+	const args = buildAudioPreprocessingArgs(inputPath, outputPath, getAudioFilter());
 
-	const result = await runProcess(ffmpeg, args, AUDIO_VALIDATION_TIMEOUT_MS);
+	const result = await runProcess(ffmpeg, args, AUDIO_VALIDATION_TIMEOUT_MS, { signal });
 	if (result.code !== 0) {
 		throw new Error(`Micme audio preprocessing failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
@@ -657,38 +654,77 @@ export async function prepareAudioForTranscription(inputPath: string, tempDir: s
 	return outputPath;
 }
 
-export async function validateRecordedAudio(audioPath: string): Promise<AudioDiagnostics | undefined> {
-	if (env("MICME_VALIDATE_AUDIO") === "0" || envFlag("MICME_SKIP_AUDIO_VALIDATION")) return undefined;
+export function buildAudioPreprocessingArgs(inputPath: string, outputPath: string, filter: string) {
+	const args = ["-hide_banner", "-loglevel", "error", "-y", "-i", inputPath];
+	if (filter) args.push("-af", filter);
+	args.push("-ac", "1", "-ar", String(getTranscribeSampleRate()), "-c:a", "pcm_s16le", outputPath);
+	return args;
+}
+
+export async function validateRecordedAudio(audioPath: string, signal?: AbortSignal): Promise<AudioValidationOutcome> {
+	if (env("MICME_VALIDATE_AUDIO") === "0" || envFlag("MICME_SKIP_AUDIO_VALIDATION")) {
+		return { status: "skipped", reason: "disabled" };
+	}
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
-	if (!ffmpeg) return undefined;
+	if (!ffmpeg) return { status: "skipped", reason: "ffmpeg-unavailable" };
 
-	const result = await runProcess(ffmpeg, ["-hide_banner", "-nostats", "-i", audioPath, "-af", "volumedetect", "-f", "null", "-"], AUDIO_VALIDATION_TIMEOUT_MS);
-	const raw = formatProcessOutput(`${result.stdout}\n${result.stderr}`);
+	const result = await runProcess(ffmpeg, ["-hide_banner", "-nostats", "-i", audioPath, "-af", "volumedetect", "-f", "null", "-"], AUDIO_VALIDATION_TIMEOUT_MS, { signal });
+	const raw = formatProcessOutput(appendCapped("", `${result.stdout}\n${result.stderr}`));
 	if (result.code !== 0) {
-		throw new Error(`Micme could not inspect recorded audio (${formatRunExit(result)}):\n${raw}`);
+		throw new Error(`Micme could not inspect recorded audio (${formatRunExit(result)}).${formatAudioValidationDiagnostics(raw)}`);
+	}
+	if (audioValidationOutputReachedLimit(result)) {
+		throw new Error(
+			`Micme could not validate recorded audio because ffmpeg diagnostics reached the ${MAX_CAPTURED_OUTPUT_CHARS}-character capture limit; silence metrics may be truncated.` +
+				formatAudioValidationDiagnostics(raw),
+		);
+	}
+
+	const maxVolumeDb = parseVolumeDb(raw, "max_volume");
+	if (maxVolumeDb === undefined) {
+		throw new Error(
+			"Micme could not validate recorded audio because ffmpeg did not report the required max_volume metric. Silence validation did not pass." +
+				formatAudioValidationDiagnostics(raw),
+		);
 	}
 
 	const diagnostics: AudioDiagnostics = {
 		meanVolumeDb: parseVolumeDb(raw, "mean_volume"),
-		maxVolumeDb: parseVolumeDb(raw, "max_volume"),
+		maxVolumeDb,
 		raw,
 	};
 
 	const minimumMaxVolumeDb = getMinMaxVolumeDb();
-	if (diagnostics.maxVolumeDb !== undefined && diagnostics.maxVolumeDb < minimumMaxVolumeDb) {
+	if (diagnostics.maxVolumeDb < minimumMaxVolumeDb) {
 		throw new Error(
-			`Micme recorded almost-silent audio (max ${diagnostics.maxVolumeDb.toFixed(1)} dB; threshold ${minimumMaxVolumeDb.toFixed(1)} dB). ` +
+			`Micme recorded almost-silent audio (max ${formatVolumeDb(diagnostics.maxVolumeDb)} dB; threshold ${minimumMaxVolumeDb.toFixed(1)} dB). ` +
 				"Whisper often hallucinates phrases like 'Thank you very much' from silence. " +
 				"Run /micme devices and set MICME_AUDIO_DEVICE to the real microphone, or set MICME_VALIDATE_AUDIO=0 to bypass this check.",
 		);
 	}
 
-	return diagnostics;
+	return { status: "validated", diagnostics };
+}
+
+function audioValidationOutputReachedLimit(result: RunResult) {
+	return (
+		result.stdout.length >= MAX_CAPTURED_OUTPUT_CHARS ||
+		result.stderr.length >= MAX_CAPTURED_OUTPUT_CHARS ||
+		result.stdout.length + result.stderr.length >= MAX_CAPTURED_OUTPUT_CHARS
+	);
+}
+
+function formatAudioValidationDiagnostics(raw: string) {
+	return raw ? `\nFFmpeg output:\n${raw}` : "\nFFmpeg produced no diagnostic output.";
+}
+
+function formatVolumeDb(value: number) {
+	return value === Number.NEGATIVE_INFINITY ? "-inf" : value.toFixed(1);
 }
 
 export function parseVolumeDb(output: string, label: "mean_volume" | "max_volume") {
-	const pattern = new RegExp(String.raw`${label}:\s*(-?(?:\d+(?:\.\d+)?|inf))\s*dB`, "i");
+	const pattern = new RegExp(String.raw`${label}:\s*(-?\d+(?:\.\d+)?|-inf)\s*dB`, "i");
 	const match = pattern.exec(output);
 	if (!match) return undefined;
 	return match[1]?.toLowerCase() === "-inf" ? Number.NEGATIVE_INFINITY : Number(match[1]);
@@ -719,19 +755,19 @@ export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioP
 			inputOptions: ["-drop_late_frames", getAvfoundationDropLateFrames() ? "true" : "false"],
 			audioFilters: getAvfoundationAudioFilters(recordSync, avfoundationInputSampleRate),
 		});
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n" };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
 	}
 
 	if (process.platform === "linux") {
 		const input = env("MICME_PULSE_SOURCE") || "default";
 		const args = buildFfmpegRecorderArgs("pulse", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n" };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
 	}
 
 	if (process.platform === "win32") {
 		const input = `audio=${env("MICME_DSHOW_AUDIO_DEVICE") || "default"}`;
 		const args = buildFfmpegRecorderArgs("dshow", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n" };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
 	}
 
 	throw new Error(`Micme has no default recorder for ${process.platform}. Set MICME_RECORD_COMMAND.`);

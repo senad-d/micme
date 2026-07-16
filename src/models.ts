@@ -9,17 +9,43 @@ import { finished } from "node:stream/promises";
 import {
 	DEFAULT_PYTHON_WHISPER_MODEL_NAME,
 	DEFAULT_WHISPER_CPP_MODEL_NAME,
+	MODEL_DOWNLOAD_INACTIVITY_TIMEOUT_MS,
 	PYTHON_WHISPER_MODEL_NAMES,
 	STATUS_KEY,
 	WHISPER_CPP_MODEL_BASE_URL,
 	WHISPER_CPP_MODEL_NAMES,
 } from "./constants.ts";
-import { env, expandConfigPath, getTranslateToEnglishLanguage } from "./config.ts";
+import { env, expandConfigPath, getAutoDownloadModel, getTranslateToEnglishLanguage } from "./config.ts";
 import { findExecutable, runProcess } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { ModelCandidate, ResolvedWhisperCppModel } from "./types.ts";
 
-const modelDownloads = new Map<string, Promise<void>>();
+export type ModelDownloadOptions = {
+	signal?: AbortSignal;
+	inactivityTimeoutMs?: number;
+};
+
+type DownloadFileOptions = ModelDownloadOptions & {
+	onProgress?: (downloadedBytes: number, totalBytes: number) => void;
+};
+
+type ModelDownloadWaiter = {
+	ctx?: ExtensionContext;
+	signal?: AbortSignal;
+};
+
+type SharedModelDownload = {
+	controller: AbortController;
+	promise: Promise<void>;
+	waiters: Map<symbol, ModelDownloadWaiter>;
+	settled: boolean;
+};
+
+export class ModelDownloadTimeoutError extends Error {
+	override name = "ModelDownloadTimeoutError";
+}
+
+const modelDownloads = new Map<string, SharedModelDownload>();
 const PYTHON_WHISPER_MODELS_SCRIPT = String.raw`import whisper; print('\n'.join(whisper.available_models()))`;
 
 export function discoverWhisperCppModels(cwd: string): ModelCandidate[] {
@@ -254,25 +280,15 @@ export function uniqueModelNames(names: string[]) {
 	return output;
 }
 
-export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionContext, options: { allowDownload?: boolean } = {}) {
+export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionContext, options: ModelDownloadOptions & { allowDownload?: boolean } = {}) {
+	options.signal?.throwIfAborted();
 	assertDownloadTargetIsUsable(modelPath, "Micme model path");
 	if (isRegularFile(modelPath)) return;
 	if (options.allowDownload === false) {
 		throw new Error(`Micme model is missing: ${modelPath}`);
 	}
-	if (env("MICME_AUTO_DOWNLOAD_MODEL") === "0") {
+	if (!getAutoDownloadModel()) {
 		throw new Error(`Micme model is missing and auto-download is disabled: ${modelPath}`);
-	}
-
-	const existingDownload = modelDownloads.get(modelPath);
-	if (existingDownload) {
-		ctx?.ui.setStatus(STATUS_KEY, `waiting for ${safeBasename(modelPath)} download…`);
-		try {
-			await existingDownload;
-		} finally {
-			ctx?.ui.setStatus(STATUS_KEY, undefined);
-		}
-		return;
 	}
 
 	const modelName = getDownloadableWhisperCppModelName(modelPath);
@@ -280,75 +296,216 @@ export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionCo
 		throw new Error(`Micme model is missing and cannot infer a standard download URL: ${modelPath}`);
 	}
 
-	const download = downloadWhisperCppModel(modelName, modelPath, ctx);
-	modelDownloads.set(modelPath, download);
+	let download = modelDownloads.get(modelPath);
+	if (download?.controller.signal.aborted) download = await waitForActiveModelDownload(modelPath, download, options.signal);
+	const created = !download;
+	if (!download) download = createSharedModelDownload(modelName, modelPath, options.inactivityTimeoutMs);
+	await waitForSharedModelDownload(download, modelPath, ctx, options.signal, created);
+}
+
+export async function downloadWhisperCppModel(modelName: string, modelPath: string, ctx?: ExtensionContext, options: ModelDownloadOptions = {}) {
+	options.signal?.throwIfAborted();
+	assertDownloadTargetIsUsable(modelPath, "Micme model path");
+	if (isRegularFile(modelPath)) return;
+	const displayName = safeBasename(modelPath);
+	setActiveDownloadStatus(ctx, options.signal, `downloading ${displayName}…`);
+	if (!options.signal?.aborted) ctx?.ui.notify(`Downloading ${displayName}. This can take a while the first time.`, "info");
+
 	try {
-		await download;
+		await performWhisperCppModelDownload(modelName, modelPath, {
+			...options,
+			onProgress: updateContextDownloadProgress.bind(undefined, ctx, options.signal, modelPath),
+		});
+		options.signal?.throwIfAborted();
+		ctx?.ui.notify(`Downloaded ${displayName}.`, "info");
 	} finally {
-		modelDownloads.delete(modelPath);
 		ctx?.ui.setStatus(STATUS_KEY, undefined);
 	}
 }
 
-export async function downloadWhisperCppModel(modelName: string, modelPath: string, ctx?: ExtensionContext) {
+async function performWhisperCppModelDownload(modelName: string, modelPath: string, options: DownloadFileOptions) {
 	assertDownloadTargetIsUsable(modelPath, "Micme model path");
 	if (isRegularFile(modelPath)) return;
-	const url = getWhisperCppModelUrl(modelName);
-	const displayName = safeBasename(modelPath);
-	ctx?.ui.setStatus(STATUS_KEY, `downloading ${displayName}…`);
-	ctx?.ui.notify(`Downloading ${displayName}. This can take a while the first time.`, "info");
-	await downloadFile(url, modelPath, ctx);
-	ctx?.ui.notify(`Downloaded ${displayName}.`, "info");
+	await downloadFile(getWhisperCppModelUrl(modelName), modelPath, undefined, options);
 }
 
-export async function downloadFile(url: string, targetPath: string, ctx?: ExtensionContext) {
+export async function downloadFile(url: string, targetPath: string, ctx?: ExtensionContext, options: DownloadFileOptions = {}) {
+	options.signal?.throwIfAborted();
 	assertDownloadTargetIsUsable(targetPath, "Download target");
 	if (isRegularFile(targetPath)) return;
 	await mkdir(dirname(targetPath), { recursive: true });
 	const tempPath = `${targetPath}.download-${process.pid}-${Date.now()}-${randomUUID()}`;
-
-	const response = await fetch(url);
-	if (!response.ok || !response.body) {
-		throw new Error(`Failed to download ${url}: HTTP ${response.status} ${response.statusText}`);
-	}
-
-	const totalBytes = Number(response.headers.get("content-length") || "0");
-	const reader = response.body.getReader();
-	const output = createWriteStream(tempPath, { flags: "wx" });
-	const outputFinished = finished(output);
-	outputFinished.catch(() => undefined);
+	const timeoutMs = getDownloadInactivityTimeout(options.inactivityTimeoutMs);
+	const timeoutController = new AbortController();
+	const signal = options.signal ? AbortSignal.any([options.signal, timeoutController.signal]) : timeoutController.signal;
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+	let output: WriteStream | undefined;
+	let outputFinished: Promise<void> | undefined;
 	let downloadedBytes = 0;
 	let lastUpdate = 0;
 
 	try {
+		const response = await waitForDownloadActivity(fetch(url, { signal }), signal, timeoutController, timeoutMs, "response headers");
+		if (!response.ok || !response.body) {
+			throw new Error(`Failed to download ${url}: HTTP ${response.status} ${response.statusText}`);
+		}
+
+		const totalBytes = Number(response.headers.get("content-length") || "0");
+		reader = response.body.getReader();
+		output = createWriteStream(tempPath, { flags: "wx" });
+		outputFinished = finished(output);
+		outputFinished.catch(ignoreDownloadFailure);
+
 		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			if (!value) continue;
-			downloadedBytes += value.byteLength;
-			await writeDownloadChunk(output, Buffer.from(value), outputFinished);
+			const result = await waitForDownloadActivity(reader.read(), signal, timeoutController, timeoutMs, "response body data");
+			if (result.done) break;
+			if (!result.value) continue;
+			downloadedBytes += result.value.byteLength;
+			await waitForDownloadActivity(writeDownloadChunk(output, Buffer.from(result.value), outputFinished), signal, timeoutController, timeoutMs, "file output");
 
 			const now = Date.now();
-			if (ctx && now - lastUpdate > 1_000) {
-				ctx.ui.setStatus(STATUS_KEY, `downloading ${safeBasename(targetPath)} ${formatDownloadProgress(downloadedBytes, totalBytes)}`);
+			if (now - lastUpdate > 1_000) {
+				updateContextDownloadProgress(ctx, options.signal, targetPath, downloadedBytes, totalBytes);
+				options.onProgress?.(downloadedBytes, totalBytes);
 				lastUpdate = now;
 			}
 		}
 
 		output.end();
-		await outputFinished;
+		await waitForDownloadActivity(outputFinished, signal, timeoutController, timeoutMs, "file completion");
 		if (isRegularFile(targetPath)) {
-			await unlink(tempPath).catch(() => undefined);
+			await unlink(tempPath).catch(ignoreDownloadFailure);
 			return;
 		}
 		assertDownloadTargetIsUsable(targetPath, "Download target");
+		options.signal?.throwIfAborted();
 		await rename(tempPath, targetPath);
 	} catch (error) {
-		await reader.cancel().catch(() => undefined);
-		output.destroy();
-		await outputFinished.catch(() => undefined);
-		await unlink(tempPath).catch(() => undefined);
+		cancelDownloadReader(reader);
+		output?.destroy();
+		if (outputFinished) await outputFinished.catch(ignoreDownloadFailure);
+		await unlink(tempPath).catch(ignoreDownloadFailure);
 		throw error;
+	}
+}
+
+function createSharedModelDownload(modelName: string, modelPath: string, inactivityTimeoutMs: number | undefined) {
+	const controller = new AbortController();
+	const download: SharedModelDownload = {
+		controller,
+		promise: Promise.resolve(),
+		waiters: new Map(),
+		settled: false,
+	};
+	const options: DownloadFileOptions = {
+		signal: controller.signal,
+		inactivityTimeoutMs,
+		onProgress: reportSharedModelDownloadProgress.bind(undefined, download, modelPath),
+	};
+	download.promise = performWhisperCppModelDownload(modelName, modelPath, options).finally(settleSharedModelDownload.bind(undefined, modelPath, download));
+	download.promise.catch(ignoreDownloadFailure);
+	modelDownloads.set(modelPath, download);
+	return download;
+}
+
+async function waitForActiveModelDownload(modelPath: string, download: SharedModelDownload | undefined, signal: AbortSignal | undefined) {
+	while (download?.controller.signal.aborted) {
+		try {
+			await waitForPromiseWithSignal(download.promise, signal);
+		} catch {
+			signal?.throwIfAborted();
+		}
+		download = modelDownloads.get(modelPath);
+	}
+	return download;
+}
+
+async function waitForSharedModelDownload(download: SharedModelDownload, modelPath: string, ctx: ExtensionContext | undefined, signal: AbortSignal | undefined, created: boolean) {
+	const waiterId = Symbol(modelPath);
+	download.waiters.set(waiterId, { ctx, signal });
+	const displayName = safeBasename(modelPath);
+	setActiveDownloadStatus(ctx, signal, created ? `downloading ${displayName}…` : `waiting for ${displayName} download…`);
+	if (created && !signal?.aborted) ctx?.ui.notify(`Downloading ${displayName}. This can take a while the first time.`, "info");
+	let failed = false;
+	let failure: unknown;
+
+	try {
+		await waitForPromiseWithSignal(download.promise, signal);
+		signal?.throwIfAborted();
+		ctx?.ui.notify(`Downloaded ${displayName}.`, "info");
+	} catch (error) {
+		failed = true;
+		failure = error;
+	} finally {
+		download.waiters.delete(waiterId);
+		ctx?.ui.setStatus(STATUS_KEY, undefined);
+		if (download.waiters.size === 0 && !download.settled) {
+			download.controller.abort();
+			await download.promise.catch(ignoreDownloadFailure);
+		}
+	}
+
+	if (failed) throw failure;
+}
+
+function reportSharedModelDownloadProgress(download: SharedModelDownload, modelPath: string, downloadedBytes: number, totalBytes: number) {
+	for (const waiter of download.waiters.values()) {
+		updateContextDownloadProgress(waiter.ctx, waiter.signal, modelPath, downloadedBytes, totalBytes);
+	}
+}
+
+function updateContextDownloadProgress(ctx: ExtensionContext | undefined, signal: AbortSignal | undefined, modelPath: string, downloadedBytes: number, totalBytes: number) {
+	setActiveDownloadStatus(ctx, signal, `downloading ${safeBasename(modelPath)} ${formatDownloadProgress(downloadedBytes, totalBytes)}`);
+}
+
+function setActiveDownloadStatus(ctx: ExtensionContext | undefined, signal: AbortSignal | undefined, status: string) {
+	if (!signal?.aborted) ctx?.ui.setStatus(STATUS_KEY, status);
+}
+
+function settleSharedModelDownload(modelPath: string, download: SharedModelDownload) {
+	download.settled = true;
+	if (modelDownloads.get(modelPath) === download) modelDownloads.delete(modelPath);
+}
+
+async function waitForDownloadActivity<T>(work: Promise<T>, signal: AbortSignal, timeoutController: AbortController, timeoutMs: number, activity: string) {
+	const timeout = setTimeout(() => {
+		timeoutController.abort(new ModelDownloadTimeoutError(`Micme model download timed out after ${timeoutMs} ms without ${activity}.`));
+	}, timeoutMs);
+	try {
+		return await waitForPromiseWithSignal(work, signal);
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function waitForPromiseWithSignal<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	if (!signal) return work;
+	signal.throwIfAborted();
+	let rejectAbort: (reason?: unknown) => void = ignoreDownloadFailure;
+	const aborted = new Promise<never>((_resolve, reject) => {
+		rejectAbort = reject;
+	});
+	const onAbort = () => rejectAbort(signal.reason);
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		return await Promise.race([work, aborted]);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
+}
+
+function getDownloadInactivityTimeout(value: number | undefined) {
+	if (value === undefined) return MODEL_DOWNLOAD_INACTIVITY_TIMEOUT_MS;
+	if (!Number.isFinite(value) || value <= 0) throw new Error("inactivityTimeoutMs must be a positive finite number");
+	return Math.ceil(value);
+}
+
+function cancelDownloadReader(reader: ReadableStreamDefaultReader<Uint8Array> | undefined) {
+	if (!reader) return;
+	try {
+		void reader.cancel().catch(ignoreDownloadFailure);
+	} catch {
+		// The original download failure remains authoritative.
 	}
 }
 
@@ -357,6 +514,8 @@ async function writeDownloadChunk(output: WriteStream, chunk: Buffer, outputFini
 	if (output.write(chunk)) return;
 	await Promise.race([once(output, "drain"), outputFinished]);
 }
+
+function ignoreDownloadFailure() {}
 
 export function getWhisperCppModelNameFromPath(modelPath: string) {
 	const match = /^ggml-(.+)\.(?:bin|gguf)$/i.exec(basename(modelPath));

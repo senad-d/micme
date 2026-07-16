@@ -117,6 +117,7 @@ test("volume parsing handles finite and negative-infinite ffmpeg volumes", () =>
 	assert.equal(parseVolumeDb(output, "mean_volume"), Number.NEGATIVE_INFINITY);
 	assert.equal(parseVolumeDb(output, "max_volume"), -12.4);
 	assert.equal(parseVolumeDb("mean_volume: 0 dB", "mean_volume"), 0);
+	assert.equal(parseVolumeDb("max_volume: inf dB", "max_volume"), undefined);
 });
 
 test("device panel rendering strips terminal control sequences from persisted details", () => {

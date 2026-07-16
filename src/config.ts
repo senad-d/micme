@@ -1,41 +1,92 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { MicmeConfigState, TranscribeBackend, TranscriptionMode } from "./types.ts";
 import {
+	DEFAULT_AUTO_DOWNLOAD_MODEL,
 	DEFAULT_MACOS_PRINTABLE_SHORTCUT,
+	DEFAULT_MIN_MAX_VOLUME_DB,
+	DEFAULT_RECORD_SYNC,
 	DEFAULT_SHORTCUT,
+	DEFAULT_STREAM_CAPTURE,
+	DEFAULT_STREAM_FLUSH_MS,
 	DEFAULT_STREAM_KEEP_MS,
 	DEFAULT_STREAM_LENGTH_MS,
 	DEFAULT_STREAM_MAX_TOKENS,
 	DEFAULT_STREAM_STEP_MS,
 	DEFAULT_STREAM_VAD_THRESHOLD,
-	DEFAULT_STREAM_FLUSH_MS,
+	DEFAULT_STREAM_WORDS_PER_CHUNK,
 	DEFAULT_TRANSCRIBE_BACKEND,
 	DEFAULT_TRANSCRIBE_SAMPLE_RATE,
 	DEFAULT_TRANSCRIBE_TIMEOUT_MS,
-	DEFAULT_MIN_MAX_VOLUME_DB,
+	MAX_AUDIO_SAMPLE_RATE,
+	MAX_STREAM_CAPTURE,
+	MAX_STREAM_FLUSH_MS,
+	MAX_STREAM_KEEP_MS,
+	MAX_STREAM_LENGTH_MS,
+	MAX_STREAM_MAX_TOKENS,
+	MAX_STREAM_STEP_MS,
+	MAX_STREAM_VAD_THRESHOLD,
+	MAX_STREAM_WORDS_PER_CHUNK,
+	MAX_TRANSCRIBE_TIMEOUT_MS,
+	MIN_AUDIO_SAMPLE_RATE,
+	MIN_STREAM_CAPTURE,
+	MIN_STREAM_FLUSH_MS,
+	MIN_STREAM_KEEP_MS,
+	MIN_STREAM_LENGTH_MS,
+	MIN_STREAM_MAX_TOKENS,
+	MIN_STREAM_STEP_MS,
+	MIN_STREAM_VAD_THRESHOLD,
+	MIN_STREAM_WORDS_PER_CHUNK,
+	MIN_TRANSCRIBE_TIMEOUT_MS,
+	STREAM_PROFILE_FLUSH_MS,
 	STREAM_PROFILE_KEEP_MS,
 	STREAM_PROFILE_LENGTH_MS,
 	STREAM_PROFILE_MAX_TOKENS,
 	STREAM_PROFILE_STEP_MS,
 	STREAM_PROFILE_VAD_THRESHOLD,
 	STREAM_PROFILE_WORDS_PER_CHUNK,
-	STREAM_PROFILE_FLUSH_MS,
 } from "./constants.ts";
 
 const MICME_CONFIG_FILE = "micme.json";
 const MICME_SCHEMA_URL = "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json";
+const CONFIG_LOCK_TIMEOUT_MS = 5_000;
+const CONFIG_LOCK_RETRY_MS = 25;
 const requireModule = createRequire(import.meta.url);
 
 type JsonObject = Record<string, unknown>;
+type NumericSettingBounds = { minimum: number; maximum: number };
+type ConfigLockLease = { path: string; ownerPath: string; token: string };
+
+export type MicmeConfigWriteOptions = {
+	signal?: AbortSignal;
+	lockTimeoutMs?: number;
+	lockRetryMs?: number;
+};
+
+export const NUMERIC_CONFIG_BOUNDS = {
+	MICME_TRANSCRIBE_TIMEOUT_MS: { minimum: MIN_TRANSCRIBE_TIMEOUT_MS, maximum: MAX_TRANSCRIBE_TIMEOUT_MS },
+	MICME_STREAM_CAPTURE: { minimum: MIN_STREAM_CAPTURE, maximum: MAX_STREAM_CAPTURE },
+	MICME_STREAM_STEP_MS: { minimum: MIN_STREAM_STEP_MS, maximum: MAX_STREAM_STEP_MS },
+	MICME_STREAM_LENGTH_MS: { minimum: MIN_STREAM_LENGTH_MS, maximum: MAX_STREAM_LENGTH_MS },
+	MICME_STREAM_KEEP_MS: { minimum: MIN_STREAM_KEEP_MS, maximum: MAX_STREAM_KEEP_MS },
+	MICME_STREAM_MAX_TOKENS: { minimum: MIN_STREAM_MAX_TOKENS, maximum: MAX_STREAM_MAX_TOKENS },
+	MICME_STREAM_FLUSH_MS: { minimum: MIN_STREAM_FLUSH_MS, maximum: MAX_STREAM_FLUSH_MS },
+	MICME_STREAM_WORDS_PER_CHUNK: { minimum: MIN_STREAM_WORDS_PER_CHUNK, maximum: MAX_STREAM_WORDS_PER_CHUNK },
+	MICME_STREAM_VAD_THRESHOLD: { minimum: MIN_STREAM_VAD_THRESHOLD, maximum: MAX_STREAM_VAD_THRESHOLD },
+	MICME_RECORD_SAMPLE_RATE: { minimum: MIN_AUDIO_SAMPLE_RATE, maximum: MAX_AUDIO_SAMPLE_RATE },
+	MICME_TRANSCRIBE_SAMPLE_RATE: { minimum: MIN_AUDIO_SAMPLE_RATE, maximum: MAX_AUDIO_SAMPLE_RATE },
+	MICME_AVFOUNDATION_INPUT_SAMPLE_RATE: { minimum: MIN_AUDIO_SAMPLE_RATE, maximum: MAX_AUDIO_SAMPLE_RATE },
+} as const satisfies Record<string, NumericSettingBounds>;
 
 let piAgentDirChecked = false;
 let piAgentDir: string | undefined;
 let micmeConfigState: MicmeConfigState = loadMicmeJson();
+const configWriteTails = new Map<string, Promise<void>>();
 
 export function getMicmeAgentDir() {
 	const configured = process.env.PI_CODING_AGENT_DIR?.trim();
@@ -56,6 +107,12 @@ export function reloadMicmeConfig() {
 	return micmeConfigState;
 }
 
+export function requireValidMicmeConfig() {
+	const state = reloadMicmeConfig();
+	if (!state.error) return state;
+	throw new Error(`Micme config is invalid at ${state.path}: ${state.error}. Fix or remove it before using Micme operational commands.`);
+}
+
 export function loadMicmeJson(): MicmeConfigState {
 	const path = getMicmeConfigPath();
 	if (!existsSync(path)) return { path, values: {} };
@@ -66,25 +123,50 @@ export function loadMicmeJson(): MicmeConfigState {
 			return { path, values: {}, error: "top-level value must be a JSON object" };
 		}
 		return { path, values: extractMicmeValues(parsed) };
-	} catch (error) {
-		return { path, values: {}, error: error instanceof Error ? error.message : String(error) };
+	} catch {
+		return { path, values: {}, error: "file is not valid JSON" };
 	}
 }
 
-export async function writeMicmeConfigValue(key: string, value: string) {
-	await writeMicmeConfigValues({ [key]: value });
+export async function writeMicmeConfigValue(key: string, value: string, options: MicmeConfigWriteOptions = {}) {
+	await writeMicmeConfigValues({ [key]: value }, options);
 }
 
-export async function writeMicmeConfigValues(values: Record<string, string | undefined>) {
+export function writeMicmeConfigValues(values: Record<string, string | undefined>, options: MicmeConfigWriteOptions = {}) {
 	for (const key of Object.keys(values)) {
-		if (!key.startsWith("MICME_")) throw new Error(`Micme config keys must start with MICME_: ${key}`);
+		if (!key.startsWith("MICME_")) return Promise.reject(new Error(`Micme config keys must start with MICME_: ${key}`));
 	}
 
 	const configPath = getMicmeConfigPath();
-	const configDir = dirname(configPath);
-	const existing = readMicmeJsonObjectForWrite(configPath);
-	const next: JsonObject = { ...existing };
+	const previous = configWriteTails.get(configPath) ?? Promise.resolve();
+	const writeOperation = commitMicmeConfigValues.bind(undefined, configPath, values, options);
+	const pending = previous.catch(ignoreConfigWriteFailure).then(writeOperation);
+	configWriteTails.set(configPath, pending);
+	return pending.finally(removeConfigWriteTail.bind(undefined, configPath, pending));
+}
 
+async function commitMicmeConfigValues(configPath: string, values: Record<string, string | undefined>, options: MicmeConfigWriteOptions) {
+	const configDir = dirname(configPath);
+	await mkdir(configDir, { recursive: true });
+	const lease = await acquireMicmeConfigLock(configPath, options);
+	const tempPath = join(configDir, `.micme.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+
+	try {
+		options.signal?.throwIfAborted();
+		const existing = readMicmeJsonObjectForWrite(configPath);
+		const next = mergeMicmeConfigValues(existing, values);
+		await writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600, signal: options.signal });
+		options.signal?.throwIfAborted();
+		await rename(tempPath, configPath);
+		reloadMicmeConfig();
+	} finally {
+		await rm(tempPath, { force: true }).catch(ignoreConfigWriteFailure);
+		await releaseMicmeConfigLock(lease);
+	}
+}
+
+function mergeMicmeConfigValues(existing: JsonObject, values: Record<string, string | undefined>) {
+	const next: JsonObject = { ...existing };
 	for (const [key, value] of Object.entries(values)) {
 		if (value === undefined) {
 			delete next[key];
@@ -92,18 +174,73 @@ export async function writeMicmeConfigValues(values: Record<string, string | und
 			next[key] = String(value);
 		}
 	}
+	return next;
+}
 
-	await mkdir(configDir, { recursive: true });
-	const tempPath = join(configDir, `.micme.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+async function acquireMicmeConfigLock(configPath: string, options: MicmeConfigWriteOptions): Promise<ConfigLockLease> {
+	const lockPath = `${configPath}.lock`;
+	const ownerPath = join(lockPath, "owner.json");
+	const token = randomUUID();
+	const timeoutMs = positiveDuration(options.lockTimeoutMs, CONFIG_LOCK_TIMEOUT_MS, "lockTimeoutMs");
+	const retryMs = positiveDuration(options.lockRetryMs, CONFIG_LOCK_RETRY_MS, "lockRetryMs");
+	const deadline = Date.now() + timeoutMs;
+
+	while (true) {
+		options.signal?.throwIfAborted();
+		try {
+			await mkdir(lockPath, { mode: 0o700 });
+		} catch (error) {
+			if (!isNodeError(error, "EEXIST")) throw error;
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) {
+				throw new Error(`Timed out waiting ${timeoutMs} ms for Micme config lock at ${lockPath}. The lock may be active or stale; Micme will not remove a lock owned by another writer.`, { cause: error });
+			}
+			await delay(Math.min(retryMs, remainingMs), undefined, { signal: options.signal });
+			continue;
+		}
+
+		const lease = { path: lockPath, ownerPath, token };
+		try {
+			options.signal?.throwIfAborted();
+			await writeFile(ownerPath, `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString() }, null, 2)}\n`, {
+				encoding: "utf8",
+				mode: 0o600,
+				signal: options.signal,
+			});
+			return lease;
+		} catch (error) {
+			await rm(lockPath, { recursive: true, force: true }).catch(ignoreConfigWriteFailure);
+			throw error;
+		}
+	}
+}
+
+async function releaseMicmeConfigLock(lease: ConfigLockLease) {
+	let owner: unknown;
 	try {
-		await writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-		await rename(tempPath, configPath);
+		owner = JSON.parse(await readFile(lease.ownerPath, "utf8"));
 	} catch (error) {
-		await rm(tempPath, { force: true }).catch(() => undefined);
+		if (isNodeError(error, "ENOENT")) return;
 		throw error;
 	}
+	if (!isJsonObject(owner) || owner.token !== lease.token) return;
+	await rm(lease.path, { recursive: true, force: true });
+}
 
-	reloadMicmeConfig();
+function positiveDuration(value: number | undefined, fallback: number, name: string) {
+	if (value === undefined) return fallback;
+	if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive finite number`);
+	return Math.ceil(value);
+}
+
+function isNodeError(error: unknown, code: string) {
+	return error instanceof Error && "code" in error && error.code === code;
+}
+
+function ignoreConfigWriteFailure() {}
+
+function removeConfigWriteTail(configPath: string, pending: Promise<void>) {
+	if (configWriteTails.get(configPath) === pending) configWriteTails.delete(configPath);
 }
 
 export function getTranscriptionModeProfile(mode: TranscriptionMode): Record<string, string> {
@@ -129,7 +266,7 @@ export function getTranscriptionModeProfile(mode: TranscriptionMode): Record<str
 		MICME_STREAM_LENGTH_MS: String(DEFAULT_STREAM_LENGTH_MS),
 		MICME_STREAM_KEEP_MS: String(DEFAULT_STREAM_KEEP_MS),
 		MICME_STREAM_MAX_TOKENS: String(DEFAULT_STREAM_MAX_TOKENS),
-		MICME_STREAM_WORDS_PER_CHUNK: "10",
+		MICME_STREAM_WORDS_PER_CHUNK: String(DEFAULT_STREAM_WORDS_PER_CHUNK),
 		MICME_STREAM_FLUSH_MS: String(DEFAULT_STREAM_FLUSH_MS),
 		MICME_STREAM_KEEP_CONTEXT: "0",
 		MICME_STREAM_FINALIZE_WITH_CLIP: "1",
@@ -171,8 +308,11 @@ export function getTerminalShortcut() {
 	return DEFAULT_SHORTCUT;
 }
 
+const TRANSCRIPTION_MODES = ["clip", "stream"] as const;
+const TRANSCRIBE_BACKENDS = ["auto", "whisper.cpp", "python", "custom"] as const;
+
 export function getTranscriptionMode() {
-	return env("MICME_TRANSCRIPTION_MODE") === "stream" ? "stream" : "clip";
+	return parseConfiguredChoice(env("MICME_TRANSCRIPTION_MODE"), TRANSCRIPTION_MODES, "clip");
 }
 
 export function getTranslateToEnglishLanguage() {
@@ -182,12 +322,15 @@ export function getTranslateToEnglishLanguage() {
 }
 
 export function getTranscribeBackend(): TranscribeBackend {
-	const value = env("MICME_TRANSCRIBE_BACKEND")?.trim();
-	return isTranscribeBackend(value) ? value : DEFAULT_TRANSCRIBE_BACKEND;
+	return parseConfiguredChoice(env("MICME_TRANSCRIBE_BACKEND")?.trim(), TRANSCRIBE_BACKENDS, DEFAULT_TRANSCRIBE_BACKEND);
 }
 
 export function isTranscribeBackend(value: string | undefined): value is TranscribeBackend {
-	return value === "auto" || value === "whisper.cpp" || value === "python" || value === "custom";
+	return value !== undefined && TRANSCRIBE_BACKENDS.includes(value as TranscribeBackend);
+}
+
+function parseConfiguredChoice<T extends string>(value: string | undefined, choices: readonly T[], fallback: T) {
+	return value !== undefined && choices.includes(value as T) ? (value as T) : fallback;
 }
 
 const NAMED_TERMINAL_KEYS = new Set([
@@ -265,65 +408,61 @@ function splitShortcutValues(value: string) {
 }
 
 export function getTranscribeTimeoutMs() {
-	const value = Number(env("MICME_TRANSCRIBE_TIMEOUT_MS"));
-	return Number.isFinite(value) && value > 0 ? value : DEFAULT_TRANSCRIBE_TIMEOUT_MS;
+	return parseBoundedInteger(env("MICME_TRANSCRIBE_TIMEOUT_MS"), NUMERIC_CONFIG_BOUNDS.MICME_TRANSCRIBE_TIMEOUT_MS) ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS;
+}
+
+export function getStreamCapture() {
+	return parseBoundedInteger(env("MICME_STREAM_CAPTURE"), NUMERIC_CONFIG_BOUNDS.MICME_STREAM_CAPTURE) ?? DEFAULT_STREAM_CAPTURE;
 }
 
 export function getStreamStepMs() {
-	const value = Number(env("MICME_STREAM_STEP_MS"));
-	return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_STREAM_STEP_MS;
+	return parseBoundedInteger(env("MICME_STREAM_STEP_MS"), NUMERIC_CONFIG_BOUNDS.MICME_STREAM_STEP_MS) ?? DEFAULT_STREAM_STEP_MS;
 }
 
 export function getStreamLengthMs() {
-	const value = Number(env("MICME_STREAM_LENGTH_MS"));
-	return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_STREAM_LENGTH_MS;
+	return parseBoundedInteger(env("MICME_STREAM_LENGTH_MS"), NUMERIC_CONFIG_BOUNDS.MICME_STREAM_LENGTH_MS) ?? DEFAULT_STREAM_LENGTH_MS;
 }
 
 export function getStreamKeepMs() {
-	const value = Number(env("MICME_STREAM_KEEP_MS"));
-	return Number.isFinite(value) && value >= 0 ? Math.round(value) : DEFAULT_STREAM_KEEP_MS;
+	return parseBoundedInteger(env("MICME_STREAM_KEEP_MS"), NUMERIC_CONFIG_BOUNDS.MICME_STREAM_KEEP_MS) ?? DEFAULT_STREAM_KEEP_MS;
 }
 
 export function getStreamMaxTokens() {
-	const value = Number(env("MICME_STREAM_MAX_TOKENS"));
-	return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_STREAM_MAX_TOKENS;
+	return parseBoundedInteger(env("MICME_STREAM_MAX_TOKENS"), NUMERIC_CONFIG_BOUNDS.MICME_STREAM_MAX_TOKENS) ?? DEFAULT_STREAM_MAX_TOKENS;
 }
 
 export function getStreamVadThreshold() {
-	const value = Number(env("MICME_STREAM_VAD_THRESHOLD"));
-	return Number.isFinite(value) && value > 0 && value < 1 ? value : DEFAULT_STREAM_VAD_THRESHOLD;
+	return parseBoundedNumber(env("MICME_STREAM_VAD_THRESHOLD"), NUMERIC_CONFIG_BOUNDS.MICME_STREAM_VAD_THRESHOLD) ?? DEFAULT_STREAM_VAD_THRESHOLD;
 }
 
 export function getStreamKeepContext() {
-	const value = env("MICME_STREAM_KEEP_CONTEXT");
-	return value === undefined ? false : /^(1|true|yes|on)$/i.test(value);
+	return getFlagSetting("MICME_STREAM_KEEP_CONTEXT", false);
 }
 
 export function getStreamFlushMs() {
-	const value = Number(env("MICME_STREAM_FLUSH_MS"));
-	return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_STREAM_FLUSH_MS;
+	return parseBoundedInteger(env("MICME_STREAM_FLUSH_MS"), NUMERIC_CONFIG_BOUNDS.MICME_STREAM_FLUSH_MS) ?? DEFAULT_STREAM_FLUSH_MS;
 }
 
 export function getStreamFinalizeWithClip() {
-	const value = env("MICME_STREAM_FINALIZE_WITH_CLIP");
-	return value === undefined ? false : /^(1|true|yes|on)$/i.test(value);
+	return getFlagSetting("MICME_STREAM_FINALIZE_WITH_CLIP", false);
 }
 
 export function getStreamWordsPerChunk() {
-	const value = Number(env("MICME_STREAM_WORDS_PER_CHUNK"));
-	return Number.isFinite(value) && value > 0 ? Math.min(10, Math.round(value)) : 10;
+	return parseBoundedInteger(env("MICME_STREAM_WORDS_PER_CHUNK"), NUMERIC_CONFIG_BOUNDS.MICME_STREAM_WORDS_PER_CHUNK) ?? DEFAULT_STREAM_WORDS_PER_CHUNK;
 }
 
 export function getRecordSampleRate() {
 	const configured = env("MICME_RECORD_SAMPLE_RATE")?.trim();
 	if (!configured || /^auto$/i.test(configured)) return undefined;
-	const value = Number(configured);
-	return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+	return parseBoundedInteger(configured, NUMERIC_CONFIG_BOUNDS.MICME_RECORD_SAMPLE_RATE);
 }
 
 export function getTranscribeSampleRate() {
-	const value = Number(env("MICME_TRANSCRIBE_SAMPLE_RATE"));
-	return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_TRANSCRIBE_SAMPLE_RATE;
+	return parseBoundedInteger(env("MICME_TRANSCRIBE_SAMPLE_RATE"), NUMERIC_CONFIG_BOUNDS.MICME_TRANSCRIBE_SAMPLE_RATE) ?? DEFAULT_TRANSCRIBE_SAMPLE_RATE;
+}
+
+export function getAutoDownloadModel() {
+	return getFlagSetting("MICME_AUTO_DOWNLOAD_MODEL", DEFAULT_AUTO_DOWNLOAD_MODEL);
 }
 
 export function getRecordMeter() {
@@ -331,8 +470,7 @@ export function getRecordMeter() {
 }
 
 export function getRecordSync() {
-	const value = env("MICME_RECORD_SYNC");
-	return value === undefined ? true : /^(1|true|yes|on)$/i.test(value);
+	return getFlagSetting("MICME_RECORD_SYNC", DEFAULT_RECORD_SYNC);
 }
 
 export function getAvfoundationDropLateFrames() {
@@ -340,8 +478,7 @@ export function getAvfoundationDropLateFrames() {
 }
 
 export function getAvfoundationInputSampleRate() {
-	const value = Number(env("MICME_AVFOUNDATION_INPUT_SAMPLE_RATE"));
-	return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+	return parseBoundedInteger(env("MICME_AVFOUNDATION_INPUT_SAMPLE_RATE"), NUMERIC_CONFIG_BOUNDS.MICME_AVFOUNDATION_INPUT_SAMPLE_RATE);
 }
 
 export function getAudioFilter() {
@@ -375,7 +512,32 @@ export function getMeterGain() {
 }
 
 export function envFlag(name: string) {
-	return /^(1|true|yes|on)$/i.test(env(name) || "");
+	return getFlagSetting(name, false);
+}
+
+function getFlagSetting(name: string, fallback: boolean) {
+	const value = env(name)?.trim();
+	if (/^(1|true|yes|on)$/i.test(value ?? "")) return true;
+	if (/^(0|false|no|off)$/i.test(value ?? "")) return false;
+	return fallback;
+}
+
+function parseBoundedInteger(value: string | undefined, bounds: NumericSettingBounds) {
+	const number = parseFiniteNumber(value);
+	if (number === undefined) return undefined;
+	const normalized = Math.round(number);
+	return normalized >= bounds.minimum && normalized <= bounds.maximum ? normalized : undefined;
+}
+
+function parseBoundedNumber(value: string | undefined, bounds: NumericSettingBounds) {
+	const number = parseFiniteNumber(value);
+	return number !== undefined && number >= bounds.minimum && number <= bounds.maximum ? number : undefined;
+}
+
+function parseFiniteNumber(value: string | undefined) {
+	if (!value?.trim()) return undefined;
+	const number = Number(value);
+	return Number.isFinite(number) ? number : undefined;
 }
 
 function readMicmeJsonObjectForWrite(configPath: string): JsonObject {

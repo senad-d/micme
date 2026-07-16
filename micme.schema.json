@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json",
   "title": "Micme configuration",
-  "description": "Machine-level Micme settings. Shell environment variables override saved values.",
+  "description": "Machine-level Micme settings. Shell environment variables override saved values. Invalid numeric values fall back to the documented defaults at runtime.",
   "type": "object",
   "properties": {
     "$schema": {
@@ -29,8 +29,18 @@
       "default": "auto",
       "description": "Select transcription backend. auto preserves priority: custom command, whisper.cpp, then Python Whisper."
     },
+    "MICME_TRANSCRIBE_TIMEOUT_MS": {
+      "type": ["string", "number"],
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 1000,
+      "maximum": 3600000,
+      "multipleOf": 1,
+      "default": "120000",
+      "description": "Transcription timeout in whole milliseconds. Runtime range: 1000 through 3600000."
+    },
     "MICME_AUTO_SUBMIT": {
-      "$ref": "#/$defs/stringFlag"
+      "$ref": "#/$defs/stringFlag",
+      "default": "0"
     },
     "MICME_LANGUAGE": {
       "type": "string",
@@ -44,7 +54,9 @@
       "description": "Translate from control. off disables translation; any language code means translate speech in that source language to English."
     },
     "MICME_AUTO_DOWNLOAD_MODEL": {
-      "$ref": "#/$defs/stringFlag"
+      "$ref": "#/$defs/stringFlag",
+      "default": "1",
+      "description": "Download a missing standard whisper.cpp model automatically. Defaults on."
     },
     "MICME_DEFAULT_WHISPER_CPP_MODEL": {
       "type": "string",
@@ -74,8 +86,21 @@
     },
     "MICME_RECORD_SAMPLE_RATE": {
       "type": ["string", "number"],
+      "pattern": "^(?:auto|0|[1-9][0-9]*)$",
+      "minimum": 8000,
+      "maximum": 384000,
+      "multipleOf": 1,
       "default": "auto",
-      "description": "Raw recording sample-rate override. Leave auto/unset so ffmpeg uses the selected input's native sample rate."
+      "description": "Raw recording sample-rate override in whole Hz from 8000 through 384000. Leave auto/unset so ffmpeg uses the selected input's native sample rate."
+    },
+    "MICME_TRANSCRIBE_SAMPLE_RATE": {
+      "type": ["string", "number"],
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 8000,
+      "maximum": 384000,
+      "multipleOf": 1,
+      "default": "16000",
+      "description": "Sample rate in whole Hz from 8000 through 384000 for processed audio sent to Whisper."
     },
     "MICME_RECORD_SYNC": {
       "$ref": "#/$defs/stringFlag",
@@ -84,31 +109,115 @@
     },
     "MICME_RECORD_METER": {
       "$ref": "#/$defs/stringFlag",
+      "default": "0",
       "description": "Enable the legacy ffmpeg stdout PCM branch for live metering. Defaults off to avoid recorder backpressure; the UI can still meter by polling raw.wav."
     },
     "MICME_AVFOUNDATION_DROP_LATE_FRAMES": {
       "$ref": "#/$defs/stringFlag",
+      "default": "0",
       "description": "macOS AVFoundation only. Defaults off so ffmpeg is asked not to drop late frames when capture lags."
     },
     "MICME_AVFOUNDATION_INPUT_SAMPLE_RATE": {
       "type": ["string", "number"],
-      "description": "Advanced macOS fallback used only when MICME_RECORD_SYNC=0. Reinterpret input samples with this source rate before resampling."
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 8000,
+      "maximum": 384000,
+      "multipleOf": 1,
+      "description": "Advanced macOS fallback from 8000 through 384000 Hz used only when MICME_RECORD_SYNC=0."
+    },
+    "MICME_PROCESS_AUDIO": {
+      "$ref": "#/$defs/stringFlag",
+      "default": "1"
+    },
+    "MICME_VALIDATE_AUDIO": {
+      "$ref": "#/$defs/stringFlag",
+      "default": "1",
+      "description": "Reject near-silent clips and fail when ffmpeg does not provide complete max-volume evidence."
     },
     "MICME_KEEP_AUDIO": {
-      "$ref": "#/$defs/stringFlag"
+      "$ref": "#/$defs/stringFlag",
+      "default": "0"
+    },
+    "MICME_STREAM_CAPTURE": {
+      "type": ["string", "number"],
+      "pattern": "^-?(?:0|[1-9][0-9]*)$",
+      "minimum": -1,
+      "maximum": 255,
+      "multipleOf": 1,
+      "default": "-1",
+      "description": "whisper-stream/SDL capture id from -1 through 255. -1 selects the system default."
+    },
+    "MICME_STREAM_STEP_MS": {
+      "type": ["string", "number"],
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 100,
+      "maximum": 60000,
+      "multipleOf": 1,
+      "default": "1000",
+      "description": "whisper-stream processing step in whole milliseconds from 100 through 60000."
+    },
+    "MICME_STREAM_LENGTH_MS": {
+      "type": ["string", "number"],
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 1000,
+      "maximum": 120000,
+      "multipleOf": 1,
+      "default": "5000",
+      "description": "whisper-stream audio window in whole milliseconds from 1000 through 120000."
+    },
+    "MICME_STREAM_KEEP_MS": {
+      "type": ["string", "number"],
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 0,
+      "maximum": 60000,
+      "multipleOf": 1,
+      "default": "500",
+      "description": "whisper-stream overlap retained in whole milliseconds from 0 through 60000."
+    },
+    "MICME_STREAM_MAX_TOKENS": {
+      "type": ["string", "number"],
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 1,
+      "maximum": 4096,
+      "multipleOf": 1,
+      "default": "64",
+      "description": "Maximum whisper-stream tokens from 1 through 4096."
     },
     "MICME_STREAM_KEEP_CONTEXT": {
       "$ref": "#/$defs/stringFlag",
+      "default": "0",
       "description": "Pass --keep-context to whisper-stream. Defaults to off for append-only dictation."
     },
     "MICME_STREAM_FINALIZE_WITH_CLIP": {
       "$ref": "#/$defs/stringFlag",
+      "default": "0",
       "description": "When enabled, stop-time clip transcription may replace the append-only live stream transcript."
     },
     "MICME_STREAM_FLUSH_MS": {
       "type": ["string", "number"],
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 100,
+      "maximum": 60000,
+      "multipleOf": 1,
       "default": "700",
-      "description": "Quiet interval in milliseconds before tentative stream words are committed append-only."
+      "description": "Quiet interval in whole milliseconds from 100 through 60000 before tentative stream words are committed append-only."
+    },
+    "MICME_STREAM_WORDS_PER_CHUNK": {
+      "type": ["string", "number"],
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "minimum": 1,
+      "maximum": 10,
+      "multipleOf": 1,
+      "default": "10",
+      "description": "Maximum stable words committed per streaming update, from 1 through 10."
+    },
+    "MICME_STREAM_VAD_THRESHOLD": {
+      "type": ["string", "number"],
+      "pattern": "^(?:0(?:\\.[0-9]+)?|1(?:\\.0+)?)$",
+      "minimum": 0.01,
+      "maximum": 0.99,
+      "default": "0.45",
+      "description": "whisper-stream voice activity threshold from 0.01 through 0.99."
     },
     "MICME_RECORD_COMMAND": {
       "type": "string",
@@ -129,8 +238,7 @@
   "$defs": {
     "stringFlag": {
       "type": "string",
-      "enum": ["0", "1", "true", "false", "yes", "no", "on", "off"],
-      "default": "0"
+      "enum": ["0", "1", "true", "false", "yes", "no", "on", "off"]
     }
   }
 }

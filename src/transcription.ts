@@ -9,19 +9,19 @@ import { formatProcessOutput, formatRunExit, replacePlaceholders, runProcess, ru
 
 export { getWhisperCppBinary, getWhisperStreamBinary, resolveExecutableConfig } from "./backends.ts";
 
-export async function transcribe(audioPath: string, tempDir: string, ctx?: ExtensionContext): Promise<string> {
+export async function transcribe(audioPath: string, tempDir: string, ctx?: ExtensionContext, signal?: AbortSignal): Promise<string> {
 	const plan = resolveTranscriptionPlan({ transcriptionMode: "clip" });
 
 	switch (plan.effectiveBackend) {
 		case "custom":
 			if (!plan.command) break;
-			return transcribeWithCustomCommand(plan.command, audioPath, tempDir);
+			return transcribeWithCustomCommand(plan.command, audioPath, tempDir, signal);
 		case "whisper.cpp":
 			if (!plan.binary || !plan.modelPath) break;
-			return transcribeWithWhisperCpp(plan.binary, plan.modelPath, audioPath, tempDir, ctx, { allowDownload: plan.modelDownloadable !== false });
+			return transcribeWithWhisperCpp(plan.binary, plan.modelPath, audioPath, tempDir, ctx, { allowDownload: plan.modelDownloadable !== false, signal });
 		case "python":
 			if (!plan.binary) break;
-			return transcribeWithOpenAiWhisper(plan.binary, audioPath, tempDir, plan.modelName);
+			return transcribeWithOpenAiWhisper(plan.binary, audioPath, tempDir, plan.modelName, signal);
 		case "none":
 			break;
 	}
@@ -29,10 +29,10 @@ export async function transcribe(audioPath: string, tempDir: string, ctx?: Exten
 	throw new Error(formatTranscriptionPlan(plan));
 }
 
-export async function transcribeWithCustomCommand(template: string, audioPath: string, tempDir: string) {
+export async function transcribeWithCustomCommand(template: string, audioPath: string, tempDir: string, signal?: AbortSignal) {
 	const transcriptPath = join(tempDir, "transcript.txt");
 	const command = replacePlaceholders(template, { audio: audioPath, tempDir, transcript: transcriptPath });
-	const result = await runShell(command, getTranscribeTimeoutMs());
+	const result = await runShell(command, getTranscribeTimeoutMs(), { signal });
 	if (result.code !== 0) {
 		throw new Error(`MICME_TRANSCRIBE_COMMAND failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
@@ -51,7 +51,7 @@ export async function transcribeWithWhisperCpp(
 	audioPath: string,
 	tempDir: string,
 	ctx?: ExtensionContext,
-	options: { allowDownload?: boolean } = {},
+	options: { allowDownload?: boolean; signal?: AbortSignal } = {},
 ) {
 	await ensureWhisperCppModel(modelPath, ctx, options);
 	const outputBase = join(tempDir, "whisper-cpp");
@@ -64,7 +64,7 @@ export async function transcribeWithWhisperCpp(
 		if (language?.trim()) args.push("-l", language.trim());
 	}
 
-	const result = await runProcess(binary, args, getTranscribeTimeoutMs());
+	const result = await runProcess(binary, args, getTranscribeTimeoutMs(), { signal: options.signal });
 	if (result.code !== 0) {
 		throw new Error(`whisper.cpp failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
@@ -78,7 +78,7 @@ export async function transcribeWithWhisperCpp(
 	return result.stdout;
 }
 
-export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string) {
+export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string, signal?: AbortSignal) {
 	const model = modelName || getPythonWhisperModelName();
 	const args = [
 		audioPath,
@@ -109,7 +109,7 @@ export async function transcribeWithOpenAiWhisper(binary: string, audioPath: str
 	if (fp16?.trim()) args.push("--fp16", fp16.trim());
 	else args.push("--fp16", "False");
 
-	const result = await runProcess(binary, args, getTranscribeTimeoutMs());
+	const result = await runProcess(binary, args, getTranscribeTimeoutMs(), { signal });
 	if (result.code !== 0) {
 		throw new Error(`openai-whisper failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}

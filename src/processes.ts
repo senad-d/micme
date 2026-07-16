@@ -60,27 +60,41 @@ export function spawnRecording(command: CommandSpec, audioPath: string, tempDir:
 	};
 }
 
-export async function stopProcess(active: Recording) {
-	if (active.isSettled()) {
-		await active.exitPromise;
-	} else {
-		active.stopRequested = true;
-		let exit: ExitResult | undefined;
-		if (sendStopInput(active)) {
-			exit = await raceWithTimeout(active.exitPromise, RECORDER_STOP_GRACE_MS);
-		}
-		if (!exit) {
-			active.process.kill("SIGINT");
-			exit = await raceWithTimeout(active.exitPromise, RECORDER_STOP_GRACE_MS);
-		}
-		if (!exit) {
-			active.process.kill("SIGTERM");
-			exit = await raceWithTimeout(active.exitPromise, 1_000);
-		}
-		if (!exit) {
-			active.process.kill("SIGKILL");
-			await active.exitPromise;
-		}
+export function stopProcess(active: Recording) {
+	if (active.stopPromise) return active.stopPromise;
+	active.stopPromise = stopProcessOnce(active);
+	return active.stopPromise;
+}
+
+async function stopProcessOnce(active: Recording) {
+	if (active.isSettled()) return active.exitPromise;
+
+	active.stopRequested = true;
+	let exit: ExitResult | undefined;
+	if (sendStopInput(active)) {
+		exit = await raceWithTimeout(active.exitPromise, RECORDER_STOP_GRACE_MS);
+	}
+	if (!exit) {
+		sendStopSignal(active, "SIGINT");
+		exit = await raceWithTimeout(active.exitPromise, RECORDER_STOP_GRACE_MS);
+	}
+	if (!exit) {
+		sendStopSignal(active, "SIGTERM");
+		exit = await raceWithTimeout(active.exitPromise, 1_000);
+	}
+	if (!exit) {
+		sendStopSignal(active, "SIGKILL");
+		exit = await active.exitPromise;
+	}
+	return exit;
+}
+
+function sendStopSignal(active: Recording, signal: NodeJS.Signals) {
+	try {
+		if (!active.process.kill(signal)) return;
+		(active.stopSignals ??= new Set()).add(signal);
+	} catch {
+		// The exit promise remains authoritative when the process settles during escalation.
 	}
 }
 
@@ -96,7 +110,8 @@ export function sendStopInput(active: Recording) {
 }
 
 export async function stopRecorder(active: Recording) {
-	await stopProcess(active);
+	const exit = await stopProcess(active);
+	assertExpectedProcessExit(active, exit, "recorder");
 
 	const audioStats = await stat(active.audioPath).catch(() => undefined);
 	if (!audioStats || audioStats.size < MIN_AUDIO_BYTES) {
@@ -106,9 +121,9 @@ export async function stopRecorder(active: Recording) {
 	}
 }
 
-export function runShell(command: string, timeoutMs: number) {
+export function runShell(command: string, timeoutMs: number, options: RunProcessOptions = {}) {
 	const spec = shellCommand(command);
-	return runProcess(spec.command, spec.args, timeoutMs);
+	return runProcess(spec.command, spec.args, timeoutMs, options);
 }
 
 export function shellCommand(command: string): CommandSpec {
@@ -118,18 +133,41 @@ export function shellCommand(command: string): CommandSpec {
 	return { command: "sh", args: ["-lc", command], display: command };
 }
 
-export function runProcess(command: string, args: string[], timeoutMs: number): Promise<RunResult> {
+export type RunProcessOptions = {
+	signal?: AbortSignal;
+};
+
+export function runProcess(command: string, args: string[], timeoutMs: number, options: RunProcessOptions = {}): Promise<RunResult> {
 	return new Promise((resolve, reject) => {
+		if (options.signal?.aborted) {
+			resolve({ code: null, signal: null, stdout: "", stderr: "", timedOut: false, cancelled: true });
+			return;
+		}
+
 		const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
 		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
+		let cancelled = false;
 		let settled = false;
+		let abortTimer: ReturnType<typeof setTimeout> | undefined;
 
 		const timer = setTimeout(() => {
 			timedOut = true;
 			child.kill("SIGKILL");
 		}, timeoutMs);
+		const abort = () => {
+			if (settled) return;
+			cancelled = true;
+			child.kill("SIGTERM");
+			abortTimer = setTimeout(() => child.kill("SIGKILL"), 1_000);
+		};
+		const finish = () => {
+			clearTimeout(timer);
+			if (abortTimer) clearTimeout(abortTimer);
+			options.signal?.removeEventListener("abort", abort);
+		};
+		options.signal?.addEventListener("abort", abort, { once: true });
 
 		child.stdout?.setEncoding("utf8");
 		child.stderr?.setEncoding("utf8");
@@ -142,15 +180,16 @@ export function runProcess(command: string, args: string[], timeoutMs: number): 
 		child.once("error", (error) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timer);
+			finish();
 			reject(error);
 		});
 		child.once("close", (code, signal) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timer);
-			resolve({ code, signal, stdout, stderr, timedOut });
+			finish();
+			resolve({ code, signal, stdout, stderr, timedOut, ...(cancelled ? { cancelled: true } : {}) });
 		});
+		if (options.signal?.aborted) abort();
 	});
 }
 
@@ -263,7 +302,43 @@ export function formatExit(exit: ExitResult) {
 	return `code ${exit.code}`;
 }
 
+export function assertExpectedProcessExit(active: Recording, exit: ExitResult, label: string) {
+	if (isExpectedProcessExit(active, exit)) return;
+	const action = active.stopRequested ? "failed while stopping" : "exited unexpectedly";
+	const reason = formatProcessOutput(appendCapped("", formatExit(exit))) || "unknown process result";
+	const stderr = formatProcessOutput(active.stderr());
+	const suffix = stderr ? `\n${formatProcessLabel(label)} output:\n${stderr}` : "";
+	throw new Error(`Micme ${label} ${action} (${reason}).${suffix}`);
+}
+
+function isExpectedProcessExit(active: Recording, exit: ExitResult) {
+	if (!active.stopRequested || exit.error) return false;
+	if (exit.code === 0) return true;
+	if (exit.signal) return active.stopSignals?.has(exit.signal) ?? false;
+	if (exit.code === null || !active.stopSignals?.size) return false;
+	if (active.command.signalStopExitCodes?.includes(exit.code)) return true;
+	return [...active.stopSignals].some((signal) => exit.code === getSignalExitCode(signal));
+}
+
+function getSignalExitCode(signal: NodeJS.Signals) {
+	switch (signal) {
+		case "SIGINT":
+			return 130;
+		case "SIGTERM":
+			return 143;
+		case "SIGKILL":
+			return 137;
+		default:
+			return undefined;
+	}
+}
+
+function formatProcessLabel(label: string) {
+	return label ? `${label[0]?.toUpperCase()}${label.slice(1)}` : "Process";
+}
+
 export function formatRunExit(result: RunResult) {
+	if (result.cancelled) return "cancelled";
 	if (result.timedOut) return "timeout";
 	if (result.signal) return `signal ${result.signal}`;
 	return `code ${result.code}`;

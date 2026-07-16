@@ -16,15 +16,17 @@ import {
 } from "@earendil-works/pi-tui";
 import { basename } from "node:path";
 import {
-	DEFAULT_RECORD_SAMPLE_RATE,
-	DEFAULT_STREAM_VAD_THRESHOLD,
-	DEFAULT_STREAM_FLUSH_MS,
-	DEFAULT_TRANSCRIBE_SAMPLE_RATE,
-} from "./constants.ts";
-import {
 	env,
 	expandConfigPath,
+	getAutoDownloadModel,
+	getRecordSampleRate,
+	getRecordSync,
 	getShortcutSettingValue,
+	getStreamCapture,
+	getStreamFlushMs,
+	getStreamVadThreshold,
+	getStreamWordsPerChunk,
+	getTranscribeSampleRate,
 	getTranscriptionMode,
 	getTranscriptionModeProfile,
 	reloadMicmeConfig,
@@ -110,6 +112,7 @@ export async function showConfiguration(ctx: ExtensionContext) {
 	}
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 		const discovery = createInitialConfigurationDiscovery();
+		const controller = new AbortController();
 		let closed = false;
 		const screen = new ConfigurationScreen({
 			configPath: sanitizeTerminalOutput(configState.path) || "micme.json",
@@ -117,10 +120,11 @@ export async function showConfiguration(ctx: ExtensionContext) {
 			theme,
 			onDone: () => {
 				closed = true;
+				controller.abort();
 				done();
 			},
 			onError: (error) => notifySanitized(ctx, error instanceof Error ? error.message : String(error), "error"),
-			onSave: (id, newValue) => saveConfigurationValue(ctx, id, newValue),
+			onSave: (id, newValue) => saveConfigurationValue(ctx, id, newValue, { signal: controller.signal }),
 			requestRender: () => tui.requestRender(),
 			statusText: formatDiscoveryStatus(discovery.pending),
 		});
@@ -231,6 +235,7 @@ class ConfigurationScreen implements Component {
 	private pendingShortcutValue = "";
 	private saving = false;
 	private statusText = "";
+	private closed = false;
 
 	constructor(options: {
 		configPath: string;
@@ -254,6 +259,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	updateDiscoveredItems(items: ConfigurationItem[], statusText: string) {
+		if (this.closed) return;
 		this.items = items;
 		this.refreshDerivedItems();
 		this.clampSelections();
@@ -275,6 +281,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.closed) return;
 		if (this.forwardSubmenuInput(data)) return;
 		if (this.forwardShortcutCaptureInput(data)) return;
 		if (this.handleCloseInput(data)) return;
@@ -305,8 +312,14 @@ class ConfigurationScreen implements Component {
 
 	private handleCloseInput(data: string) {
 		if (!matchesKey(data, Key.ctrl("c")) && data !== "q" && data !== "Q") return false;
-		this.onDone();
+		this.close();
 		return true;
+	}
+
+	private close() {
+		if (this.closed) return;
+		this.closed = true;
+		this.onDone();
 	}
 
 	private handlePaneSwitchInput(data: string) {
@@ -351,7 +364,7 @@ class ConfigurationScreen implements Component {
 			this.focusedPane = "categories";
 			this.requestRender();
 		} else {
-			this.onDone();
+			this.close();
 		}
 	}
 
@@ -715,16 +728,19 @@ class ConfigurationScreen implements Component {
 
 		void this.onSave(item.id, nextValue)
 			.then((updatedValues) => {
+				if (this.closed) return;
 				this.updateValues(updatedValues);
 				this.refreshDerivedItems();
 				this.clampSelections();
 				this.statusText = formatSaveStatus(item.id, nextValue);
 			})
 			.catch((error) => {
+				if (this.closed) return;
 				this.statusText = "Save failed";
 				this.onError(error);
 			})
 			.finally(() => {
+				if (this.closed) return;
 				this.saving = false;
 				this.requestRender();
 			});
@@ -856,8 +872,8 @@ export function buildConfigurationItems(
 			categoryId: "general",
 			label: "Auto-download models",
 			description: "Download missing whisper.cpp models automatically when selected or first used.",
-			rawValue: env("MICME_AUTO_DOWNLOAD_MODEL") ?? "1",
-			currentValue: env("MICME_AUTO_DOWNLOAD_MODEL") ?? "1",
+			rawValue: getAutoDownloadModel() ? "1" : "0",
+			currentValue: getAutoDownloadModel() ? "1" : "0",
 			values: ["1", "0"],
 			displayKind: "boolean",
 		},
@@ -956,9 +972,9 @@ export function buildConfigurationItems(
 			id: "MICME_STREAM_CAPTURE",
 			categoryId: "streaming",
 			label: "Stream capture device",
-			description: "whisper-stream/SDL capture id. Use -1 for the system default; ffmpeg device ids may not match.",
-			rawValue: env("MICME_STREAM_CAPTURE") ?? "-1",
-			currentValue: env("MICME_STREAM_CAPTURE") ?? "-1",
+			description: "whisper-stream/SDL capture id from -1 through 255. Use -1 for the system default; ffmpeg device ids may not match.",
+			rawValue: String(getStreamCapture()),
+			currentValue: String(getStreamCapture()),
 			values: ["-1", "0", "1", "2", "3", "4", "5"],
 			displayKind: "number",
 		},
@@ -976,9 +992,9 @@ export function buildConfigurationItems(
 			id: "MICME_STREAM_FLUSH_MS",
 			categoryId: "streaming",
 			label: "Stream flush delay",
-			description: "Quiet interval before tentative stream words are committed append-only into the editor.",
-			rawValue: env("MICME_STREAM_FLUSH_MS") ?? String(DEFAULT_STREAM_FLUSH_MS),
-			currentValue: env("MICME_STREAM_FLUSH_MS") ?? String(DEFAULT_STREAM_FLUSH_MS),
+			description: "Quiet interval from 100 through 60000 ms before tentative stream words are committed append-only into the editor.",
+			rawValue: String(getStreamFlushMs()),
+			currentValue: String(getStreamFlushMs()),
 			values: ["400", "650", "700", "1000"],
 			displayKind: "number",
 		},
@@ -996,9 +1012,9 @@ export function buildConfigurationItems(
 			id: "MICME_STREAM_VAD_THRESHOLD",
 			categoryId: "streaming",
 			label: "Stream VAD threshold",
-			description: "Lower is more sensitive; raise it if background noise causes hallucinations.",
-			rawValue: env("MICME_STREAM_VAD_THRESHOLD") ?? String(DEFAULT_STREAM_VAD_THRESHOLD),
-			currentValue: env("MICME_STREAM_VAD_THRESHOLD") ?? String(DEFAULT_STREAM_VAD_THRESHOLD),
+			description: "Value from 0.01 through 0.99. Lower is more sensitive; raise it if background noise causes hallucinations.",
+			rawValue: String(getStreamVadThreshold()),
+			currentValue: String(getStreamVadThreshold()),
 			values: ["0.35", "0.45", "0.60", "0.75"],
 			displayKind: "slider",
 		},
@@ -1006,9 +1022,9 @@ export function buildConfigurationItems(
 			id: "MICME_STREAM_WORDS_PER_CHUNK",
 			categoryId: "streaming",
 			label: "Stream word chunk",
-			description: "Maximum stable words committed per streaming update.",
-			rawValue: env("MICME_STREAM_WORDS_PER_CHUNK") ?? "10",
-			currentValue: env("MICME_STREAM_WORDS_PER_CHUNK") ?? "10",
+			description: "Maximum stable words from 1 through 10 committed per streaming update.",
+			rawValue: String(getStreamWordsPerChunk()),
+			currentValue: String(getStreamWordsPerChunk()),
 			values: ["3", "5", "8", "10"],
 			displayKind: "number",
 		},
@@ -1027,9 +1043,9 @@ export function buildConfigurationItems(
 			id: "MICME_RECORD_SAMPLE_RATE",
 			categoryId: "audio",
 			label: "Sample rate override",
-			description: "Advanced. Leave auto so ffmpeg uses the selected input's native sample rate.",
-			rawValue: env("MICME_RECORD_SAMPLE_RATE") ?? String(DEFAULT_RECORD_SAMPLE_RATE),
-			currentValue: env("MICME_RECORD_SAMPLE_RATE") ?? String(DEFAULT_RECORD_SAMPLE_RATE),
+			description: "Advanced. Leave auto so ffmpeg uses the selected input's native sample rate, or use 8000 through 384000 Hz.",
+			rawValue: String(getRecordSampleRate() ?? "auto"),
+			currentValue: String(getRecordSampleRate() ?? "auto"),
 			values: ["auto", "48000", "44100", "16000", "96000"],
 			displayKind: "text",
 		},
@@ -1038,8 +1054,8 @@ export function buildConfigurationItems(
 			categoryId: "audio",
 			label: "Record timing sync",
 			description: "Automatically preserve wall-clock recording duration from ffmpeg timestamps. Keep on unless debugging recorder timing.",
-			rawValue: env("MICME_RECORD_SYNC") ?? "1",
-			currentValue: env("MICME_RECORD_SYNC") ?? "1",
+			rawValue: getRecordSync() ? "1" : "0",
+			currentValue: getRecordSync() ? "1" : "0",
 			values: ["1", "0"],
 			displayKind: "boolean",
 		},
@@ -1047,9 +1063,9 @@ export function buildConfigurationItems(
 			id: "MICME_TRANSCRIBE_SAMPLE_RATE",
 			categoryId: "audio",
 			label: "Transcribe sample rate",
-			description: "Sample rate for clip.wav sent to Whisper.",
-			rawValue: env("MICME_TRANSCRIBE_SAMPLE_RATE") ?? String(DEFAULT_TRANSCRIBE_SAMPLE_RATE),
-			currentValue: env("MICME_TRANSCRIBE_SAMPLE_RATE") ?? String(DEFAULT_TRANSCRIBE_SAMPLE_RATE),
+			description: "Sample rate from 8000 through 384000 Hz for clip.wav sent to Whisper.",
+			rawValue: String(getTranscribeSampleRate()),
+			currentValue: String(getTranscribeSampleRate()),
 			values: ["16000", "48000", "44100"],
 			displayKind: "number",
 		},
@@ -1112,7 +1128,7 @@ export function buildConfigurationItems(
 			id: "MICME_VALIDATE_AUDIO",
 			categoryId: "audio",
 			label: "Silence guard",
-			description: "Reject near-silent clips before Whisper can hallucinate text.",
+			description: "Reject near-silent or unverified clips before Whisper can hallucinate text.",
 			rawValue: env("MICME_VALIDATE_AUDIO") ?? "1",
 			currentValue: env("MICME_VALIDATE_AUDIO") ?? "1",
 			values: ["1", "0"],
@@ -1192,15 +1208,17 @@ export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTh
 	};
 }
 
-export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string): Promise<Record<string, string>> {
+export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string, options: { signal?: AbortSignal } = {}): Promise<Record<string, string>> {
 	if (!id.startsWith("MICME_")) return {};
+	options.signal?.throwIfAborted();
 
 	const valuesToWrite = getConfigurationValuesToWrite(id, value);
 	if (id === "MICME_WHISPER_CPP_MODEL" && value) {
-		await ensureWhisperCppModel(expandConfigPath(value), ctx);
+		await ensureWhisperCppModel(expandConfigPath(value), ctx, { signal: options.signal });
 	}
 
-	await writeMicmeConfigValues(valuesToWrite);
+	options.signal?.throwIfAborted();
+	await writeMicmeConfigValues(valuesToWrite, { signal: options.signal });
 	reloadMicmeConfig();
 
 	const effectiveValues: Record<string, string> = {};

@@ -39,6 +39,7 @@ MicMe is a Pi extension for coding prompts. It records your microphone with `ffm
 
 - [Quick Start](#quick-start)
 - [Installation](#installation)
+- [Pi Compatibility](#pi-compatibility)
 - [Backend Setup](#backend-setup)
 - [Configuration](#configuration)
 - [Commands](#commands)
@@ -82,7 +83,7 @@ Use it:
 3. Press `alt+m` again to stop.
 4. Review the pasted transcript and press Enter.
 
-Micme is toggle-based. Press-and-hold recording is not used because terminal key-up events are not portable.
+Micme is toggle-based. Press-and-hold recording is not used because terminal key-up events are not portable. A toggle received while Micme is starting, stopping, transcribing, or finalizing is rejected with a warning; wait for that operation to finish before toggling again.
 
 ---
 
@@ -111,6 +112,12 @@ Use the checkout globally while developing:
 ```bash
 pi install /absolute/path/to/micme
 ```
+
+---
+
+## Pi Compatibility
+
+Micme supports `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` versions `>=0.80.7 <0.81.0`. CI installs and tests both packages at `0.80.7`, typechecks every production TypeScript file against their real declarations, and loads the default extension through Pi's jiti-based loader. Supporting a new Pi minor release requires intentionally updating the peer ranges, pinned development versions, and contract gate together.
 
 ---
 
@@ -147,7 +154,11 @@ MICME_WHISPER_CPP_MODEL=/path/to/ggml-small.en.bin
 
 ## Configuration
 
-MicMe reads settings from shell environment variables and from the global Micme config file at `~/.pi/agent/micme.json`. Shell variables win. `/micme conf` writes only `MICME_*` keys to that JSON file, so settings follow you across pi projects on the same machine.
+MicMe reads settings from shell environment variables and from the global Micme config file at `~/.pi/agent/micme.json`. Shell variables win. `/micme conf` writes only `MICME_*` keys to that JSON file, so settings follow you across pi projects on the same machine. If this file is malformed or its top level is not an object, Micme refuses recording, model download, device discovery, and transcription before starting external work; `/micme conf` remains available so you can locate and fix the file.
+
+Config saves are serialized in-process and across Pi processes with `micme.json.lock`, then atomically replace the file with mode `0600`. Each save re-reads the latest file while holding the lock and changes only its requested `MICME_*` keys, preserving `$schema` and other metadata. Saves commit in lock-acquisition order, so the last successful save to the same key wins. Micme waits up to five seconds for the lock; on timeout it leaves the existing config and lock untouched because it cannot safely assume another writer's lock is stale. Remove a leftover lock directory manually only after verifying that no Pi process is saving Micme settings.
+
+Numeric runtime settings use bounded fallbacks after integer normalization. Invalid, non-finite, or out-of-range values never reach timers or command arguments: transcription timeouts allow `1000..3600000` ms; stream step/length/keep/flush values allow `100..60000`, `1000..120000`, `0..60000`, and `100..60000` ms; stream tokens allow `1..4096`; committed word chunks allow `1..10`; capture ids allow `-1..255`; VAD allows `0.01..0.99`; and audio sample rates allow `8000..384000` Hz. See the schema for each fallback default.
 
 The usual setup path is to run:
 
@@ -182,11 +193,11 @@ Common settings:
 | `MICME_LANGUAGE=en` | Transcription language when translation is off. Use `auto` for detection. |
 | `MICME_TRANSLATE_TO_ENGLISH=off` | “Translate from” option. Leave `off`, or set the spoken source language code such as `hr`, `bs`, `de`, or `tr` to output English. |
 | `MICME_STREAM_KEEP_CONTEXT=0` | Stream default: avoid Whisper prompt carry-over so live chunks are less likely to rewrite each other. |
-| `MICME_STREAM_FLUSH_MS=650` | Stream profile quiet interval before tentative words are committed append-only. |
+| `MICME_STREAM_FLUSH_MS=700` | Runtime-default quiet interval before tentative words are committed append-only. Selecting the stream profile in `/micme conf` writes `650`. |
 | `MICME_STREAM_FINALIZE_WITH_CLIP=0` | Keep the append-only live transcript on stop. Set `1` to opt in to final clip replacement. |
 | `MICME_AUTO_SUBMIT=0` | Paste for review. Set `1` to send automatically. |
 | `MICME_SHORTCUT=alt+m` | Toggle shortcut. Use terminal syntax (`alt+m`, `ctrl+space`, `f8`) or a printable character such as `§`. Restart or `/reload` after changing. |
-| `MICME_VALIDATE_AUDIO=1` | Reject near-silent recordings. |
+| `MICME_VALIDATE_AUDIO=1` | Reject near-silent recordings and fail closed when ffmpeg omits or truncates the required `max_volume` metric. With a custom recorder and no ffmpeg, Micme warns and skips this guard; set `0` to disable it intentionally. |
 | `MICME_RECORD_SAMPLE_RATE=auto` | Raw recording sample-rate override. Leave `auto` so ffmpeg uses the selected input's native rate. |
 | `MICME_RECORD_SYNC=1` | Automatically preserve wall-clock recording duration from ffmpeg timestamps. |
 | `MICME_RECORD_METER=0` | Quality-safe default: meter from `raw.wav` instead of a second ffmpeg stdout branch. Set `1` to restore the legacy live meter pipe. |
@@ -222,7 +233,7 @@ Micme supports these backend values in JSON/env config:
 
 `/micme conf` keeps the interactive backend picker focused on `whisper.cpp` and `Python Whisper`, then shows only the model/binary fields for the selected backend. For whisper.cpp, `MICME_WHISPER_CPP_MODEL` is the selected ggml/gguf model path; if it is unset, Micme falls back to `${MICME_MODEL_DIR}/ggml-${MICME_DEFAULT_WHISPER_CPP_MODEL}.bin`. For Python Whisper, `MICME_WHISPER_MODEL` is passed as the CLI model name.
 
-With `MICME_AUTO_DOWNLOAD_MODEL=1`, Micme downloads missing standard whisper.cpp models into `MICME_MODEL_DIR`. Existing model paths must point to regular files; directories are rejected before download or transcription. Disable downloads with:
+With `MICME_AUTO_DOWNLOAD_MODEL=1`, Micme downloads missing standard whisper.cpp models into `MICME_MODEL_DIR`. Existing model paths must point to regular files; directories are rejected before download or transcription. Header, body, and file-output inactivity is bounded to two minutes; timed-out or cancelled downloads remove their temporary file. Concurrent requests for the same model share one transfer: cancelling one caller leaves it running for other callers, while cancelling the final owner aborts it. Session shutdown and closing `/micme conf` cancel their ownership and suppress later process starts, saves, notifications, and renders. Disable downloads with:
 
 ```env
 MICME_AUTO_DOWNLOAD_MODEL=0
@@ -238,6 +249,8 @@ MICME_TRANSCRIBE_COMMAND=whisper-cli -m /path/to/model.bin -f {audio} -otxt -of 
 ```
 
 `{audio}`, `{tempDir}`, and `{transcript}` are shell-quoted. `*Raw` placeholders bypass quoting and should only be used when you fully control the command.
+
+Recorder and streaming commands must remain alive until Micme stops them. A requested stop accepts exit code `0`, a signal Micme sent during escalation, its conventional shell exit code, or ffmpeg's signal-stop code `255`; spawn errors, spontaneous exits, unrelated signals, and other nonzero codes are reported as failures. Partial recorder audio is kept for debugging but is not transcribed. When final-clip streaming is enabled, Micme explicitly falls back to the append-only live transcript if that optional clip recorder fails.
 
 ---
 
@@ -289,6 +302,7 @@ pi remove npm:@senad-d/micme -l       # remove project-local install
 ```bash
 npm ci
 npm run typecheck
+npm run test:pi-contract
 npm run lint
 npm run format:check
 npm run validate

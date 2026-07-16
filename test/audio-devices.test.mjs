@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 
 const { reloadMicmeConfig } = await import("../src/config.ts");
+const { MAX_CAPTURED_OUTPUT_CHARS } = await import("../src/constants.ts");
 const {
 	discoverAudioDevices,
 	listAudioDevices,
@@ -229,12 +230,19 @@ test("audio preprocessing and validation use ffmpeg output and skip flags", asyn
 		const output = await prepareAudioForTranscription(input, work);
 		assert.equal(output, join(work, "clip.wav"));
 		assert.equal(await readFile(output, "utf8"), "clip");
-		assert.equal((await validateRecordedAudio(input))?.maxVolumeDb, -12);
+		const validation = await validateRecordedAudio(input);
+		assert.equal(validation.status, "validated");
+		assert.equal(validation.diagnostics.meanVolumeDb, -24.5);
+		assert.equal(validation.diagnostics.maxVolumeDb, -12);
 	});
 
 	await withEnv({ MICME_PROCESS_AUDIO: "0", MICME_VALIDATE_AUDIO: "0" }, async () => {
 		assert.equal(await prepareAudioForTranscription(input, work), input);
-		assert.equal(await validateRecordedAudio(input), undefined);
+		assert.deepEqual(await validateRecordedAudio(input), { status: "skipped", reason: "disabled" });
+	});
+
+	await withEnv({ PATH: join(root, "missing-bin"), MICME_VALIDATE_AUDIO: "1", MICME_SKIP_AUDIO_VALIDATION: "0" }, async () => {
+		assert.deepEqual(await validateRecordedAudio(input), { status: "skipped", reason: "ffmpeg-unavailable" });
 	});
 });
 
@@ -266,4 +274,64 @@ test("audio preprocessing and validation surface ffmpeg failures", async (t) => 
 	await withEnv({ PATH: bin, MICME_MIN_MAX_VOLUME_DB: "-50" }, async () => {
 		await assert.rejects(validateRecordedAudio(input), /almost-silent audio/);
 	});
+
+	await writeExecutable(
+		join(bin, "ffmpeg"),
+		"#!/bin/sh\necho 'mean_volume: -inf dB' >&2\necho 'max_volume: -inf dB' >&2\nexit 0\n",
+	);
+	await withEnv({ PATH: bin, MICME_MIN_MAX_VOLUME_DB: "-50" }, async () => {
+		await assert.rejects(validateRecordedAudio(input), /almost-silent audio \(max -inf dB/);
+	});
+});
+
+test("audio validation rejects missing, malformed, partial, and truncated metrics", async (t) => {
+	if (process.platform === "win32") {
+		t.skip("Executable fixture is not portable to Windows");
+		return;
+	}
+
+	const root = await mkdtemp(join(tmpdir(), "micme-audio-validation-evidence-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const bin = join(root, "bin");
+	const input = join(root, "raw.wav");
+	await mkdir(bin);
+	await writeFile(input, "raw");
+	await writeExecutable(
+		join(bin, "ffmpeg"),
+		`#!/usr/bin/env node
+const mode = process.env.MICME_TEST_VALIDATION_CASE;
+if (mode === "malformed") process.stderr.write("\\u001b[31mmax_volume: loud dB\\u001b[0m\\n");
+if (mode === "partial") process.stderr.write("mean_volume: -20 dB\\nmax_vol");
+if (mode === "oversized") {
+  process.stderr.write("x".repeat(${MAX_CAPTURED_OUTPUT_CHARS + 1}) + "\\nmax_volume: -12 dB\\n", () => process.exit(0));
+} else {
+  process.exit(0);
+}
+`,
+	);
+
+	const cases = [
+		{ mode: "empty", pattern: /produced no diagnostic output/ },
+		{ mode: "malformed", pattern: /required max_volume metric/ },
+		{ mode: "partial", pattern: /required max_volume metric/ },
+		{ mode: "oversized", pattern: /capture limit/ },
+	];
+	for (const validationCase of cases) {
+		await withEnv(
+			{
+				PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+				MICME_VALIDATE_AUDIO: "1",
+				MICME_SKIP_AUDIO_VALIDATION: "0",
+				MICME_TEST_VALIDATION_CASE: validationCase.mode,
+			},
+			async () => {
+				await assert.rejects(validateRecordedAudio(input), (error) => {
+					assert.match(error.message, validationCase.pattern);
+					assert.equal(error.message.includes("\u001b"), false);
+					assert.ok(error.message.length <= MAX_CAPTURED_OUTPUT_CHARS + 500);
+					return true;
+				});
+			},
+		);
+	}
 });

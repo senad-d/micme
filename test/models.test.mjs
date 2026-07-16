@@ -43,6 +43,48 @@ async function withMockFetch(fetchImpl, fn) {
 	}
 }
 
+function createDeferred() {
+	let resolve;
+	let reject;
+	const promise = new Promise((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
+function createDownloadContext() {
+	const statuses = [];
+	const notifications = [];
+	return {
+		ctx: {
+			ui: {
+				setStatus(key, value) {
+					statuses.push({ key, value });
+				},
+				notify(message, level) {
+					notifications.push({ message, level });
+				},
+			},
+		},
+		statuses,
+		notifications,
+	};
+}
+
+function modelResponse(text = "model") {
+	const bytes = new TextEncoder().encode(text);
+	return new Response(
+		new ReadableStream({
+			start(controller) {
+				controller.enqueue(bytes);
+				controller.close();
+			},
+		}),
+		{ status: 200, headers: { "content-length": String(bytes.byteLength) } },
+	);
+}
+
 async function withEnv(values, fn) {
 	const previous = new Map();
 	for (const key of Object.keys(values)) {
@@ -141,6 +183,161 @@ test("downloadFile removes the temporary file when the response stream fails", a
 
 	assert.equal(existsSync(target), false);
 	assert.deepEqual(await readdir(root), []);
+});
+
+test("downloadFile times out while waiting for response headers without creating files", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-model-download-header-timeout-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "ggml-tiny.bin");
+	const response = createDeferred();
+	let fetchSignal;
+
+	await withMockFetch(
+		async (_url, options) => {
+			fetchSignal = options.signal;
+			return response.promise;
+		},
+		async () => {
+			await assert.rejects(downloadFile("https://example.test/ggml-tiny.bin", target, undefined, { inactivityTimeoutMs: 30 }), {
+				name: "ModelDownloadTimeoutError",
+			});
+		},
+	);
+
+	assert.equal(fetchSignal.aborted, true);
+	assert.equal(existsSync(target), false);
+	assert.deepEqual(await readdir(root), []);
+});
+
+test("stalled response bodies time out, clean partial files, and clear status once", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-model-download-body-timeout-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "ggml-tiny.bin");
+	const stalledRead = createDeferred();
+	const encoder = new TextEncoder();
+	const harness = createDownloadContext();
+	let reads = 0;
+	let cancellations = 0;
+
+	await withEnv({ MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+		await withMockFetch(
+			async () => ({
+				ok: true,
+				status: 200,
+				statusText: "OK",
+				headers: { get: () => "20" },
+				body: {
+					getReader: () => ({
+						async read() {
+							if (reads++ === 0) return { done: false, value: encoder.encode("partial") };
+							return stalledRead.promise;
+						},
+						async cancel() {
+							cancellations += 1;
+						},
+					}),
+				},
+			}),
+			async () => {
+				await assert.rejects(ensureWhisperCppModel(target, harness.ctx, { inactivityTimeoutMs: 30 }), {
+					name: "ModelDownloadTimeoutError",
+				});
+			},
+		);
+	});
+
+	assert.equal(cancellations, 1);
+	assert.equal(existsSync(target), false);
+	assert.deepEqual(await readdir(root), []);
+	assert.equal(harness.statuses.filter((entry) => entry.value === undefined).length, 1);
+	assert.equal(harness.notifications.some((entry) => entry.message.startsWith("Downloaded ")), false);
+});
+
+test("caller cancellation cleans a partial download before settling", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-model-download-cancel-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "ggml-tiny.bin");
+	const stalledRead = createDeferred();
+	const firstChunkRead = createDeferred();
+	const encoder = new TextEncoder();
+	const harness = createDownloadContext();
+	const controller = new AbortController();
+	let reads = 0;
+
+	await withEnv({ MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+		await withMockFetch(
+			async () => ({
+				ok: true,
+				status: 200,
+				statusText: "OK",
+				headers: { get: () => "20" },
+				body: {
+					getReader: () => ({
+						async read() {
+							if (reads++ === 0) {
+								firstChunkRead.resolve();
+								return { done: false, value: encoder.encode("partial") };
+							}
+							return stalledRead.promise;
+						},
+						async cancel() {},
+					}),
+				},
+			}),
+			async () => {
+				const download = ensureWhisperCppModel(target, harness.ctx, { signal: controller.signal, inactivityTimeoutMs: 1_000 });
+				await firstChunkRead.promise;
+				controller.abort();
+				await assert.rejects(download, { name: "AbortError" });
+			},
+		);
+	});
+
+	assert.equal(existsSync(target), false);
+	assert.deepEqual(await readdir(root), []);
+	assert.equal(harness.statuses.filter((entry) => entry.value === undefined).length, 1);
+});
+
+test("cancelling one shared waiter preserves the download for remaining owners", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-model-download-shared-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "ggml-tiny.bin");
+	const response = createDeferred();
+	const fetchStarted = createDeferred();
+	const firstHarness = createDownloadContext();
+	const secondHarness = createDownloadContext();
+	const firstController = new AbortController();
+	let fetchSignal;
+	let fetchCalls = 0;
+
+	await withEnv({ MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+		await withMockFetch(
+			async (_url, options) => {
+				fetchCalls += 1;
+				fetchSignal = options.signal;
+				fetchStarted.resolve();
+				return response.promise;
+			},
+			async () => {
+				const first = ensureWhisperCppModel(target, firstHarness.ctx, { signal: firstController.signal, inactivityTimeoutMs: 1_000 });
+				const second = ensureWhisperCppModel(target, secondHarness.ctx, { inactivityTimeoutMs: 1_000 });
+				await fetchStarted.promise;
+				await new Promise((resolve) => setImmediate(resolve));
+				firstController.abort();
+				await assert.rejects(first, { name: "AbortError" });
+				assert.equal(fetchSignal.aborted, false);
+				response.resolve(modelResponse("shared model"));
+				await second;
+			},
+		);
+	});
+
+	assert.equal(fetchCalls, 1);
+	assert.equal(await readFile(target, "utf8"), "shared model");
+	assert.equal(firstHarness.statuses.filter((entry) => entry.value === undefined).length, 1);
+	assert.equal(firstHarness.notifications.some((entry) => entry.message.startsWith("Downloaded ")), false);
+	assert.equal(secondHarness.statuses.filter((entry) => entry.value === undefined).length, 1);
+	assert.equal(secondHarness.notifications.some((entry) => entry.message.startsWith("Downloaded ")), true);
 });
 
 test("model discovery scans configured, project, and cache paths", async (t) => {

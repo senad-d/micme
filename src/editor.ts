@@ -13,13 +13,11 @@ export type MicmeEditorInputHandlers = {
 };
 
 class MicmeEditor extends CustomEditor {
-	constructor(
-		tui: CustomEditorArgs[0],
-		theme: CustomEditorArgs[1],
-		keybindings: CustomEditorArgs[2],
-		private readonly micmeHandlers: MicmeEditorInputHandlers,
-	) {
+	private readonly micmeHandlers: MicmeEditorInputHandlers;
+
+	constructor(tui: CustomEditorArgs[0], theme: CustomEditorArgs[1], keybindings: CustomEditorArgs[2], micmeHandlers: MicmeEditorInputHandlers) {
 		super(tui, theme, keybindings);
+		this.micmeHandlers = micmeHandlers;
 	}
 
 	override handleInput(data: string): void {

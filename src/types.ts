@@ -35,6 +35,7 @@ export type CommandSpec = {
 	display: string;
 	meterFromStdout?: boolean;
 	stopInput?: string;
+	signalStopExitCodes?: number[];
 };
 
 export type RunResult = {
@@ -43,6 +44,7 @@ export type RunResult = {
 	stdout: string;
 	stderr: string;
 	timedOut: boolean;
+	cancelled?: boolean;
 };
 
 export type ExitResult = {
@@ -53,9 +55,13 @@ export type ExitResult = {
 
 export type AudioDiagnostics = {
 	meanVolumeDb?: number;
-	maxVolumeDb?: number;
+	maxVolumeDb: number;
 	raw: string;
 };
+
+export type AudioValidationOutcome =
+	| { status: "validated"; diagnostics: AudioDiagnostics }
+	| { status: "skipped"; reason: "disabled" | "ffmpeg-unavailable" };
 
 export type StreamingState = {
 	baseText: string;
@@ -81,6 +87,8 @@ export type Recording = {
 	streaming?: StreamingState;
 	clipRecording?: Recording;
 	stopRequested?: boolean;
+	stopSignals?: Set<NodeJS.Signals>;
+	stopPromise?: Promise<ExitResult>;
 	exitPromise: Promise<ExitResult>;
 	isSettled: () => boolean;
 	stdout: () => string;

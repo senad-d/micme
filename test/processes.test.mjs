@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -50,6 +50,14 @@ function withPlatform(platform, fn) {
 	} finally {
 		Object.defineProperty(process, "platform", descriptor);
 	}
+}
+
+async function waitForFile(path) {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (await stat(path).then(() => true, () => false)) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	assert.fail(`file was not created: ${path}`);
 }
 
 test("replacePlaceholders does not expand placeholders introduced by values", () => {
@@ -114,6 +122,17 @@ test("process runners capture output, timeouts, and shell details", async (t) =>
 	const timedOut = await runProcess(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], 25);
 	assert.equal(timedOut.timedOut, true);
 	assert.equal(formatRunExit(timedOut), "timeout");
+
+	const cancellation = new AbortController();
+	const cancelledProcess = runProcess(process.execPath, ["-e", "setInterval(() => {}, 10_000)"], 2_000, { signal: cancellation.signal });
+	setTimeout(() => cancellation.abort(), 25);
+	const cancelled = await cancelledProcess;
+	assert.equal(cancelled.cancelled, true);
+	assert.equal(formatRunExit(cancelled), "cancelled");
+
+	const alreadyCancelled = new AbortController();
+	alreadyCancelled.abort();
+	assert.equal((await runProcess("missing-command-that-must-not-spawn", [], 2_000, { signal: alreadyCancelled.signal })).cancelled, true);
 
 	const shell = await runShell("printf shell", 2_000);
 	assert.equal(shell.stdout, "shell");
@@ -200,4 +219,121 @@ test("recording process helpers collect output, meter levels, and stop safely", 
 
 	await writeFile(audioPath, Buffer.alloc(600));
 	await stopRecorder({ ...missingAudio, audioPath, stderr: () => "" });
+});
+
+test("recorder stop rejects spontaneous failures and accepts owned stop paths", async (t) => {
+	if (process.platform === "win32") {
+		t.skip("POSIX signal exit fixtures are not portable to Windows");
+		return;
+	}
+
+	const root = await mkdtemp(join(tmpdir(), "micme-recorder-exit-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+
+	const nonzeroAudio = join(root, "nonzero.wav");
+	const nonzero = spawnRecording(
+		{
+			command: process.execPath,
+			args: [
+				"-e",
+				`require("node:fs").writeFileSync(${JSON.stringify(nonzeroAudio)}, Buffer.alloc(600)); process.stderr.write("\\u001b[31mdevice lost\\u001b[0m"); process.exit(7);`,
+			],
+			display: "late nonzero recorder",
+		},
+		nonzeroAudio,
+		root,
+	);
+	await nonzero.exitPromise;
+	await assert.rejects(stopRecorder(nonzero), (error) => {
+		assert.match(error.message, /recorder exited unexpectedly \(code 7\)/);
+		assert.match(error.message, /Recorder output:\ndevice lost/);
+		assert.equal(error.message.includes("\u001b"), false);
+		return true;
+	});
+
+	const missingAudio = join(root, "spawn-error.wav");
+	await writeFile(missingAudio, Buffer.alloc(600));
+	const spawnError = spawnRecording({ command: join(root, "missing-recorder"), args: [], display: "missing recorder" }, missingAudio, root);
+	await spawnError.exitPromise;
+	await assert.rejects(stopRecorder(spawnError), /recorder exited unexpectedly .*ENOENT/);
+
+	const signalAudio = join(root, "signal.wav");
+	const signalExit = spawnRecording(
+		{
+			command: process.execPath,
+			args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(signalAudio)}, Buffer.alloc(600)); process.kill(process.pid, "SIGTERM");`],
+			display: "signalled recorder",
+		},
+		signalAudio,
+		root,
+	);
+	await signalExit.exitPromise;
+	await assert.rejects(stopRecorder(signalExit), /recorder exited unexpectedly \(signal SIGTERM\)/);
+
+	const gracefulAudio = join(root, "graceful.wav");
+	const graceful = spawnRecording(
+		{
+			command: process.execPath,
+			args: [
+				"-e",
+				`require("node:fs").writeFileSync(${JSON.stringify(gracefulAudio)}, Buffer.alloc(600)); process.stdin.setEncoding("utf8"); process.stdin.on("data", (data) => { if (data.includes("q")) process.exit(0); }); setInterval(() => {}, 1000);`,
+			],
+			display: "graceful recorder",
+			stopInput: "q\n",
+		},
+		gracefulAudio,
+		root,
+	);
+	await waitForFile(gracefulAudio);
+	await stopRecorder(graceful);
+	assert.equal(graceful.stopRequested, true);
+
+	const escalatedAudio = join(root, "escalated.wav");
+	const escalated = spawnRecording(
+		{
+			command: process.execPath,
+			args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(escalatedAudio)}, Buffer.alloc(600)); setInterval(() => {}, 1000);`],
+			display: "escalated recorder",
+		},
+		escalatedAudio,
+		root,
+	);
+	await waitForFile(escalatedAudio);
+	await stopRecorder(escalated);
+	assert.equal(escalated.stopSignals?.has("SIGINT"), true);
+
+	const ffmpegEscalationAudio = join(root, "ffmpeg-escalation.wav");
+	const ffmpegEscalation = spawnRecording(
+		{
+			command: process.execPath,
+			args: [
+				"-e",
+				`process.on("SIGINT", () => process.exit(255)); require("node:fs").writeFileSync(${JSON.stringify(ffmpegEscalationAudio)}, Buffer.alloc(600)); setInterval(() => {}, 1000);`,
+			],
+			display: "ffmpeg-style escalation",
+			signalStopExitCodes: [255],
+		},
+		ffmpegEscalationAudio,
+		root,
+	);
+	await waitForFile(ffmpegEscalationAudio);
+	await stopRecorder(ffmpegEscalation);
+	assert.equal(ffmpegEscalation.stopSignals?.has("SIGINT"), true);
+
+	const failedStopAudio = join(root, "failed-stop.wav");
+	const failedStop = spawnRecording(
+		{
+			command: process.execPath,
+			args: [
+				"-e",
+				`require("node:fs").writeFileSync(${JSON.stringify(failedStopAudio)}, Buffer.alloc(600)); process.stdin.setEncoding("utf8"); process.stdin.on("data", () => process.exit(9)); setInterval(() => {}, 1000);`,
+			],
+			display: "failed stop recorder",
+			stopInput: "q\n",
+		},
+		failedStopAudio,
+		root,
+	);
+	await waitForFile(failedStopAudio);
+	await assert.rejects(stopRecorder(failedStop), /recorder failed while stopping \(code 9\)/);
 });

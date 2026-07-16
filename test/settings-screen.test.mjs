@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,35 @@ const theme = {
 		return text;
 	},
 };
+
+function createDeferred() {
+	let resolve;
+	let reject;
+	const promise = new Promise((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
+async function withMockFetch(fetchImpl, fn) {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = fetchImpl;
+	try {
+		return await fn();
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+}
+
+async function waitFor(predicate, message, timeoutMs = 1_000) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (await predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	assert.fail(message);
+}
 
 async function withEnv(values, fn) {
 	const previous = new Map();
@@ -48,6 +77,7 @@ function createHarness(cwd = process.cwd()) {
 	let doneCount = 0;
 	let renderRequests = 0;
 	const notifications = [];
+	const statusCalls = [];
 	const tui = {
 		requestRender() {
 			renderRequests += 1;
@@ -61,7 +91,9 @@ function createHarness(cwd = process.cwd()) {
 			notify(message, level) {
 				notifications.push({ message, level });
 			},
-			setStatus() {},
+			setStatus(key, value) {
+				statusCalls.push({ key, value });
+			},
 			custom(factory) {
 				component = factory(tui, theme, {}, () => {
 					doneCount += 1;
@@ -72,6 +104,7 @@ function createHarness(cwd = process.cwd()) {
 	return {
 		ctx,
 		notifications,
+		statusCalls,
 		get component() {
 			return component;
 		},
@@ -149,6 +182,51 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 		harness.component.handleInput("\x1b");
 		harness.component.handleInput("\x1b");
 		assert.equal(harness.doneCount, 1);
+	});
+});
+
+test("closing configuration during model acquisition cancels without stale saves or UI work", async (t) => {
+	await withTempAgent(t, async (root) => {
+		await writeFile(join(root, "micme.json"), JSON.stringify({ MICME_AUTO_DOWNLOAD_MODEL: "1" }, null, 2));
+		reloadMicmeConfig();
+		const harness = createHarness(root);
+		const response = createDeferred();
+		let fetchSignal;
+
+		await withMockFetch(
+			async (_url, options) => {
+				fetchSignal = options.signal;
+				return response.promise;
+			},
+			async () => {
+				await showConfiguration(harness.ctx);
+				await waitFor(() => !harness.component.render(100).join("\n").includes("Loading "), "configuration discovery did not finish");
+				harness.component.handleInput("/");
+				typeText(harness.component, "Whisper.cpp model");
+				assert.match(harness.component.render(100).join("\n"), /Whisper\.cpp model/i);
+				harness.component.handleInput("\r");
+				assert.match(harness.component.render(100).join("\n"), /Select whisper\.cpp model/i);
+				harness.component.handleInput("\x1b[A");
+				assert.match(harness.component.render(100).join("\n"), /tiny/i);
+				harness.component.handleInput("\r");
+				await waitFor(() => fetchSignal !== undefined, "model fetch did not start");
+
+				harness.component.handleInput("q");
+				const rendersAfterClose = harness.renderRequests;
+				const notificationsAfterClose = harness.notifications.length;
+				await waitFor(() => fetchSignal.aborted, "model fetch was not aborted when configuration closed");
+				await waitForAsyncWork();
+
+				assert.equal(harness.doneCount, 1);
+				assert.equal(harness.renderRequests, rendersAfterClose);
+				assert.equal(harness.notifications.length, notificationsAfterClose);
+			},
+		);
+
+		const saved = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
+		assert.deepEqual(saved, { MICME_AUTO_DOWNLOAD_MODEL: "1" });
+		assert.deepEqual(await readdir(join(root, "models")), []);
+		assert.equal(harness.statusCalls.filter((entry) => entry.value === undefined).length, 1);
 	});
 });
 

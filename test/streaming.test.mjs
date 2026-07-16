@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 process.env.MICME_STREAM_DIAGNOSTICS = "0";
-process.env.MICME_STREAM_FLUSH_MS = "20";
+process.env.MICME_STREAM_FLUSH_MS = "100";
 process.env.MICME_STREAM_WORDS_PER_CHUNK = "10";
 
 const {
@@ -191,7 +191,7 @@ test("pause flush commits the last candidate after a quiet interval", async () =
 	feedFrame(harness, "Cat");
 	assert.deepEqual(harness.updates, []);
 
-	await new Promise((resolve) => setTimeout(resolve, 40));
+	await new Promise((resolve) => setTimeout(resolve, 130));
 
 	assertTranscript(harness, "Cat");
 	assert.deepEqual(harness.updates, ["Cat"]);
