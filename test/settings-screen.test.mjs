@@ -157,7 +157,10 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 
 		harness.component.handleInput("\r");
 		harness.component.handleInput(" ");
-		await waitForAsyncWork();
+		await waitFor(async () => {
+			const config = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
+			return config.MICME_AUTO_DOWNLOAD_MODEL === "0";
+		}, "auto-download setting was not saved");
 
 		let saved = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
 		assert.equal(saved.MICME_AUTO_DOWNLOAD_MODEL, "0");
@@ -172,7 +175,10 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 		harness.component.handleInput("~");
 		assert.match(harness.component.render(90).join("\n"), /Captured ~/);
 		harness.component.handleInput("\r");
-		await waitForAsyncWork();
+		await waitFor(async () => {
+			const config = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
+			return config.MICME_SHORTCUT === "~" && !Object.hasOwn(config, "MICME_PRINTABLE_SHORTCUTS");
+		}, "shortcut setting was not saved");
 
 		saved = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
 		assert.equal(saved.MICME_SHORTCUT, "~");
