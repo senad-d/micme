@@ -4,7 +4,7 @@ All notable changes to Micme will be documented in this file.
 
 ## Unreleased
 
-- Preserve Pi's built-in keyboard shortcuts by installing Micme's editor fallback only when a printable-character shortcut is configured.
+- Preserve Pi's built-in keyboard shortcuts by installing Micme's editor fallback only for printable-character shortcuts and retaining the `CustomEditor` app-handler contract when wrapping another extension's editor.
 - Move normal Micme persistence to the global `~/.pi/agent/micme.json` store; shell environment variables still override saved settings.
 - Update `/micme conf`, `micme-doctor`, docs, and package examples for the new global JSON config path.
 - Document the scoped npm package name, `@senad-d/micme`, in install, diagnostics, update, and uninstall commands.
