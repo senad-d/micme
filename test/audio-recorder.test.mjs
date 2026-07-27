@@ -111,6 +111,30 @@ test("DirectShow device parsing handles whole-line and fallback quoted names", (
 	assert.deepEqual(parsed.audio, [{ name: "Studio Mic" }]);
 });
 
+test("DirectShow device parsing handles ffmpeg >=7 headerless listing with (audio)/(video) suffixes", () => {
+	const parsed = parseDirectShowDevices([
+		'[in#0 @ 0x1] Could not enumerate video devices (or none found).',
+		'[in#0 @ 0x1] "Remote Audio" (audio)',
+		'[in#0 @ 0x1]   Alternative name "@device_cm_{GUID}\\wave_{GUID}"',
+		'Error opening input file dummy.',
+	].join("\n"));
+
+	assert.deepEqual(parsed.audio, [{ name: "Remote Audio" }]);
+	assert.deepEqual(parsed.video, []);
+	assert.equal(parsed.sawDeviceSection, false);
+});
+
+test("DirectShow device parsing keys kind off the (audio)/(video) suffix even with section headers", () => {
+	const parsed = parseDirectShowDevices([
+		"DirectShow audio devices",
+		'"Microphone (Realtek Audio)" (audio)',
+		'"Integrated Camera" (video)',
+	].join("\n"));
+
+	assert.deepEqual(parsed.audio, [{ name: "Microphone (Realtek Audio)" }]);
+	assert.deepEqual(parsed.video, [{ name: "Integrated Camera" }]);
+});
+
 test("volume parsing handles finite and negative-infinite ffmpeg volumes", () => {
 	const output = "[Parsed_volumedetect_0] mean_volume: -inf dB\n[Parsed_volumedetect_0] max_volume: -12.4 dB";
 

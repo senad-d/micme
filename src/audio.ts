@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { AUDIO_VALIDATION_TIMEOUT_MS, MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import { env, envFlag, getAudioFilter, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
@@ -63,6 +64,7 @@ const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
 const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
 const DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN = /^"(.+)"$/;
 const DIRECT_SHOW_DEVICE_NAME_PATTERN = /"([^"]+)"/;
+const DIRECT_SHOW_DEVICE_KIND_PATTERN = /^"([^"]+)"\s*\((audio|video)\)$/i;
 const FFMPEG_WARNING_WORDS = new Set(["warning", "error", "failed", "cannot", "unable"]);
 const PULSE_SOURCE_LINE_PATTERN = /^([^\s[]+)(?:\s+\[(.+)\])?$/;
 
@@ -283,15 +285,43 @@ export function parseDirectShowDevices(output: string): ParsedDeviceInventory {
 			inventory.sawDeviceSection = true;
 			continue;
 		}
-		if (!section || /Alternative name/i.test(line)) continue;
+		if (/Alternative name/i.test(line)) continue;
+
+		const kindMatch = DIRECT_SHOW_DEVICE_KIND_PATTERN.exec(line);
+		if (kindMatch) {
+			const name = sanitizeDeviceField(kindMatch[1] ?? "");
+			const kind = (kindMatch[2] ?? "").toLowerCase() === "video" ? "video" : "audio";
+			if (name) inventory[kind].push({ name });
+			continue;
+		}
+
+		if (!section) continue;
 
 		const match = DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
-		const name = sanitizeDeviceField(match?.[1] ?? "");
-		if (!name) continue;
-		inventory[section].push({ name });
+		const fallbackName = sanitizeDeviceField(match?.[1] ?? "");
+		if (!fallbackName) continue;
+		inventory[section].push({ name: fallbackName });
 	}
 
 	return inventory;
+}
+
+function findDefaultDshowAudioDevice(): string | undefined {
+	if (process.platform !== "win32") return undefined;
+	const ffmpeg = findExecutable(["ffmpeg"]);
+	if (!ffmpeg) return undefined;
+	try {
+		const result = spawnSync(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], {
+			encoding: "utf8",
+			timeout: DEVICE_SCAN_TIMEOUT_MS,
+			windowsHide: true,
+		});
+		if (result.error || result.signal) return undefined;
+		const inventory = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+		return inventory.audio[0]?.name;
+	} catch {
+		return undefined;
+	}
 }
 
 function stripFfmpegLogPrefix(line: string) {
@@ -623,6 +653,11 @@ export async function discoverAudioDevices(): Promise<AudioDeviceCandidate[]> {
 	}
 
 	if (process.platform === "win32") {
+		const result = await runProcess(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], DEVICE_SCAN_TIMEOUT_MS);
+		const parsed = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+		if (parsed.audio.length > 0) {
+			return parsed.audio.map((device) => ({ label: device.name, value: device.name, description: "DirectShow audio input" }));
+		}
 		return [{ label: "default", value: "default", description: "DirectShow default audio input" }];
 	}
 
@@ -700,7 +735,7 @@ export async function validateRecordedAudio(audioPath: string, signal?: AbortSig
 		throw new Error(
 			`Micme recorded almost-silent audio (max ${formatVolumeDb(diagnostics.maxVolumeDb)} dB; threshold ${minimumMaxVolumeDb.toFixed(1)} dB). ` +
 				"Whisper often hallucinates phrases like 'Thank you very much' from silence. " +
-				"Run /micme devices and set MICME_AUDIO_DEVICE to the real microphone, or set MICME_VALIDATE_AUDIO=0 to bypass this check.",
+				`Run /micme devices and set ${process.platform === "win32" ? "MICME_DSHOW_AUDIO_DEVICE" : "MICME_AUDIO_DEVICE"} to the real microphone, or set MICME_VALIDATE_AUDIO=0 to bypass this check.`,
 		);
 	}
 
@@ -765,7 +800,8 @@ export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioP
 	}
 
 	if (process.platform === "win32") {
-		const input = `audio=${env("MICME_DSHOW_AUDIO_DEVICE") || "default"}`;
+		const deviceName = env("MICME_DSHOW_AUDIO_DEVICE") || findDefaultDshowAudioDevice() || "default";
+		const input = `audio=${deviceName}`;
 		const args = buildFfmpegRecorderArgs("dshow", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
 		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
 	}
