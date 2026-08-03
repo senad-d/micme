@@ -275,35 +275,40 @@ export function parseDirectShowDevices(output: string): ParsedDeviceInventory {
 
 	for (const rawLine of output.split(/\r?\n/)) {
 		const line = stripFfmpegLogPrefix(rawLine).trim();
-		if (/DirectShow video devices/i.test(line)) {
-			section = "video";
+		const nextSection = parseDirectShowSection(line);
+		if (nextSection) {
+			section = nextSection;
 			inventory.sawDeviceSection = true;
 			continue;
 		}
-		if (/DirectShow audio devices/i.test(line)) {
-			section = "audio";
-			inventory.sawDeviceSection = true;
-			continue;
-		}
-		if (/Alternative name/i.test(line)) continue;
 
-		const kindMatch = DIRECT_SHOW_DEVICE_KIND_PATTERN.exec(line);
-		if (kindMatch) {
-			const name = sanitizeDeviceField(kindMatch[1] ?? "");
-			const kind = (kindMatch[2] ?? "").toLowerCase() === "video" ? "video" : "audio";
-			if (name) inventory[kind].push({ name });
-			continue;
-		}
-
-		if (!section) continue;
-
-		const match = DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
-		const fallbackName = sanitizeDeviceField(match?.[1] ?? "");
-		if (!fallbackName) continue;
-		inventory[section].push({ name: fallbackName });
+		const device = parseDirectShowDevice(line, section);
+		if (device) inventory[device.kind].push({ name: device.name });
 	}
 
 	return inventory;
+}
+
+function parseDirectShowSection(line: string): DeviceKind | undefined {
+	if (/DirectShow video devices/i.test(line)) return "video";
+	if (/DirectShow audio devices/i.test(line)) return "audio";
+	return undefined;
+}
+
+function parseDirectShowDevice(line: string, section: DeviceKind | undefined): { kind: DeviceKind; name: string } | undefined {
+	if (/Alternative name/i.test(line)) return undefined;
+
+	const kindMatch = DIRECT_SHOW_DEVICE_KIND_PATTERN.exec(line);
+	if (kindMatch) {
+		const name = sanitizeDeviceField(kindMatch[1] ?? "");
+		const kind = (kindMatch[2] ?? "").toLowerCase() === "video" ? "video" : "audio";
+		return name ? { kind, name } : undefined;
+	}
+
+	if (!section) return undefined;
+	const match = DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
+	const name = sanitizeDeviceField(match?.[1] ?? "");
+	return name ? { kind: section, name } : undefined;
 }
 
 function findDefaultDshowAudioDevice(): string | undefined {
