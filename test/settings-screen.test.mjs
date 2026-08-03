@@ -159,8 +159,9 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 		harness.component.handleInput(" ");
 		await waitFor(async () => {
 			const config = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
-			return config.MICME_AUTO_DOWNLOAD_MODEL === "0";
-		}, "auto-download setting was not saved");
+			const rendered = harness.component.render(100).join("\n");
+			return config.MICME_AUTO_DOWNLOAD_MODEL === "0" && !rendered.includes("Saving MICME_AUTO_DOWNLOAD_MODEL");
+		}, "auto-download setting did not finish saving");
 
 		let saved = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
 		assert.equal(saved.MICME_AUTO_DOWNLOAD_MODEL, "0");
@@ -177,8 +178,9 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 		harness.component.handleInput("\r");
 		await waitFor(async () => {
 			const config = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
-			return config.MICME_SHORTCUT === "~" && !Object.hasOwn(config, "MICME_PRINTABLE_SHORTCUTS");
-		}, "shortcut setting was not saved");
+			const rendered = harness.component.render(100).join("\n");
+			return config.MICME_SHORTCUT === "~" && !Object.hasOwn(config, "MICME_PRINTABLE_SHORTCUTS") && !rendered.includes("Saving MICME_SHORTCUT");
+		}, "shortcut setting did not finish saving");
 
 		saved = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
 		assert.equal(saved.MICME_SHORTCUT, "~");
