@@ -77,11 +77,11 @@
     "image": "https://raw.githubusercontent.com/senad-d/micme/main/img/demo.gif"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.75.3",
+    "@earendil-works/pi-coding-agent": "^0.79.0",
     "@earendil-works/pi-tui": ">=0.80.7 <0.81.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.75.3",
+    "@earendil-works/pi-coding-agent": "^0.79.0",
     "@earendil-works/pi-tui": "0.80.7",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.0.0",
