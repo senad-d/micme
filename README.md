@@ -118,7 +118,9 @@ pi install /absolute/path/to/micme
 
 ## Pi Compatibility
 
-Micme supports `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` versions `>=0.80.7 <0.81.0`. CI installs and tests both packages at `0.80.7`, typechecks every production TypeScript file against their real declarations, and loads the default extension through Pi's jiti-based loader. Supporting a new Pi minor release requires intentionally updating the peer ranges, pinned development versions, and contract gate together.
+Micme declares `*` as the peer dependency range for both `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`. These published ranges are not a compatibility guarantee. CI pins both packages to `0.84.4` and tests only that version: it typechecks every production TypeScript file against their declarations and loads the default extension through Pi's jiti-based loader.
+
+Before adopting another Pi release, review both published peer ranges and update the development pins and the contract test together.
 
 ---
 
