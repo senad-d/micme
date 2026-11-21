@@ -32,7 +32,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck against Pi 0.80.7
+      - name: Typecheck against pinned Pi dependencies
         run: npm run typecheck
 
       - name: Load extension with Pi's jiti runtime
