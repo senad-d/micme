@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
 
-const SUPPORTED_PI_VERSION = "0.84.4";
+const SUPPORTED_PI_VERSION = "1.6.0";
 
 async function readInstalledManifest(packageName) {
 	const path = join(process.cwd(), "node_modules", ...packageName.split("/"), "package.json");

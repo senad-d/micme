@@ -269,7 +269,7 @@ class ConfigurationScreen implements Component {
 		this.requestRender();
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		this.refreshDerivedItems();
 		if (this.submenuComponent) return this.submenuComponent.render(width);
 		if (width < TWO_PANE_MIN_WIDTH) return this.renderNarrow(width);

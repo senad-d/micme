@@ -63,7 +63,8 @@ class WrappedMicmeEditor extends CustomEditor {
 
 	override render(width: number): string[] {
 		this.syncBaseEditor();
-		return this.base.render(width);
+		// Pi components may reuse readonly render output; CustomEditor promises a mutable array.
+		return [...this.base.render(width)];
 	}
 
 	override invalidate(): void {

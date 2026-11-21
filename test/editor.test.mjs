@@ -9,6 +9,7 @@ const PRINTABLE_SHORTCUT_ENV = {
 	MICME_SHORTCUT: "§",
 	MICME_PRINTABLE_SHORTCUTS: "",
 };
+const PREVIOUS_EDITOR_LINES = Object.freeze(["previous editor"]);
 const APP_INPUTS = ["ctrl+l", "ctrl+p", "ctrl+t", "shift+tab", "escape", "ctrl+d", "alt+v", "extension-shortcut"];
 const EXPECTED_APP_HITS = [
 	"app.model.select",
@@ -56,6 +57,10 @@ const tui = { requestRender };
 class PreviousCustomEditor extends CustomEditor {
 	customInputCount = 0;
 	submitInputCount = 0;
+
+	render() {
+		return PREVIOUS_EDITOR_LINES;
+	}
 
 	handleInput(data) {
 		if (data === "?") {
@@ -198,3 +203,21 @@ async function testWrappedCustomEditor() {
 }
 
 test("wrapped CustomEditor keeps Pi app shortcuts and the previous editor behavior", testWrappedCustomEditor);
+
+function runReadonlyRenderScenario() {
+	installedFactory = undefined;
+	installMicmeEditorFallback(ctx, micmeHandlers);
+	assert.ok(installedFactory);
+	const editor = installedFactory(tui, theme, keybindings);
+	const frame = editor.render(80);
+	assert.deepEqual(frame, ["previous editor"]);
+
+	frame.push("temporary line");
+	assert.deepEqual(editor.render(80), ["previous editor"]);
+}
+
+async function testReadonlyRender() {
+	await withEnv(PRINTABLE_SHORTCUT_ENV, runReadonlyRenderScenario);
+}
+
+test("wrapped CustomEditor returns mutable lines without changing the previous editor's cached frame", testReadonlyRender);
