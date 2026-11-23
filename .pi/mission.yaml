@@ -10,3 +10,9 @@ rules:
     merge_when:
       semver: ["patch", "minor"]
     retest: "retest-pr"
+notifications:
+  - name: "slack"
+    type: "slack"
+    url: "SLACK_TEAM_URL"
+    events: ["question", "failed", "attention", "merge"]
+    report: "17:00"
