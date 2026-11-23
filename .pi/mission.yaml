@@ -1,0 +1,12 @@
+# Mission configuration; Settings › Mission in the web app edits it.
+rules:
+  - name: "dependabot"
+    enabled: true
+    match:
+      kind: "pr"
+      author: "dependabot[bot]"
+    run: "maintain-pr"
+    merge: "auto"
+    merge_when:
+      semver: ["patch", "minor"]
+    retest: "retest-pr"
