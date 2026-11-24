@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import * as capture from "../src/live-capture.ts";
+import { findExecutable, hasRecorderExited, spawnRecording, stopProcess } from "../src/processes.ts";
+import { createLiveRecordingDirectory } from "../src/recording-dir.ts";
 
 const { buildFfmpegRecorderArgs, buildRecorderCommand, parseAvfoundationDevices, parseDirectShowDevices, parseVolumeDb, renderDevicePanel } = await import("../src/audio.ts");
 const { getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getRecordMeter, getRecordSampleRate, getRecordSync, reloadMicmeConfig } = await import("../src/config.ts");
@@ -203,6 +208,96 @@ test("custom record commands receive the shared Micme placeholders", async () =>
 	assert.equal(command.display.includes("{transcript}"), false);
 	assert.match(command.display, /raw\.wav/);
 	assert.match(command.display, /transcript\.txt/);
+});
+
+async function liveSpool(t) {
+	const directory = await createLiveRecordingDirectory(".", false);
+	t.after(async () => {
+		try {
+			await directory.remove();
+		} finally {
+			directory.close();
+		}
+	});
+	return { directory, path: join(directory.filesPath, "raw.wav") };
+}
+
+const LIVE_SETTINGS = {
+	MICME_RECORD_COMMAND: undefined,
+	MICME_RECORD_METER: "1",
+	MICME_RECORD_SAMPLE_RATE: "48000",
+	MICME_RECORD_SYNC: "0",
+	MICME_AUDIO_FILTER: "volume=0.5",
+	MICME_PULSE_SOURCE: "test-input",
+	MICME_AVFOUNDATION_INPUT: ":3",
+	MICME_DSHOW_AUDIO_DEVICE: "Studio  Mic",
+};
+const ffmpeg = findExecutable(["ffmpeg"]);
+const ffmpegOnly = { skip: !ffmpeg && "FFmpeg is not installed" };
+
+test("live recorder shares the clip device and writes one worker-format output with at most one configured filter", ffmpegOnly, async (t) => {
+	const { directory, path } = await liveSpool(t);
+	for (const enabled of ["1", "0"]) {
+		const { args } = await withEnv({ ...LIVE_SETTINGS, MICME_PROCESS_AUDIO: enabled }, () => capture.buildLiveRecorderCommand(path, directory, t.signal));
+		const clip = await withEnv(LIVE_SETTINGS, () => buildRecorderCommand(path));
+		assert.equal(args[args.indexOf("-i") + 1], clip.args[clip.args.indexOf("-i") + 1]);
+		assert.equal(args.filter((arg) => arg === "-i").length, 1);
+		assert.equal(args.filter((arg) => arg === "-map").length, 1);
+		assert.equal(args.includes("pipe:1"), false);
+		assert.equal(args[args.indexOf("-ar") + 1], "16000");
+		assert.equal(args[args.indexOf("-ac") + 1], "1");
+		assert.equal(args[args.indexOf("-c:a") + 1], "pcm_s16le");
+		assert.equal(args[args.indexOf("-flush_packets") + 1], "1");
+		assert.equal(args.join(" ").split("volume=0.5").length - 1, Number(enabled));
+		assert.equal(args.at(-1), path);
+	}
+});
+
+test("live custom hooks preserve the clip template and own all their filtering", async (t) => {
+	const { directory, path } = await liveSpool(t);
+	const live = await withEnv({ MICME_PROCESS_AUDIO: "1", MICME_AUDIO_FILTER: "volume=0.5", MICME_RECORD_COMMAND: "rec {audio} {tempDir} {transcript}" }, () => capture.buildLiveRecorderCommand(path, directory, t.signal));
+	const clip = await withEnv({ MICME_RECORD_COMMAND: "rec {audio} {tempDir} {transcript}" }, () => buildRecorderCommand(path, directory.filesPath));
+	assert.deepEqual(live, clip);
+});
+
+test("the FFmpeg live output exposes real-time samples before recorder close and drains its final tail", { ...ffmpegOnly, timeout: 10_000 }, async (t) => {
+	const { directory, path } = await liveSpool(t);
+	const spec = await withEnv({ ...LIVE_SETTINGS, MICME_RECORD_SYNC: "1", MICME_PROCESS_AUDIO: "1" }, () => capture.buildLiveRecorderCommand(path, directory, t.signal));
+	const args = ["-hide_banner", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=16000", "-t", "5", ...spec.args.slice(spec.args.indexOf("-i") + 2)];
+	const started = performance.now();
+	const recording = spawnRecording({ ...spec, args }, path, directory.filesPath, directory);
+	const signal = AbortSignal.any([t.signal, AbortSignal.timeout(7_000)]);
+	try {
+		const reader = await capture.openLivePcm(path, directory, signal);
+		try {
+			let first;
+			while (!hasRecorderExited(recording)) {
+				({ pcm: first } = await reader.read(false));
+				if (first.length) break;
+				await delay(20, undefined, { signal });
+			}
+			assert.equal(hasRecorderExited(recording), false, "live samples must be available while the recorder is running");
+			assert.ok(first?.length > 0 && performance.now() - started < 3_000, "PCM packets must be readable promptly, not buffered until near stop");
+			let consumed = first.length / 2;
+			let peak = 0;
+			for (let offset = 0; offset < first.length; offset += 2) peak = Math.max(peak, Math.abs(first.readInt16LE(offset)));
+			assert.ok(peak >= 2000 && peak <= 2100, `one volume=0.5 pass should halve the FFmpeg sine source peak; got ${peak}`);
+			const exit = await stopProcess(recording);
+			assert.equal(exit.code, 0, recording.stderr());
+			for (;;) {
+				const { pcm, availableThrough } = await reader.read(true);
+				consumed += pcm.length / 2;
+				if (pcm.length === 0) {
+					assert.equal(availableThrough, consumed);
+					break;
+				}
+			}
+		} finally {
+			reader.close();
+		}
+	} finally {
+		await stopProcess(recording);
+	}
 });
 
 test("recording quality flags use safe defaults and explicit overrides", () => {
