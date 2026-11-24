@@ -1,6 +1,7 @@
 import { mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { win32 } from "node:path";
+import type { VerifiedRecordingFile } from "./recording-dir.ts";
 
 const requireNative = createRequire(import.meta.url);
 const FILE_LIST_DIRECTORY = 1;
@@ -9,7 +10,11 @@ const DELETE = 0x10000;
 const FILE_SHARE_READ = 1;
 const FILE_SHARE_ALL = 7;
 const OPEN_EXISTING = 3;
-const OPEN_DIRECTORY_NO_REPARSE = 0x02200000; // BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+const OPEN_DIRECTORY_NO_REPARSE = 0x02200000; // BACKUP_SEMANTICS | OPEN_REPARSE_POINT; also permits inspecting a directory leaf
+const GENERIC_READ = 0x80000000;
+const FILE_TYPE_DISK = 1;
+const FILE_ATTRIBUTE_TAG_INFO = 9;
+const ERROR_FILE_NOT_FOUND = 2;
 const DIRECTORY = 0x10;
 const REPARSE_POINT = 0x400;
 let api: ReturnType<typeof loadWindowsApi> | undefined;
@@ -17,17 +22,91 @@ let api: ReturnType<typeof loadWindowsApi> | undefined;
 function loadWindowsApi() {
 	const koffi: typeof import("koffi") = requireNative("koffi");
 	const kernel32 = koffi.load("kernel32.dll");
+	const read = kernel32.func("int __stdcall ReadFile(void *, void *, uint32_t, void *, void *)");
 	return {
 		open: kernel32.func("void * __stdcall CreateFileW(str16, uint32_t, uint32_t, void *, uint32_t, uint32_t, void *)"),
 		reopen: kernel32.func("void * __stdcall ReOpenFile(void *, uint32_t, uint32_t, uint32_t)"),
 		information: kernel32.func("int __stdcall GetFileInformationByHandleEx(void *, int, void *, uint32_t)"),
 		setInformation: kernel32.func("int __stdcall SetFileInformationByHandle(void *, int, void *, uint32_t)"),
 		close: kernel32.func("int __stdcall CloseHandle(void *)"),
+		lastError: kernel32.func("uint32_t __stdcall GetLastError()"),
+		fileType: kernel32.func("uint32_t __stdcall GetFileType(void *)"),
+		fileSize: kernel32.func("int __stdcall GetFileSizeEx(void *, void *)"),
+		seek: kernel32.func("int __stdcall SetFilePointerEx(void *, int64_t, void *, uint32_t)"),
+		read: (handle: bigint, bytes: Buffer, count: number) => readWindowsFile(read, handle, bytes, count),
 	};
 }
 
 function validHandle(handle: bigint | null): handle is bigint {
 	return Boolean(handle && handle !== -1n && handle !== 0xffffffffffffffffn && handle !== 0xffffffffn);
+}
+
+type WindowsFileApi = Pick<ReturnType<typeof loadWindowsApi>, "open" | "lastError" | "fileType" | "information" | "fileSize" | "seek" | "read" | "close">;
+
+function readWindowsFile(read: ReturnType<ReturnType<typeof import("koffi").load>["func"]>, handle: bigint, bytes: Buffer, count: number) {
+	return new Promise<number>((resolve, reject) => {
+		const transferred = Buffer.alloc(4);
+		read.async(handle, bytes, count, transferred, null, (error: unknown, success: number) => {
+			if (error) reject(error);
+			else if (!success) reject(new Error("Windows could not read Micme's live recording file."));
+			else resolve(transferred.readUInt32LE());
+		});
+	});
+}
+
+export function openVerifiedWindowsFile(path: string, native: WindowsFileApi): VerifiedRecordingFile | undefined {
+	const handle: bigint | null = native.open(win32.toNamespacedPath(path), GENERIC_READ, FILE_SHARE_ALL, null, OPEN_EXISTING, OPEN_DIRECTORY_NO_REPARSE, null);
+	if (!validHandle(handle)) {
+		// Poll only for a missing leaf; unverifiable or inaccessible files fail closed.
+		if (native.lastError() === ERROR_FILE_NOT_FOUND) return undefined;
+		throw new Error("Windows could not open Micme's live recording file for verification.");
+	}
+	try {
+		if (native.fileType(handle) !== FILE_TYPE_DISK) throw new Error("Micme's live recording leaf is not a regular disk file.");
+		const info = Buffer.alloc(8);
+		if (!native.information(handle, FILE_ATTRIBUTE_TAG_INFO, info, info.length)) throw new Error("Windows could not verify Micme's live recording file attributes.");
+		if (info.readUInt32LE(0) & (DIRECTORY | REPARSE_POINT)) throw new Error("Micme's live recording leaf is not a regular disk file.");
+		return new WindowsRecordingFile(native, handle);
+	} catch (error) {
+		native.close(handle);
+		throw error;
+	}
+}
+
+class WindowsRecordingFile implements VerifiedRecordingFile {
+	private readonly native: WindowsFileApi;
+	private handle?: bigint;
+
+	constructor(native: WindowsFileApi, handle: bigint) {
+		this.native = native;
+		this.handle = handle;
+	}
+
+	private openedHandle() {
+		if (this.handle === undefined) throw new Error("Micme's live recording file is closed.");
+		return this.handle;
+	}
+
+	size() {
+		const size = Buffer.alloc(8);
+		if (!this.native.fileSize(this.openedHandle(), size)) throw new Error("Windows could not read the live recording size.");
+		return Number(size.readBigInt64LE());
+	}
+
+	readAt(bytes: Buffer, offset: number) {
+		const handle = this.openedHandle();
+		// The LivePcmReader serializes reads: only this reader moves the pointer
+		// of this handle, and the recorder opened its own handle.
+		if (!this.native.seek(handle, offset, null, 0)) throw new Error("Windows could not seek in the live recording file.");
+		return this.native.read(handle, bytes, bytes.length);
+	}
+
+	close() {
+		if (this.handle === undefined) return;
+		const handle = this.handle;
+		this.handle = undefined;
+		this.native.close(handle);
+	}
 }
 
 export class WindowsRecordingDirectory {
@@ -45,15 +124,15 @@ export class WindowsRecordingDirectory {
 		// directory or turn it into a junction while hooks use its path.
 		const handle = this.open(FILE_READ_ATTRIBUTES);
 		this.handle = handle;
-		const info = Buffer.alloc(8); // FILE_ATTRIBUTE_TAG_INFO, including the reparse tag
-		if (!this.api.information(handle, 9, info, info.length)) {
+		try {
+			const info = Buffer.alloc(8); // attributes and reparse tag
+			if (!this.api.information(handle, FILE_ATTRIBUTE_TAG_INFO, info, info.length)) throw new Error(`Micme could not verify its recording directory: ${path}.`);
+			const attributes = info.readUInt32LE(0);
+			if (!(attributes & DIRECTORY) || (attributes & REPARSE_POINT)) throw new Error(`Micme refuses to use a symbolic-link recordings directory or other reparse point: ${path}.`);
+		} catch (error) {
 			this.closeOnly();
-			throw new Error(`Micme could not verify its recording directory: ${path}.`);
+			throw error;
 		}
-		const attributes = info.readUInt32LE(0);
-		if ((attributes & DIRECTORY) && !(attributes & REPARSE_POINT)) return;
-		this.closeOnly();
-		throw new Error(`Micme refuses to use a symbolic-link recordings directory or other reparse point: ${path}.`);
 	}
 
 	static async openProject(project: string) {
@@ -69,6 +148,11 @@ export class WindowsRecordingDirectory {
 			current.close();
 			throw error;
 		}
+	}
+
+	openVerifiedFile(name: string) {
+		if (this.handle === undefined) throw new Error("Micme's Windows recording directory lock is closed.");
+		return openVerifiedWindowsFile(win32.join(this.path, name), this.api);
 	}
 
 	openDirectory(name: string) {

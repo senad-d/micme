@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test from "node:test";
 
-const { createProjectRecordingDirectory, createRecordingDirectory, formatRecordingDirectoryName } = await import("../src/recording-dir.ts");
+const { createLiveRecordingDirectory, createProjectRecordingDirectory, createRecordingDirectory, formatRecordingDirectoryName } = await import("../src/recording-dir.ts");
+const { openVerifiedWindowsFile } = await import("../src/windows-recording-dir.ts");
 const { PosixDirectory } = await import("../src/posix-directory.ts");
 const { runProcess } = await import("../src/processes.ts");
 
@@ -176,7 +177,7 @@ async function assertFilesStayBound(t) {
 
 test("recording file access and cleanup use the original directory after root substitution", posixOnly, assertFilesStayBound);
 
-test("the descriptor-relative subprocess fallback stays bound without /proc", { skip: process.platform !== "linux" }, async (t) => {
+function disableProcAccess(t) {
 	const statPath = fs.statSync;
 	const statMock = t.mock.method(fs, "statSync", (path, options) => typeof path === "string" && path.startsWith(`/proc/${process.pid}/fd/`) ? undefined : statPath(path, options));
 	syncBuiltinESMExports();
@@ -184,7 +185,32 @@ test("the descriptor-relative subprocess fallback stays bound without /proc", { 
 		statMock.mock.restore();
 		syncBuiltinESMExports();
 	});
+}
+
+test("the descriptor-relative subprocess fallback stays bound without /proc", { skip: process.platform !== "linux" }, async (t) => {
+	disableProcAccess(t);
 	await assertFilesStayBound(t);
+});
+
+test("private snapshot creation is exclusive and owner-only in the descriptor-relative fallback", { skip: process.platform === "win32" }, async (t) => {
+	if (process.platform === "linux") disableProcAccess(t);
+	const directory = await createLiveRecordingDirectory(".", false, "micme-live-dir-test-");
+	t.after(async () => {
+		try {
+			await directory.remove();
+		} finally {
+			directory.close();
+		}
+	});
+	assert.notEqual(directory.cwdFd, undefined);
+	const original = process.umask(0o022);
+	try {
+		closeSync(directory.createPrivateFile("snapshot.wav"));
+	} finally {
+		process.umask(original);
+	}
+	assert.equal((await stat(join(directory.path, "snapshot.wav"))).mode & 0o777, 0o600);
+	assert.throws(() => directory.createPrivateFile("snapshot.wav"), { code: "EEXIST" });
 });
 
 test("cleanup refuses a same-named replacement leaf even in the original root", posixOnly, async (t) => {
@@ -212,6 +238,97 @@ test("non-kept audio still uses the system temp directory", async (t) => {
 
 	assert.equal(dirname(directory.path), tmpdir());
 	assert.ok(basename(directory.path).startsWith("micme-test-"));
+});
+
+test("verified live temp access inspects the held directory, rejecting a substituted path and nonregular leaves", posixOnly, async (t) => {
+	const directory = await createLiveRecordingDirectory(".", false, "micme-live-dir-test-");
+	const moved = `${directory.path}-original`;
+	t.after(async () => {
+		directory.close();
+		await rm(moved, { recursive: true, force: true });
+		await rm(directory.path, { recursive: true, force: true });
+	});
+	assert.equal(directory.openVerifiedFile(join(directory.path, "missing.wav")), undefined);
+	await writeFile(join(directory.path, "raw.wav"), "original");
+	await symlink("raw.wav", join(directory.path, "symlink.wav"));
+	await mkdir(join(directory.path, "directory.wav"));
+	await rename(directory.path, moved);
+	await mkdir(directory.path);
+	await writeFile(join(directory.path, "raw.wav"), "replaced");
+	assert.throws(() => directory.openVerifiedFile(join(directory.path, "symlink.wav")), { code: "ELOOP" });
+	assert.throws(() => directory.openVerifiedFile(join(directory.path, "directory.wav")), /regular file/);
+	const file = directory.openVerifiedFile(join(directory.path, "raw.wav"));
+	try {
+		assert.equal(file.size(), 8);
+		const bytes = Buffer.alloc(4);
+		assert.equal(await file.readAt(bytes, 4), 4);
+		assert.equal(bytes.toString(), "inal");
+	} finally {
+		file.close();
+	}
+});
+
+function fakeWindowsFile({ type = 1, attributes = 0, verified = true } = {}) {
+	const events = [];
+	const handle = 1234n;
+	const fixture = {
+		events,
+		api: {
+			open: (path, rights, share, security, disposition, flags) => {
+				assert.match(path, /raw\.wav$/);
+				assert.equal(rights, 0x80000000);
+				assert.equal(share & 3, 3); // allow existing recorder read/write access
+				assert.equal(disposition, 3); // open existing, no creation
+				assert.equal(flags & 0x00200000, 0x00200000); // don't follow reparse points
+				return handle;
+			},
+			lastError: () => assert.fail("successful open does not require GetLastError"),
+			fileType: (file) => { assert.equal(file, handle); return type; },
+			information: (file, infoClass, buffer) => {
+				assert.equal(file, handle);
+				assert.equal(infoClass, 9);
+				buffer.writeUInt32LE(attributes);
+				return verified;
+			},
+			fileSize: (file, buffer) => {
+				assert.equal(file, handle);
+				buffer.writeBigInt64LE(8n);
+				return 1;
+			},
+			seek: (file, offset) => { assert.equal(file, handle); events.push(offset); return 1; },
+			read: async (file, buffer, count) => {
+				assert.equal(file, handle);
+				assert.equal(count, 4);
+				buffer.write("held");
+				events.push("read");
+				return count;
+			},
+			close: (file) => { assert.equal(file, handle); events.push("close"); },
+		},
+	};
+	return fixture;
+}
+
+const WINDOWS_LEAF = String.raw`C:\Micme\raw.wav`;
+
+test("the Windows verified-open boundary rejects unsafe or unverifiable handles before reading", () => {
+	for (const options of [{ type: 3 }, { attributes: 0x400 }, { attributes: 0x10 }, { verified: false }]) {
+		const { api, events } = fakeWindowsFile(options);
+		assert.throws(() => openVerifiedWindowsFile(WINDOWS_LEAF, api), /verify|regular disk file/);
+		assert.deepEqual(events, ["close"]);
+	}
+});
+
+test("Windows size and positional reads use only the verified handle, which closes once", async () => {
+	const { api, events } = fakeWindowsFile();
+	const file = openVerifiedWindowsFile(WINDOWS_LEAF, api);
+	assert.equal(file.size(), 8);
+	const bytes = Buffer.alloc(4);
+	assert.equal(await file.readAt(bytes, 4), 4);
+	assert.equal(bytes.toString(), "held");
+	file.close();
+	file.close();
+	assert.deepEqual(events, [4, "read", "close"]);
 });
 
 test("recording directory names keep at least three digits", () => {
