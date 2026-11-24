@@ -132,7 +132,7 @@ Micme does not bundle recorder, transcriber, or model binaries.
 | --- | --- | --- |
 | macOS | `brew install ffmpeg whisper-cpp` | Run `/micme devices`, then set `MICME_AUDIO_DEVICE=<audio id>` or `MICME_AVFOUNDATION_INPUT=:<audio id>`. |
 | Linux | Install `ffmpeg` and `whisper.cpp` with your package manager, Nix, Homebrew, or source build. | `MICME_PULSE_SOURCE=default` |
-| Windows | `winget install Gyan.FFmpeg`, then install/build `whisper.cpp`. | `MICME_DSHOW_AUDIO_DEVICE=Microphone Name` |
+| Windows | `winget install Gyan.FFmpeg`, then install/build `whisper.cpp`. | Choose **Microphone device** in `/micme conf`, or set `MICME_DSHOW_AUDIO_DEVICE=Microphone Name`. |
 
 List devices inside pi:
 

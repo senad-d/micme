@@ -89,8 +89,10 @@ export type Recording = {
 	clipRecording?: Recording;
 	stopRequested?: boolean;
 	stopSignals?: Set<NodeJS.Signals>;
+	windowsTreeStopped?: boolean;
 	stopPromise?: Promise<ExitResult>;
 	exitPromise: Promise<ExitResult>;
+	getExit: () => ExitResult;
 	isSettled: () => boolean;
 	stdout: () => string;
 	stderr: () => string;

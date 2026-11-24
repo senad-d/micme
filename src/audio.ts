@@ -661,10 +661,7 @@ export async function discoverAudioDevices(): Promise<AudioDeviceCandidate[]> {
 	if (process.platform === "win32") {
 		const result = await runProcess(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], DEVICE_SCAN_TIMEOUT_MS);
 		const parsed = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
-		if (parsed.audio.length > 0) {
-			return parsed.audio.map((device) => ({ label: device.name, value: device.name, description: "DirectShow audio input" }));
-		}
-		return [{ label: "default", value: "default", description: "DirectShow default audio input" }];
+		return parsed.audio.map((device) => ({ label: device.name, value: device.name, description: "DirectShow audio input" }));
 	}
 
 	return [];
