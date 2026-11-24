@@ -42,7 +42,7 @@ import {
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import { sanitizeTerminalOutput } from "./terminal-text.ts";
 import { transcribe } from "./transcription.ts";
-import type { Recording, ResolvedTranscriptionPlan } from "./types.ts";
+import type { ExitResult, Recording, ResolvedTranscriptionPlan } from "./types.ts";
 
 const MICME_ACTIONS = ["devices", "conf", "last", "audio", "help"] as const;
 const SHORTCUT_REPEAT_GUARD_MS = 1_000;
@@ -60,7 +60,22 @@ type MicmeOperation = {
 	directories: Set<RecordingDirectory>;
 	keepAudio?: boolean;
 	completion?: Promise<void>;
+	startupFailureCleanup?: Promise<unknown>;
 };
+
+class EarlyRecorderExitError extends Error {
+	private readonly readStderr: Recording["stderr"];
+
+	constructor(kind: "recorder" | "streaming", exit: ExitResult, recording: Recording) {
+		super(`Micme ${kind} exited early (${formatExit(exit)}).`);
+		this.readStderr = recording.stderr;
+	}
+
+	withDiagnostics() {
+		const stderr = formatProcessOutput(this.readStderr());
+		return new Error(stderr ? `${this.message}\n${stderr}` : this.message);
+	}
+}
 
 export default function micmeExtension(pi: ExtensionAPI) {
 	registerMicmeExtension(pi);
@@ -143,6 +158,8 @@ export class MicmeSessionOwner {
 		if (!active) return;
 
 		const phaseAtShutdown = active.phase;
+		// One recorder can have failed while startup still awaits its companion's grace period.
+		const failedBeforeShutdown = phaseAtShutdown === "starting" && [...active.processes].some(hasRecorderExited);
 		const completion = active.completion?.catch(() => undefined);
 		active.phase = "shutting_down";
 		active.controller.abort();
@@ -151,7 +168,9 @@ export class MicmeSessionOwner {
 		if (phaseAtShutdown !== "starting" && completion) await raceWithTimeout(completion, 2_000);
 		clearOperationTimers(active);
 		await stopOwnedProcesses(active);
-		await cleanupOwnedDirectories(this, active);
+		// A failed start already owns the decision to keep or remove its audio.
+		if (active.startupFailureCleanup) await active.startupFailureCleanup;
+		else if (!failedBeforeShutdown || !inspectStartupClip(active)) await cleanupOwnedDirectories(this, active);
 		// Late startup/finalization can still own a borrowed fd or be allocating a
 		// directory. Do not recycle its descriptor while that work is in flight.
 		if (completion) void completion.then(() => closeOwnedDirectories(active));
@@ -183,13 +202,6 @@ export class MicmeSessionOwner {
 		const ctx = operation.context;
 		ctx.ui.setStatus(STATUS_KEY, `● ${phase} (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
 		this.recordingWidget.start(ctx, primary);
-	}
-
-	async cleanupFailedRecordingStart(operation: MicmeOperation) {
-		this.recordingWidget.clear(operation.context);
-		clearOperationTimers(operation);
-		await stopOwnedProcesses(operation);
-		await cleanupOwnedDirectories(this, operation);
 	}
 
 	trackProcess(operation: MicmeOperation, active: Recording) {
@@ -229,12 +241,27 @@ export class MicmeSessionOwner {
 			await work;
 		} catch (error) {
 			if (!this.isCurrent(operation)) return;
-			handleExtensionError(operation.context, error);
+			operation.startupFailureCleanup = this.cleanupFailedRecordingStart(operation, error);
+			const reportedError = await operation.startupFailureCleanup;
+			if (!this.isCurrent(operation)) return;
+			handleExtensionError(operation.context, reportedError);
 			this.finish(operation);
 			closeOwnedDirectories(operation);
 		} finally {
 			if (operation.completion === work) operation.completion = undefined;
 		}
+	}
+
+	private async cleanupFailedRecordingStart(operation: MicmeOperation, error: unknown) {
+		this.recordingWidget.clear(operation.context);
+		clearOperationTimers(operation);
+		await stopOwnedProcesses(operation);
+		// An observed hook exit can precede stderr drain; use the diagnostics available after stopping.
+		const reportedError = error instanceof EarlyRecorderExitError ? error.withDiagnostics() : error;
+		const retainedError = reportRetainedClip(this, operation, inspectStartupClip(operation), reportedError);
+		if (retainedError) return retainedError;
+		await cleanupOwnedDirectories(this, operation);
+		return reportedError;
 	}
 
 	private async stop(operation: MicmeOperation) {
@@ -366,25 +393,16 @@ async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOper
 		return;
 	}
 
-	try {
-		const audioPath = join(directory.filesPath, "raw.wav");
-		const command = await buildRecorderCommand(audioPath, directory.filesPath, operation.controller.signal);
-		if (!owner.isCurrent(operation)) return;
-		const active = spawnRecording(command, audioPath, directory.path, directory);
-		owner.trackProcess(operation, active);
-		const earlyExit = await raceWithTimeout(active.exitPromise, RECORDER_STARTUP_GRACE_MS);
-		if (!owner.isCurrent(operation)) return;
-		if (earlyExit) {
-			const stderr = formatProcessOutput(active.stderr());
-			const suffix = stderr ? `\n${stderr}` : "";
-			throw new Error(`Micme recorder exited early (${formatExit(earlyExit)}).${suffix}`);
-		}
+	const audioPath = join(directory.filesPath, "raw.wav");
+	const command = await buildRecorderCommand(audioPath, directory.filesPath, operation.controller.signal);
+	if (!owner.isCurrent(operation)) return;
+	const active = spawnRecording(command, audioPath, directory.path, directory);
+	owner.trackProcess(operation, active);
+	const earlyExit = await raceWithTimeout(active.exitObserved, RECORDER_STARTUP_GRACE_MS);
+	if (!owner.isCurrent(operation)) return;
+	if (earlyExit) throw new EarlyRecorderExitError("recorder", earlyExit, active);
 
-		owner.activateRecording(operation, "recording", active, stopHint);
-	} catch (error) {
-		await owner.cleanupFailedRecordingStart(operation);
-		throw error;
-	}
+	owner.activateRecording(operation, "recording", active, stopHint);
 }
 
 async function startStreamingTranscription(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext, stopHint: string) {
@@ -398,25 +416,20 @@ async function startStreamingTranscription(owner: MicmeSessionOwner, operation: 
 		return;
 	}
 
-	try {
-		const clipAudioPath = join(directory.filesPath, "raw.wav");
-		const clipCommand = getStreamFinalizeWithClip() ? await buildRecorderCommand(clipAudioPath, directory.filesPath, operation.controller.signal) : undefined;
-		if (!owner.isCurrent(operation)) return;
-		const streamRecording = spawnWhisperStreamingRecording(plan, directory.path);
-		owner.trackProcess(operation, streamRecording);
-		initializeStreamingRecording(ctx, streamRecording);
-		if (clipCommand) {
-			const clipRecording = spawnRecording(clipCommand, clipAudioPath, directory.path, directory);
-			streamRecording.clipRecording = clipRecording;
-			owner.trackProcess(operation, clipRecording);
-		}
-
-		await ensureStreamingRecorderStarted(streamRecording);
-		owner.activateRecording(operation, "streaming", streamRecording, stopHint);
-	} catch (error) {
-		await owner.cleanupFailedRecordingStart(operation);
-		throw error;
+	const clipAudioPath = join(directory.filesPath, "raw.wav");
+	const clipCommand = getStreamFinalizeWithClip() ? await buildRecorderCommand(clipAudioPath, directory.filesPath, operation.controller.signal) : undefined;
+	if (!owner.isCurrent(operation)) return;
+	const streamRecording = spawnWhisperStreamingRecording(plan, directory.path);
+	owner.trackProcess(operation, streamRecording);
+	initializeStreamingRecording(ctx, streamRecording);
+	if (clipCommand) {
+		const clipRecording = spawnRecording(clipCommand, clipAudioPath, directory.path, directory);
+		streamRecording.clipRecording = clipRecording;
+		owner.trackProcess(operation, clipRecording);
 	}
+
+	await ensureStreamingRecorderStarted(streamRecording);
+	owner.activateRecording(operation, "streaming", streamRecording, stopHint);
 }
 
 function resolveStreamingTranscriptionPlan(): StreamingTranscriptionPlan {
@@ -453,17 +466,14 @@ function initializeStreamingRecording(ctx: ExtensionContext, streamRecording: Re
 }
 
 async function ensureStreamingRecorderStarted(streamRecording: Recording) {
+	const clip = streamRecording.clipRecording;
 	const [earlyExit, recorderEarlyExit] = await Promise.all([
-		raceWithTimeout(streamRecording.exitPromise, RECORDER_STARTUP_GRACE_MS),
-		streamRecording.clipRecording ? raceWithTimeout(streamRecording.clipRecording.exitPromise, RECORDER_STARTUP_GRACE_MS) : Promise.resolve(undefined),
+		raceWithTimeout(streamRecording.exitObserved, RECORDER_STARTUP_GRACE_MS),
+		clip ? raceWithTimeout(clip.exitObserved, RECORDER_STARTUP_GRACE_MS) : Promise.resolve(undefined),
 	]);
-	const failedExit = earlyExit ?? recorderEarlyExit;
-	if (!failedExit) return;
-	if (streamRecording.stopRequested || streamRecording.clipRecording?.stopRequested) return;
-	const failed = earlyExit ? streamRecording : streamRecording.clipRecording;
-	const stderr = failed ? formatProcessOutput(failed.stderr()) : "";
-	const suffix = stderr ? `\n${stderr}` : "";
-	throw new Error(`Micme streaming exited early (${formatExit(failedExit)}).${suffix}`);
+	if (streamRecording.stopRequested || clip?.stopRequested) return;
+	if (earlyExit) throw new EarlyRecorderExitError("streaming", earlyExit, streamRecording);
+	if (recorderEarlyExit && clip) throw new EarlyRecorderExitError("streaming", recorderEarlyExit, clip);
 }
 
 async function stopAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI) {
@@ -520,16 +530,8 @@ async function stopStreamingTranscription(
 	} catch (error) {
 		await clipStopPromise;
 		if (!owner.isCurrent(operation)) return;
-		const clip = active.clipRecording;
-		if (clip?.directory) {
-			const note = describePartialClip(clip.directory, clip.audioPath);
-			if (note) {
-				const path = clip.directory.path;
-				owner.rememberAudioDirectory(operation, path);
-				const message = error instanceof Error ? error.message : String(error);
-				throw new Error(`${message}\n${note}: ${path}`, { cause: error });
-			}
-		}
+		const retainedError = reportRetainedClip(owner, operation, inspectPartialClip(active.clipRecording), error);
+		if (retainedError) throw retainedError;
 		await cleanupOwnedDirectories(owner, operation);
 		throw error;
 	}
@@ -540,13 +542,28 @@ async function stopStreamingTranscription(
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
-function describePartialClip(directory: RecordingDirectory, audioPath: string) {
+function inspectStartupClip(operation: MicmeOperation) {
+	const clip = [...operation.processes].find((recording) => recording.directory);
+	return inspectPartialClip(clip, 1);
+}
+
+function inspectPartialClip(clip: Recording | undefined, minBytes = 0) {
+	if (!clip?.directory) return;
+	let note = "Audio kept for debugging";
 	try {
-		return directory.hasRegularFile(audioPath) ? "Audio kept for debugging" : undefined;
+		if (!clip.directory.hasRegularFile(clip.audioPath, minBytes)) return;
 	} catch {
 		// Failed inspection is not proof that the directory is safe to delete.
-		return "Audio may remain in";
+		note = "Audio may remain in";
 	}
+	return { note, path: clip.directory.path };
+}
+
+function reportRetainedClip(owner: MicmeSessionOwner, operation: MicmeOperation, retained: ReturnType<typeof inspectPartialClip>, error: unknown) {
+	if (!retained) return;
+	owner.rememberAudioDirectory(operation, retained.path);
+	const message = error instanceof Error ? error.message : String(error);
+	return new Error(`${message}\n${retained.note}: ${retained.path}`, { cause: error });
 }
 
 function stopClipRecording(active: Recording) {

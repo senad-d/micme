@@ -40,17 +40,19 @@ export class RecordingDirectory {
 		return this.access?.openFile ? this.access.openFile(basename(path), flags) : openSync(path, flags);
 	}
 
-	hasRegularFile(path: string) {
+	hasRegularFile(path: string, minBytes = 0) {
 		if (this.closed) throw new Error("Micme's recording directory has been closed.");
 		if (this.cwdFd === undefined) {
-			return lstatSync(join(this.filesPath, basename(path)), { throwIfNoEntry: false })?.isFile() ?? false;
+			const entry = lstatSync(join(this.filesPath, basename(path)), { throwIfNoEntry: false });
+			return entry !== undefined && entry.isFile() && entry.size >= minBytes;
 		}
 
 		// When there is no usable path to the held directory, check via openat.
 		try {
 			const fd = this.openFile(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
 			try {
-				return fstatSync(fd).isFile();
+				const entry = fstatSync(fd);
+				return entry.isFile() && entry.size >= minBytes;
 			} finally {
 				closeSync(fd);
 			}
