@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { delimiter, join, win32 } from "node:path";
@@ -12,6 +13,7 @@ const FAILED_KILL_CLOSE_GRACE_MS = 1_000;
 
 export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string): Recording {
 	const child = spawn(command.command, command.args, {
+		...command.spawnOptions,
 		stdio: [command.stopInput ? "pipe" : "ignore", "pipe", "pipe"],
 		windowsHide: true,
 	});
@@ -160,21 +162,65 @@ export async function stopRecorder(active: Recording) {
 	}
 }
 
-export function runShell(command: string, timeoutMs: number, options: RunProcessOptions = {}) {
-	const spec = shellCommand(command);
-	return runProcess(spec.command, spec.args, timeoutMs, options);
+export function runShell(template: string, timeoutMs: number, options: RunProcessOptions & { placeholders?: Record<string, string> } = {}) {
+	if (options.signal?.aborted) return Promise.resolve(cancelledRun());
+	return runCommand(shellCommand(template, options.placeholders), timeoutMs, options);
 }
 
-export function shellCommand(command: string): CommandSpec {
+export function shellCommand(template: string, placeholders?: Record<string, string>): CommandSpec {
+	const display = placeholders ? replacePlaceholders(template, placeholders) : template;
 	if (process.platform === "win32") {
 		// Use the host's Windows installation directory, not ComSpec or executable lookup.
 		const systemRoot = process.env.SystemRoot;
 		if (!systemRoot || !/^[a-z]:[\\/]/i.test(systemRoot)) {
 			throw new Error("Micme cannot locate the Windows system shell: SystemRoot must be a drive-qualified absolute path.");
 		}
-		return { command: win32.join(systemRoot, "System32", "cmd.exe"), args: ["/d", "/s", "/c", command], display: command };
+		const interpreter = win32.join(systemRoot, "System32", "cmd.exe");
+		if (placeholders) return windowsHookCommand(interpreter, template, placeholders, display);
+		return { command: interpreter, args: ["/d", "/s", "/c", display], display };
 	}
-	return { command: "sh", args: ["-lc", command], display: command };
+	return { command: "sh", args: ["-lc", display], display };
+}
+
+function windowsHookCommand(command: string, template: string, placeholders: Record<string, string>, display: string): CommandSpec {
+	const hookEnv: NodeJS.ProcessEnv = {};
+	let prefix: string | undefined;
+	let delayedExpansion: boolean | undefined;
+	const script = replacePlaceholders(template, placeholders, (value, key) => {
+		prefix ??= `MICME_HOOK_${randomUUID().replaceAll("-", "")}`;
+		const name = `${prefix}_${key}`;
+		hookEnv[name] = value;
+		// Percent expansion leaves inserted percent signs alone. A later bang scan
+		// also strips carets, even if the bang belongs to another argument.
+		const delimiter = /[!^]/.test(value) && (delayedExpansion ??= windowsDelayedExpansion(command)) ? "!" : "%";
+		return `"${delimiter}${name}${delimiter}"`;
+	});
+	if (!prefix) return { command, args: ["/d", "/s", "/c", script], display };
+
+	// Keep the host's expansion rules for Raw text. /s removes the outer quotes
+	// without CRT escaping the inner quotes that belong to the hook.
+	return {
+		command,
+		args: ["/d", "/s", "/c", `"${script}"`],
+		display,
+		spawnOptions: { env: { ...process.env, ...hookEnv }, windowsVerbatimArguments: true },
+	};
+}
+
+function windowsDelayedExpansion(command: string) {
+	// cmd removes the unmatched bang only when its default delayed expansion is on.
+	const probe = spawnSync(command, ["/d", "/s", "/c", '"echo micme!probe"'], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+		timeout: 2_000,
+		windowsHide: true,
+		windowsVerbatimArguments: true,
+	});
+	const marker = probe.stdout?.trim();
+	if (probe.error || probe.status !== 0 || (marker !== "micmeprobe" && marker !== "micme!probe")) {
+		throw new Error("Micme could not determine the Windows shell's delayed expansion mode.", { cause: probe.error });
+	}
+	return marker === "micmeprobe";
 }
 
 export type RunProcessOptions = {
@@ -182,13 +228,21 @@ export type RunProcessOptions = {
 };
 
 export function runProcess(command: string, args: string[], timeoutMs: number, options: RunProcessOptions = {}): Promise<RunResult> {
+	return runCommand({ command, args }, timeoutMs, options);
+}
+
+function cancelledRun(): RunResult {
+	return { code: null, signal: null, stdout: "", stderr: "", timedOut: false, cancelled: true };
+}
+
+function runCommand({ command, args, spawnOptions }: Pick<CommandSpec, "command" | "args" | "spawnOptions">, timeoutMs: number, options: RunProcessOptions): Promise<RunResult> {
 	return new Promise((resolve, reject) => {
 		if (options.signal?.aborted) {
-			resolve({ code: null, signal: null, stdout: "", stderr: "", timedOut: false, cancelled: true });
+			resolve(cancelledRun());
 			return;
 		}
 
-		const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+		const child = spawn(command, args, { ...spawnOptions, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
 		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
@@ -258,11 +312,11 @@ export function normalizeTranscript(text: string) {
 		.trim();
 }
 
-export function replacePlaceholders(template: string, values: Record<string, string>) {
+export function replacePlaceholders(template: string, values: Record<string, string>, quote: (value: string, key: string) => string = shellQuote) {
 	return template.replace(/\{([A-Za-z][A-Za-z0-9]*?)(Raw)?\}/g, (placeholder, key: string, rawSuffix: string | undefined) => {
 		if (!Object.hasOwn(values, key)) return placeholder;
 		const value = values[key] ?? "";
-		return rawSuffix ? value : shellQuote(value);
+		return rawSuffix ? value : quote(value, key);
 	});
 }
 

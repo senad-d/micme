@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
 import { env, getTranscribeTimeoutMs, getTranslateToEnglishLanguage } from "./config.ts";
 import { ensureWhisperCppModel, getPythonWhisperModelName } from "./models.ts";
-import { formatProcessOutput, formatRunExit, replacePlaceholders, runProcess, runShell } from "./processes.ts";
+import { formatProcessOutput, formatRunExit, runProcess, runShell } from "./processes.ts";
 
 export { getWhisperCppBinary, getWhisperStreamBinary, resolveExecutableConfig } from "./backends.ts";
 
@@ -31,8 +31,10 @@ export async function transcribe(audioPath: string, tempDir: string, ctx?: Exten
 
 export async function transcribeWithCustomCommand(template: string, audioPath: string, tempDir: string, signal?: AbortSignal) {
 	const transcriptPath = join(tempDir, "transcript.txt");
-	const command = replacePlaceholders(template, { audio: audioPath, tempDir, transcript: transcriptPath });
-	const result = await runShell(command, getTranscribeTimeoutMs(), { signal });
+	const result = await runShell(template, getTranscribeTimeoutMs(), {
+		signal,
+		placeholders: { audio: audioPath, tempDir, transcript: transcriptPath },
+	});
 	if (result.code !== 0) {
 		throw new Error(`MICME_TRANSCRIBE_COMMAND failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
