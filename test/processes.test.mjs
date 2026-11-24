@@ -15,6 +15,7 @@ const {
 	formatExit,
 	formatProcessOutput,
 	formatRunExit,
+	isExecutableFile,
 	normalizeTranscript,
 	raceWithTimeout,
 	replacePlaceholders,
@@ -113,6 +114,49 @@ test("findExecutable ignores non-executable PATH entries", async (t) => {
 
 	withEnv({ PATH: `${badDir}${delimiter}${goodDir}` }, () => {
 		assert.equal(findExecutable(["micme-tool"]), executable);
+	});
+});
+
+test("Windows executable discovery skips batch shims earlier on PATH", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-windows-path-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const shimDir = join(root, "shims");
+	const binDir = join(root, "bin");
+	await mkdir(shimDir);
+	await mkdir(binDir);
+	await writeFile(join(shimDir, "whisper-cli.CmD"), "@exit /b 0\r\n");
+	await writeFile(join(shimDir, "whisper-cli.bAt"), "@exit /b 0\r\n");
+	const native = join(binDir, "whisper-cli.exe");
+	await writeFile(native, "");
+
+	withEnv({ PATH: `${shimDir}${delimiter}${binDir}`, PATHEXT: ".CmD;.bAt;.exe" }, () => {
+		withPlatform("win32", () => {
+			assert.equal(findExecutable(["whisper-cli"]), native);
+		});
+	});
+});
+
+test("Windows executable validation rejects an explicit batch path", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-windows-batch-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const batch = join(root, "whisper-stream.CMD");
+	await writeFile(batch, "@exit /b 0\r\n");
+
+	withPlatform("win32", () => {
+		assert.equal(isExecutableFile(batch), false);
+	});
+});
+
+test("Windows command reporting can explicitly include a shell shim", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-windows-command-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const shim = join(root, "pi.CMD");
+	await writeFile(shim, "@exit /b 0\r\n");
+
+	withEnv({ PATH: root, PATHEXT: ".EXE;.CMD" }, () => {
+		withPlatform("win32", () => {
+			assert.equal(findExecutable(["pi"], { allowWindowsBatch: true }), shim);
+		});
 	});
 });
 
