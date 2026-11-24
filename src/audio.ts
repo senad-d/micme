@@ -103,7 +103,8 @@ export function registerDeviceMessageRenderer(pi: ExtensionAPI) {
 	deviceMessageRendererRegistered = true;
 }
 
-export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI) {
+export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI, signal?: AbortSignal) {
+	if (signal?.aborted) return;
 	const backend = getCurrentDeviceBackend();
 	if (backend.backend === "unsupported") {
 		await showDevicePanel(ctx, pi, {
@@ -126,8 +127,9 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI)
 
 	let result: RunResult;
 	try {
-		result = await runProcess(ffmpeg, backend.args, DEVICE_SCAN_TIMEOUT_MS);
+		result = await runProcess(ffmpeg, backend.args, DEVICE_SCAN_TIMEOUT_MS, { signal });
 	} catch {
+		if (signal?.aborted) return;
 		await showDevicePanel(ctx, pi, {
 			sourceLabel: backend.sourceLabel,
 			backend: backend.backend,
@@ -136,6 +138,7 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI)
 		return;
 	}
 
+	if (signal?.aborted || result.cancelled) return;
 	await showDevicePanel(ctx, pi, buildDevicePanelFromRun(backend, result));
 }
 
@@ -661,12 +664,14 @@ function ellipsize(value: string, width: number, style: DevicePanelStyle) {
 	return `${truncated || sliceByColumn(value, 0, Math.max(0, width - ellipsisWidth))}${style.ellipsis}`;
 }
 
-export async function discoverAudioDevices(): Promise<AudioDeviceCandidate[]> {
+export async function discoverAudioDevices(signal?: AbortSignal): Promise<AudioDeviceCandidate[]> {
+	if (signal?.aborted) return [];
 	const ffmpeg = findExecutable(["ffmpeg"]);
 	if (!ffmpeg) return [];
 
 	if (process.platform === "darwin") {
-		const result = await runProcess(ffmpeg, ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], DEVICE_SCAN_TIMEOUT_MS);
+		const result = await runProcess(ffmpeg, ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], DEVICE_SCAN_TIMEOUT_MS, { signal });
+		if (signal?.aborted || result.cancelled) return [];
 		return parseAvfoundationAudioDevices(`${result.stdout}\n${result.stderr}`);
 	}
 
@@ -675,7 +680,8 @@ export async function discoverAudioDevices(): Promise<AudioDeviceCandidate[]> {
 	}
 
 	if (process.platform === "win32") {
-		const result = await runProcess(ffmpeg, DIRECT_SHOW_SCAN_ARGS, DEVICE_SCAN_TIMEOUT_MS);
+		const result = await runProcess(ffmpeg, DIRECT_SHOW_SCAN_ARGS, DEVICE_SCAN_TIMEOUT_MS, { signal });
+		if (signal?.aborted || result.cancelled) return [];
 		const parsed = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
 		return parsed.audio.map((device) => ({ label: device.name, value: device.captureName, description: "DirectShow audio input" }));
 	}

@@ -107,6 +107,8 @@ export function registerMicmeExtension(pi: ExtensionAPI) {
 
 export class MicmeSessionOwner {
 	private readonly recordingWidget = new RecordingWidget();
+	private readonly sessionController = new AbortController();
+	private readonly sessionWork = new Set<Promise<void>>();
 	private current: MicmeOperation | undefined;
 	private closed = false;
 	private nextOperationId = 1;
@@ -148,14 +150,36 @@ export class MicmeSessionOwner {
 		await this.toggle(ctx);
 	}
 
+	async runSessionWork(ctx: ExtensionContext, work: (ctx: ExtensionContext, signal: AbortSignal) => Promise<void>) {
+		const { signal } = this.sessionController;
+		if (signal.aborted) return;
+		const guardedContext = createGuardedContext(ctx, () => !signal.aborted);
+		const pending = Promise.resolve().then(() => {
+			if (!signal.aborted) return work(guardedContext, signal);
+		});
+		this.sessionWork.add(pending);
+		try {
+			await pending;
+		} catch (error) {
+			handleExtensionError(guardedContext, error);
+		} finally {
+			this.sessionWork.delete(pending);
+		}
+	}
+
 	async shutdown(ctx: ExtensionContext) {
 		if (this.closed) return;
 		this.closed = true;
 		const active = this.current;
 		this.current = undefined;
+		this.sessionController.abort();
+		const pendingSessionWork = Promise.allSettled(this.sessionWork);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		this.recordingWidget.clear(ctx);
-		if (!active) return;
+		if (!active) {
+			await pendingSessionWork;
+			return;
+		}
 
 		const phaseAtShutdown = active.phase;
 		// One recorder can have failed while startup still awaits its companion's grace period.
@@ -177,6 +201,7 @@ export class MicmeSessionOwner {
 		else closeOwnedDirectories(active);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		this.recordingWidget.clear(ctx);
+		await pendingSessionWork;
 	}
 
 	isCurrent(operation: MicmeOperation) {
@@ -292,7 +317,7 @@ export class MicmeSessionOwner {
 			processes: new Set(),
 			directories: new Set(),
 		};
-		operation.context = createGuardedContext(this, operation, ctx);
+		operation.context = createGuardedContext(ctx, () => this.isCurrent(operation));
 		this.current = operation;
 		ctx.ui.setStatus(STATUS_KEY, "starting…");
 		return operation;
@@ -326,11 +351,13 @@ async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, ar
 				await owner.toggle(ctx);
 				return;
 			case "devices":
-				requireValidMicmeConfig();
-				await listAudioDevices(ctx, pi);
+				await owner.runSessionWork(ctx, async (sessionCtx, signal) => {
+					requireValidMicmeConfig();
+					await listAudioDevices(sessionCtx, pi, signal);
+				});
 				return;
 			case "conf":
-				await showConfiguration(ctx);
+				await owner.runSessionWork(ctx, showConfiguration);
 				return;
 			case "last":
 				await owner.pasteLastTranscript(ctx);
@@ -728,14 +755,14 @@ async function cleanupRecordingDirectory(owner: MicmeSessionOwner, operation: Mi
 	}
 }
 
-function createGuardedContext(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext) {
+function createGuardedContext(ctx: ExtensionContext, isCurrent: () => boolean) {
 	const guardedUi = new Proxy(ctx.ui, {
 		get(target, property, receiver) {
 			const value = Reflect.get(target, property, receiver) as unknown;
 			if (typeof value !== "function") return value;
 			if (!GUARDED_UI_METHODS.has(String(property))) return value.bind(target);
 			return (...args: unknown[]) => {
-				if (!owner.isCurrent(operation)) return undefined;
+				if (!isCurrent()) return undefined;
 				return Reflect.apply(value, target, args);
 			};
 		},

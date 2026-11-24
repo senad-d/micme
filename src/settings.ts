@@ -15,6 +15,7 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { basename } from "node:path";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
 	env,
 	expandConfigPath,
@@ -101,7 +102,8 @@ type ConfigurationDiscoveryState = {
 	pending: Set<ConfigurationDiscoveryKey>;
 };
 
-export async function showConfiguration(ctx: ExtensionContext) {
+export async function showConfiguration(ctx: ExtensionContext, sessionSignal?: AbortSignal) {
+	if (sessionSignal?.aborted) return;
 	if (ctx.mode !== "tui") {
 		ctx.ui.notify("/micme conf requires interactive TUI mode.", "warning");
 		return;
@@ -111,39 +113,41 @@ export async function showConfiguration(ctx: ExtensionContext) {
 	if (configState.error) {
 		notifySanitized(ctx, `Micme config is invalid at ${configState.path}: ${configState.error}. Fix it before saving settings.`, "warning");
 	}
+	let discoveryWork: Promise<void> | undefined;
+	let pendingSave: Promise<Record<string, string>> | undefined;
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+		sessionSignal?.throwIfAborted();
 		const canDiscover = !configState.error;
 		const discovery = createInitialConfigurationDiscovery(canDiscover);
 		const controller = new AbortController();
-		let closed = false;
+		const closeScreen = () => screen.close();
 		const screen = new ConfigurationScreen({
 			configPath: sanitizeTerminalOutput(configState.path) || "micme.json",
 			items: buildConfigurationItems(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme),
 			theme,
 			onDone: () => {
-				closed = true;
+				sessionSignal?.removeEventListener("abort", closeScreen);
 				controller.abort();
 				done();
 			},
 			onError: (error) => notifySanitized(ctx, error instanceof Error ? error.message : String(error), "error"),
-			onSave: (id, newValue) => saveConfigurationValue(ctx, id, newValue, { signal: controller.signal }),
+			onSave: (id, newValue) => {
+				pendingSave = saveConfigurationValue(ctx, id, newValue, { signal: controller.signal });
+				return pendingSave;
+			},
 			requestRender: () => tui.requestRender(),
 			statusText: canDiscover ? formatDiscoveryStatus(discovery.pending) : "Fix Micme config and reopen settings to run discovery.",
 		});
 
+		sessionSignal?.addEventListener("abort", closeScreen, { once: true });
 		if (canDiscover) {
-			startConfigurationDiscovery({
-				ctx,
-				cwd: ctx.cwd,
-				theme,
-				discovery,
-				screen,
-				isClosed: () => closed,
-			});
+			discoveryWork = startConfigurationDiscovery({ ctx, cwd: ctx.cwd, theme, discovery, screen, signal: controller.signal });
 		}
 
 		return screen;
 	});
+	// The dialog has closed. Let its cancelled subprocesses and save release their resources.
+	await Promise.allSettled([discoveryWork, pendingSave]);
 }
 
 function createInitialConfigurationDiscovery(enabled: boolean): ConfigurationDiscoveryState {
@@ -155,23 +159,26 @@ function createInitialConfigurationDiscovery(enabled: boolean): ConfigurationDis
 	};
 }
 
-function startConfigurationDiscovery(options: {
+async function startConfigurationDiscovery(options: {
 	ctx: ExtensionContext;
 	cwd: string;
 	theme: MicmeTheme;
 	discovery: ConfigurationDiscoveryState;
 	screen: ConfigurationScreen;
-	isClosed: () => boolean;
+	signal: AbortSignal;
 }) {
-	void loadConfigurationDiscovery(options, "audio devices", deferDiscovery(discoverAudioDevices), (audioDevices) => {
-		options.discovery.audioDevices = audioDevices;
-	});
-	void loadConfigurationDiscovery(options, "whisper.cpp models", deferDiscovery(() => discoverWhisperCppModels(options.cwd)), (modelCandidates) => {
-		options.discovery.modelCandidates = modelCandidates;
-	});
-	void loadConfigurationDiscovery(options, "Python Whisper models", deferDiscovery(discoverPythonWhisperModels), (pythonModelCandidates) => {
-		options.discovery.pythonModelCandidates = pythonModelCandidates;
-	});
+	const { signal } = options;
+	await Promise.allSettled([
+		loadConfigurationDiscovery(options, "audio devices", deferDiscovery(() => discoverAudioDevices(signal), signal), (audioDevices) => {
+			options.discovery.audioDevices = audioDevices;
+		}),
+		loadConfigurationDiscovery(options, "whisper.cpp models", deferDiscovery(() => discoverWhisperCppModels(options.cwd), signal), (modelCandidates) => {
+			options.discovery.modelCandidates = modelCandidates;
+		}),
+		loadConfigurationDiscovery(options, "Python Whisper models", deferDiscovery(() => discoverPythonWhisperModels(signal), signal), (pythonModelCandidates) => {
+			options.discovery.pythonModelCandidates = pythonModelCandidates;
+		}),
+	]);
 }
 
 async function loadConfigurationDiscovery<T>(
@@ -180,19 +187,20 @@ async function loadConfigurationDiscovery<T>(
 		theme: MicmeTheme;
 		discovery: ConfigurationDiscoveryState;
 		screen: ConfigurationScreen;
-		isClosed: () => boolean;
+		signal: AbortSignal;
 	},
 	key: ConfigurationDiscoveryKey,
 	promise: Promise<T>,
 	applyResult: (value: T) => void,
 ) {
 	try {
-		applyResult(await promise);
+		const result = await promise;
+		if (!options.signal.aborted) applyResult(result);
 	} catch (error) {
-		if (!options.isClosed()) notifySanitized(options.ctx, `Micme could not load ${key}: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		if (!options.signal.aborted) notifySanitized(options.ctx, `Micme could not load ${key}: ${error instanceof Error ? error.message : String(error)}`, "warning");
 	} finally {
 		options.discovery.pending.delete(key);
-		if (!options.isClosed()) {
+		if (!options.signal.aborted) {
 			options.screen.updateDiscoveredItems(
 				buildConfigurationItems(options.discovery.modelCandidates, options.discovery.pythonModelCandidates, options.discovery.audioDevices, options.theme),
 				formatDiscoveryStatus(options.discovery.pending),
@@ -201,14 +209,10 @@ async function loadConfigurationDiscovery<T>(
 	}
 }
 
-function deferDiscovery<T>(load: () => T | Promise<T>): Promise<T> {
-	return new Promise((resolve, reject) => {
-		setImmediate(() => {
-			Promise.resolve()
-				.then(load)
-				.then(resolve, reject);
-		});
-	});
+async function deferDiscovery<T>(load: () => T | Promise<T>, signal: AbortSignal): Promise<T> {
+	await nextImmediate(undefined, { signal });
+	signal.throwIfAborted();
+	return load();
 }
 
 function formatDiscoveryStatus(pending: Set<ConfigurationDiscoveryKey>) {
@@ -320,7 +324,7 @@ class ConfigurationScreen implements Component {
 		return true;
 	}
 
-	private close() {
+	close() {
 		if (this.closed) return;
 		this.closed = true;
 		this.onDone();

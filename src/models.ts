@@ -237,8 +237,9 @@ export function isTranslationUnsupportedWhisperModelName(modelName: string | und
 	return false;
 }
 
-export async function discoverPythonWhisperModels(): Promise<ModelCandidate[]> {
-	const dynamicNames = await queryPythonWhisperModelNames();
+export async function discoverPythonWhisperModels(signal?: AbortSignal): Promise<ModelCandidate[]> {
+	const dynamicNames = await queryPythonWhisperModelNames(signal);
+	if (signal?.aborted) return [];
 	const names = dynamicNames.length > 0 ? dynamicNames : [...PYTHON_WHISPER_MODEL_NAMES];
 	const source = dynamicNames.length > 0 ? "reported by whisper.available_models()" : "built-in fallback list";
 	return names.map((name) => ({
@@ -250,13 +251,14 @@ export async function discoverPythonWhisperModels(): Promise<ModelCandidate[]> {
 	}));
 }
 
-export async function queryPythonWhisperModelNames(): Promise<string[]> {
+export async function queryPythonWhisperModelNames(signal?: AbortSignal): Promise<string[]> {
+	if (signal?.aborted) return [];
 	const python = findExecutable(["python3", "python"]);
 	if (!python) return [];
 
 	try {
-		const result = await runProcess(python, getPythonWhisperModelQueryArgs(), 2_000);
-		if (result.code !== 0 || result.timedOut) return [];
+		const result = await runProcess(python, getPythonWhisperModelQueryArgs(), 2_000, { signal });
+		if (signal?.aborted || result.cancelled || result.code !== 0 || result.timedOut) return [];
 		return uniqueModelNames(result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
 	} catch {
 		return [];
