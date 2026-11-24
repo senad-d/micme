@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -400,15 +401,19 @@ test("process abort reports failed escalation and handles child errors until clo
 
 test("recorder stop failure does not settle a live child", async (t) => {
 	const signals = [];
+	const firstSignal = Promise.withResolvers();
 	const child = mockSignalChild(t, function (signal, callback) {
 		signals.push(signal);
-		if (signal === "SIGINT") return callback(null);
+		if (signal === "SIGINT") {
+			firstSignal.resolve();
+			return callback(null);
+		}
 		this.emit("error", signalPermissionError());
 		callback(signalPermissionError());
 	});
 	const recording = signalRunner.spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, "raw.wav", ".");
 	const stop = signalRunner.stopProcess(recording).catch((error) => error);
-	await setImmediate();
+	await firstSignal.promise;
 	t.mock.timers.tick(RECORDER_STOP_GRACE_MS);
 	await setImmediate();
 	assert.equal(recording.isSettled(), false);
@@ -834,6 +839,78 @@ test("recorder stop reports the known exit when stdio does not close within the 
 	assert.equal(recording.isSettled(), false);
 	assert.equal(dispatch.mock.callCount(), 0);
 	child.emit("close", null, "SIGTERM");
+});
+
+test("custom recorder accepts exit 255 after Micme sends SIGINT", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-custom-recorder-signal-stop-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const audioPath = join(root, "raw.wav");
+	const script = `
+		const { writeFileSync } = require("node:fs");
+		const audio = process.argv[1];
+		process.on("SIGINT", () => {
+			writeFileSync(audio, Buffer.alloc(600));
+			process.exit(255);
+		});
+		writeFileSync(audio, "");
+		setInterval(() => {}, 1000);
+	`;
+	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio}`;
+	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const recording = spawnRecording(command, audioPath, root);
+	t.after(() => stopProcess(recording));
+
+	await waitForFile(audioPath);
+	await stopRecorder(recording);
+	assert.deepEqual(await recording.exitPromise, { code: 255, signal: null });
+});
+
+test("custom recorder rejects spontaneous exit 255 even with audio", { skip: process.platform === "win32" && "requires a POSIX exec hook" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-custom-recorder-spontaneous-exit-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const audioPath = join(root, "raw.wav");
+	const script = `require("node:fs").writeFileSync(process.argv[1], Buffer.alloc(600)); process.exit(255);`;
+	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio}`;
+	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const recording = spawnRecording(command, audioPath, root);
+
+	await recording.exitPromise;
+	await assert.rejects(stopRecorder(recording), /recorder exited unexpectedly \(code 255\)/);
+});
+
+test("custom recorder rejects a pre-stop exit 255 whose notification is still pending", { skip: process.platform !== "linux" && "requires Linux procfs" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-custom-recorder-pending-exit-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const audioPath = join(root, "raw.wav");
+	const pidPath = join(root, "hook.pid");
+	const script = `
+		const fs = require("node:fs");
+		const [audio, pidPath] = process.argv.slice(1);
+		fs.writeFileSync(audio, Buffer.alloc(600));
+		fs.writeFileSync(pidPath + ".tmp", String(process.pid));
+		fs.renameSync(pidPath + ".tmp", pidPath);
+		process.exit(255);
+	`;
+	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio} ${shellQuote(pidPath)}`;
+	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const recording = spawnRecording(command, audioPath, root);
+	t.after(() => stopProcess(recording));
+
+	// Let the supervisor reap the hook without letting Pi receive its IPC reports.
+	const sleeper = new Int32Array(new SharedArrayBuffer(4));
+	const deadline = Date.now() + 5_000;
+	let exited = false;
+	while (Date.now() < deadline) {
+		if (existsSync(pidPath) && !existsSync(`/proc/${readFileSync(pidPath, "utf8")}/stat`)) {
+			exited = true;
+			break;
+		}
+		Atomics.wait(sleeper, 0, 0, 10);
+	}
+	assert.equal(exited, true, "the recorder hook must exit before Micme requests a stop");
+	assert.deepEqual(recording.getExit(), { code: null, signal: null }, "Pi must not have received the hook exit yet");
+
+	await assert.rejects(stopRecorder(recording), /recorder exited unexpectedly \(code 255\)/);
 });
 
 test("recorder stop rejects spontaneous failures and accepts owned stop paths", async (t) => {

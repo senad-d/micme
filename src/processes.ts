@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { delimiter, join, win32 } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } from "./constants.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
 import { observePosixGroupClose, posixGroupHasWorkers, posixRecorderState, releasePosixGroup, signalPosixGroup, spawnPosixGroupProcess } from "./posix-process-group.ts";
@@ -94,6 +94,12 @@ export function stopProcess(active: Recording) {
 
 async function stopProcessOnce(active: Recording) {
 	const { process: child, exitPromise } = active;
+	if (!active.isSettled() && !hasExit(active.getExit())) {
+		// The launcher can have a hook PID or exit report queued. Leave a poll
+		// phase for IPC before attributing the hook's exit to our stop request.
+		await setImmediate();
+		await setImmediate();
+	}
 	if (active.isSettled()) {
 		if (!await hasOwnedProcesses(child, 200)) return exitPromise;
 		return stopRecorderTree(active);

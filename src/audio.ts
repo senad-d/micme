@@ -63,6 +63,7 @@ const DEVICE_PANEL_DEFAULT_WIDTH = 92;
 const DEVICE_PANEL_MAX_WIDTH = 100;
 const DEVICE_PANEL_MIN_WIDTH = 36;
 const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
+const FFMPEG_SIGNAL_STOP_EXIT_CODE = 255;
 const FFMPEG_CONTEXT_PREFIX_PATTERN = /^\[[^[\]]+ @ 0x[\da-f]+\]\s*/i;
 const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
 const DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN = /^"(.+)"$/;
@@ -783,7 +784,10 @@ export function parseVolumeDb(output: string, label: "mean_volume" | "max_volume
 export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioPath)): CommandSpec {
 	const custom = env("MICME_RECORD_COMMAND");
 	if (custom?.trim()) {
-		return shellCommand(custom, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") });
+		return {
+			...shellCommand(custom, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") }),
+			signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE],
+		};
 	}
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
@@ -804,20 +808,20 @@ export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioP
 			inputOptions: ["-drop_late_frames", getAvfoundationDropLateFrames() ? "true" : "false"],
 			audioFilters: getAvfoundationAudioFilters(recordSync, avfoundationInputSampleRate),
 		});
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
 	}
 
 	if (process.platform === "linux") {
 		const input = env("MICME_PULSE_SOURCE") || "default";
 		const args = buildFfmpegRecorderArgs("pulse", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
 	}
 
 	if (process.platform === "win32") {
 		const deviceName = env("MICME_DSHOW_AUDIO_DEVICE") || findDefaultDshowAudioDevice() || "default";
 		const input = `audio=${deviceName}`;
 		const args = buildFfmpegRecorderArgs("dshow", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
 	}
 
 	throw new Error(`Micme has no default recorder for ${process.platform}. Set MICME_RECORD_COMMAND.`);
