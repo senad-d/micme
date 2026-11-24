@@ -6,6 +6,7 @@ import test from "node:test";
 
 const { registerMicmeExtension } = await import("../src/extension.ts");
 const { reloadMicmeConfig } = await import("../src/config.ts");
+const { shellQuote } = await import("../src/processes.ts");
 
 const theme = {
 	fg(_color, text) {
@@ -149,18 +150,29 @@ async function readProcessRows(path) {
 		.catch(() => []);
 }
 
-function processIsAlive(pid) {
+async function processIsAlive(pid) {
 	try {
 		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		if (error.code === "ESRCH") return false;
+		throw error;
 	}
+	if (process.platform !== "linux") return true;
+	// A terminated worker may remain as a zombie when the test runs in a container.
+	const proc = await readFile(`/proc/${pid}/stat`, "utf8").catch((error) => {
+		if (error.code === "ENOENT" || error.code === "ESRCH") return "";
+		throw error;
+	});
+	return Boolean(proc) && !/\) Z /.test(proc);
+}
+
+function processIds(rows) {
+	return rows.map((row) => Number(row.split(" ").at(-1))).filter((pid) => Number.isInteger(pid) && pid > 0);
 }
 
 async function assertProcessesStopped(rows) {
-	const pids = rows.map((row) => Number(row.split(" ").at(-1))).filter(Number.isFinite);
-	await waitFor(() => pids.every((pid) => !processIsAlive(pid)), `live Micme processes remained: ${pids.join(", ")}`);
+	const pids = processIds(rows);
+	await waitFor(async () => !(await Promise.all(pids.map(processIsAlive))).some(Boolean), `live Micme processes remained: ${pids.join(", ")}`);
 }
 
 async function writeExecutable(path, source) {
@@ -531,6 +543,71 @@ test("shutdown owns clip recording, stopping, and transcription processes", asyn
 	);
 });
 
+test("session shutdown aborts a custom transcriber shell and its stderr-inheriting worker", { skip: process.platform === "win32", timeout: 8_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-shutdown-"));
+	const ffmpeg = join(root, "ffmpeg");
+	const worker = join(root, "worker.cjs");
+	const processLog = join(root, "processes.log");
+	t.after(async () => {
+		for (const pid of processIds(await readProcessRows(processLog))) {
+			if (await processIsAlive(pid)) {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch (error) {
+					if (error.code !== "ESRCH") throw error;
+				}
+			}
+		}
+		await rm(root, { recursive: true, force: true });
+	});
+	await writeFfmpegProcess(ffmpeg);
+	await writeFile(worker, `
+const { appendFileSync } = require("node:fs");
+process.on("SIGTERM", () => {});
+process.stderr.write("worker inherited stderr\\n");
+appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`shell \${process.argv[2]}\\nworker \${process.pid}\\n\`);
+setTimeout(() => process.exit(0), 15_000);
+`);
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+			MICME_RECORD_COMMAND: undefined,
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			MICME_TRANSCRIBE_COMMAND: '"$MICME_TEST_NODE" "$MICME_TEST_WORKER" "$$" & wait',
+			MICME_TRANSCRIBE_TIMEOUT_MS: "60000",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_TEST_NODE: process.execPath,
+			MICME_TEST_WORKER: worker,
+			MICME_TEST_PROCESS_LOG: processLog,
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			await command.handler("", harness.ctx);
+			assert.equal(harness.owner.getPhase(), "recording");
+
+			const operation = command.handler("", harness.ctx);
+			await waitFor(async () => (await readProcessRows(processLog)).some((row) => row.startsWith("worker ")), "custom transcriber worker did not start");
+			const tree = (await readProcessRows(processLog)).filter((row) => /^(shell|worker) /.test(row));
+			const pids = processIds(tree);
+			assert.equal(pids.length, 2);
+			assert.deepEqual(await Promise.all(pids.map(processIsAlive)), [true, true]);
+			assert.equal(harness.owner.getPhase(), "transcribing");
+
+			await Promise.all([emit(harness, "session_shutdown", { reason: "quit" }), operation]);
+			await assertProcessesStopped(tree);
+			assert.equal(harness.owner.getPhase(), "shutting_down");
+			assert.equal(harness.sentMessages.length, 0);
+			assert.ok(!harness.uiCalls.some((entry) => entry.method === "pasteToEditor"));
+		},
+	);
+});
+
 test("shutdown directly from recording stops the recorder and widget timer", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX executable fixtures are not portable to Windows");
@@ -603,6 +680,58 @@ test("missing ffmpeg silence metrics surface a sanitized error before transcript
 			assert.equal((error?.message ?? "").includes("\u001b"), false);
 			assert.equal(harness.uiCalls.some((entry) => entry.method === "pasteToEditor"), false);
 			assert.equal(harness.sentMessages.length, 0);
+		},
+	);
+});
+
+test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const recorder = join(root, "recorder.mjs");
+	const ready = join(root, "ready");
+	await writeFile(
+		recorder,
+		`import { writeFileSync } from "node:fs";
+const [audio, ready] = process.argv.slice(2);
+process.on("SIGINT", () => {
+  // Mono 16-bit PCM WAV header followed by 1024 bytes of samples.
+  const header = Buffer.from("524946462404000057415645666d74201000000001000100803e0000007d0000020010006461746100040000", "hex");
+  writeFileSync(audio, Buffer.concat([header, Buffer.alloc(1024, 32)]));
+  process.exit(255);
+});
+writeFileSync(ready, "ready");
+setInterval(() => {}, 1_000);
+`,
+	);
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: `exec ${shellQuote(process.execPath)} ${shellQuote(recorder)} {audio} ${shellQuote(ready)}`,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			MICME_TRANSCRIBE_COMMAND: "test -s {audio} && printf 'custom stop transcript'",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "0",
+			MICME_KEEP_AUDIO: "1",
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+				await waitFor(async () => (await readProcessRows(ready)).length > 0, "custom recorder did not install its SIGINT handler");
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "error"), []);
+				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "pasteToEditor"), [{ method: "pasteToEditor", value: "custom stop transcript " }]);
+				assert.equal(harness.sentMessages.length, 0);
+			} finally {
+				await emit(harness, "session_shutdown", { reason: "quit" });
+			}
 		},
 	);
 });
@@ -774,7 +903,7 @@ const poll = setInterval(() => {
 				assert.ok(Number.isInteger(pid) && pid > 0);
 				await writeFile(join(root, "exit"), "");
 				await verifyStop({ harness, drain });
-				assert.equal(processIsAlive(pid), false);
+				assert.equal(await processIsAlive(pid), false);
 				await assert.rejects(readFile(transcribed), { code: "ENOENT" }, "partial audio was transcribed");
 			} finally {
 				await writeFile(drain, "");
@@ -851,7 +980,7 @@ test("a late stream exit stops automatically and shuts down its final-clip recor
 				}, "stream and companion recorder PIDs were not logged");
 				const started = await readProcessRows(processLog);
 				assert.deepEqual(started.map((row) => row.split(" ")[0]).sort(), ["recorder", "stream"]);
-				assert.ok(started.every((row) => processIsAlive(Number(row.split(" ").at(-1)))));
+				assert.deepEqual(await Promise.all(processIds(started).map(processIsAlive)), [true, true]);
 				await writeFile(exitFile, "");
 				await waitFor(() => harness.owner.getPhase() === "stopping", "late stream exit did not start stopping", 2_000);
 				await writeFile(drainFile, "");
@@ -905,7 +1034,7 @@ test("late optional final-clip failure keeps the live-stream fallback without tr
 			const startedRows = await readProcessRows(processLog);
 			const recorderPid = Number(startedRows.find((row) => row.startsWith("recorder "))?.split(" ").at(-1));
 			assert.equal(Number.isFinite(recorderPid), true);
-			await waitFor(() => !processIsAlive(recorderPid), "late-failing optional recorder remained alive");
+			await waitFor(async () => !(await processIsAlive(recorderPid)), "late-failing optional recorder remained alive");
 
 			await command.handler("", harness.ctx);
 			assert.equal(harness.owner.getPhase(), "idle");

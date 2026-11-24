@@ -16,9 +16,11 @@ type ListedDevice = {
 	name: string;
 };
 
-type ParsedDeviceInventory = {
-	audio: ListedDevice[];
-	video: ListedDevice[];
+type DirectShowDevice = ListedDevice & { captureName: string };
+
+type ParsedDeviceInventory<Device extends ListedDevice = ListedDevice> = {
+	audio: Device[];
+	video: Device[];
 	sawDeviceSection: boolean;
 };
 
@@ -61,6 +63,8 @@ const DEVICE_PANEL_DEFAULT_WIDTH = 92;
 const DEVICE_PANEL_MAX_WIDTH = 100;
 const DEVICE_PANEL_MIN_WIDTH = 36;
 const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
+const FFMPEG_SIGNAL_STOP_EXIT_CODE = 255;
+const FFMPEG_CONTEXT_PREFIX_PATTERN = /^\[[^[\]]+ @ 0x[\da-f]+\]\s*/i;
 const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
 const DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN = /^"(.+)"$/;
 const DIRECT_SHOW_DEVICE_NAME_PATTERN = /"([^"]+)"/;
@@ -212,14 +216,21 @@ function combineRunOutput(result: RunResult) {
 function parseDeviceInventory(backend: Exclude<DeviceBackend, "unsupported">, output: string): ParsedDeviceInventory {
 	if (backend === "avfoundation") return parseAvfoundationDevices(output);
 	if (backend === "pulse") return parsePulseAudioDevices(output);
-	return parseDirectShowDevices(output);
+
+	const { audio, video, sawDeviceSection } = parseDirectShowDevices(output);
+	return {
+		audio: audio.map(({ name }) => ({ name })),
+		video: video.map(({ name }) => ({ name })),
+		sawDeviceSection,
+	};
 }
 
 export function parseAvfoundationDevices(output: string): ParsedDeviceInventory {
 	const inventory: ParsedDeviceInventory = { audio: [], video: [], sawDeviceSection: false };
 	let section: DeviceKind | undefined;
 
-	for (const line of output.split(/\r?\n/)) {
+	for (const rawLine of output.split(/\r?\n/)) {
+		const line = rawLine.replace(FFMPEG_CONTEXT_PREFIX_PATTERN, "");
 		if (line.includes("AVFoundation video devices:")) {
 			section = "video";
 			inventory.sawDeviceSection = true;
@@ -269,8 +280,8 @@ function parsePulseAudioDevices(output: string): ParsedDeviceInventory {
 	return inventory;
 }
 
-export function parseDirectShowDevices(output: string): ParsedDeviceInventory {
-	const inventory: ParsedDeviceInventory = { audio: [], video: [], sawDeviceSection: false };
+export function parseDirectShowDevices(output: string): ParsedDeviceInventory<DirectShowDevice> {
+	const inventory: ParsedDeviceInventory<DirectShowDevice> = { audio: [], video: [], sawDeviceSection: false };
 	let section: DeviceKind | undefined;
 
 	for (const rawLine of output.split(/\r?\n/)) {
@@ -282,8 +293,10 @@ export function parseDirectShowDevices(output: string): ParsedDeviceInventory {
 			continue;
 		}
 
-		const device = parseDirectShowDevice(line, section);
-		if (device) inventory[device.kind].push({ name: device.name });
+		const parsed = parseDirectShowDevice(line, section);
+		if (!parsed) continue;
+		const { kind, ...device } = parsed;
+		inventory[kind].push(device);
 	}
 
 	return inventory;
@@ -295,20 +308,18 @@ function parseDirectShowSection(line: string): DeviceKind | undefined {
 	return undefined;
 }
 
-function parseDirectShowDevice(line: string, section: DeviceKind | undefined): { kind: DeviceKind; name: string } | undefined {
+function parseDirectShowDevice(line: string, section: DeviceKind | undefined): (DirectShowDevice & { kind: DeviceKind }) | undefined {
 	if (/Alternative name/i.test(line)) return undefined;
 
 	const kindMatch = DIRECT_SHOW_DEVICE_KIND_PATTERN.exec(line);
-	if (kindMatch) {
-		const name = sanitizeDeviceField(kindMatch[1] ?? "");
-		const kind = (kindMatch[2] ?? "").toLowerCase() === "video" ? "video" : "audio";
-		return name ? { kind, name } : undefined;
-	}
+	const kind = kindMatch ? (kindMatch[2]?.toLowerCase() === "video" ? "video" : "audio") : section;
+	if (!kind) return undefined;
 
-	if (!section) return undefined;
-	const match = DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
-	const name = sanitizeDeviceField(match?.[1] ?? "");
-	return name ? { kind: section, name } : undefined;
+	const match = kindMatch ?? DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
+	const captureName = match?.[1];
+	if (!captureName) return undefined;
+	const name = sanitizeDeviceField(captureName);
+	return name ? { kind, name, captureName } : undefined;
 }
 
 function findDefaultDshowAudioDevice(): string | undefined {
@@ -323,7 +334,7 @@ function findDefaultDshowAudioDevice(): string | undefined {
 		});
 		if (result.error || result.signal) return undefined;
 		const inventory = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
-		return inventory.audio[0]?.name;
+		return inventory.audio[0]?.captureName;
 	} catch {
 		return undefined;
 	}
@@ -660,7 +671,7 @@ export async function discoverAudioDevices(): Promise<AudioDeviceCandidate[]> {
 	if (process.platform === "win32") {
 		const result = await runProcess(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], DEVICE_SCAN_TIMEOUT_MS);
 		const parsed = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
-		return parsed.audio.map((device) => ({ label: device.name, value: device.name, description: "DirectShow audio input" }));
+		return parsed.audio.map((device) => ({ label: device.name, value: device.captureName, description: "DirectShow audio input" }));
 	}
 
 	return [];
@@ -773,7 +784,10 @@ export function parseVolumeDb(output: string, label: "mean_volume" | "max_volume
 export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioPath)): CommandSpec {
 	const custom = env("MICME_RECORD_COMMAND");
 	if (custom?.trim()) {
-		return shellCommand(custom, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") });
+		return {
+			...shellCommand(custom, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") }),
+			signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE],
+		};
 	}
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
@@ -794,20 +808,20 @@ export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioP
 			inputOptions: ["-drop_late_frames", getAvfoundationDropLateFrames() ? "true" : "false"],
 			audioFilters: getAvfoundationAudioFilters(recordSync, avfoundationInputSampleRate),
 		});
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
 	}
 
 	if (process.platform === "linux") {
 		const input = env("MICME_PULSE_SOURCE") || "default";
 		const args = buildFfmpegRecorderArgs("pulse", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
 	}
 
 	if (process.platform === "win32") {
 		const deviceName = env("MICME_DSHOW_AUDIO_DEVICE") || findDefaultDshowAudioDevice() || "default";
 		const input = `audio=${deviceName}`;
 		const args = buildFfmpegRecorderArgs("dshow", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
-		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [255] };
+		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
 	}
 
 	throw new Error(`Micme has no default recorder for ${process.platform}. Set MICME_RECORD_COMMAND.`);

@@ -200,7 +200,7 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 	});
 });
 
-test("the Windows microphone picker saves the second device for the recorder after reload", async (t) => {
+test("the Windows microphone picker saves a discovered name with both spaces for recorder argv", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX shell shims are not portable to Windows");
 		return;
@@ -219,7 +219,7 @@ test("the Windows microphone picker saves the second device for the recorder aft
 			"#!/bin/sh",
 			"echo 'DirectShow audio devices' >&2",
 			"echo '\"Studio Mic\"' >&2",
-			"echo '\"USB Conference Mic\"' >&2",
+			"echo '\"Studio  Mic\"' >&2",
 			"exit 1",
 		].join("\n"), { mode: 0o755 });
 		const configPath = join(root, "micme.json");
@@ -236,13 +236,13 @@ test("the Windows microphone picker saves the second device for the recorder aft
 
 		reloadMicmeConfig();
 		const { args } = buildRecorderCommand(join(root, "raw.wav"));
-		assert.equal(args[args.indexOf("-i") + 1], "audio=USB Conference Mic");
+		assert.equal(args[args.indexOf("-i") + 1], "audio=Studio  Mic");
 		assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
 			MICME_AUDIO_DEVICE: "Studio Mic",
-			MICME_DSHOW_AUDIO_DEVICE: "USB Conference Mic",
+			MICME_DSHOW_AUDIO_DEVICE: "Studio  Mic",
 		});
 		const microphone = buildConfigurationItems([], [], theme).find((item) => item.label === "Microphone device");
-		assert.equal(microphone?.rawValue, "USB Conference Mic");
+		assert.equal(microphone?.rawValue, "Studio  Mic");
 	}));
 });
 
@@ -273,10 +273,10 @@ test("the Windows microphone picker preserves automatic discovery when no microp
 		await waitFor(() => !harness.component.render(100).join("\n").includes("Saving "), "microphone setting did not finish saving");
 		harness.component.handleInput("q");
 
-		await writeFile(ffmpeg, "#!/bin/sh\necho '\"Reconnected Mic\" (audio)' >&2\nexit 1\n");
+		await writeFile(ffmpeg, "#!/bin/sh\necho '\" Reconnected  Mic \" (audio)' >&2\nexit 1\n");
 		reloadMicmeConfig();
 		const { args } = buildRecorderCommand(join(root, "raw.wav"));
-		assert.equal(args[args.indexOf("-i") + 1], "audio=Reconnected Mic");
+		assert.equal(args[args.indexOf("-i") + 1], "audio= Reconnected  Mic ");
 	}));
 });
 
