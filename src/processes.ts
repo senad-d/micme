@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { delimiter, join, win32 } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } from "./constants.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
 import { sanitizeTerminalOutput, stripTerminalControlSequences } from "./terminal-text.ts";
@@ -68,6 +69,12 @@ export function stopProcess(active: Recording) {
 }
 
 async function stopProcessOnce(active: Recording) {
+	if (!active.isSettled() && active.process.exitCode == null && active.process.signalCode == null) {
+		// A child can already be dead while its exit notification is pending. Two check
+		// phases leave a poll phase for that notification even when stop starts during I/O.
+		await setImmediate();
+		await setImmediate();
+	}
 	if (active.isSettled()) return active.exitPromise;
 
 	const { exitCode: code, signalCode: signal } = active.process;
