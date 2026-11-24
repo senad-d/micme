@@ -55,6 +55,7 @@ function createExtensionHarness(cwd) {
 	const events = new Map();
 	const uiCalls = [];
 	const sentMessages = [];
+	const extensionMessages = [];
 	let editorFactory;
 	const baseEditor = {
 		focused: true,
@@ -108,6 +109,9 @@ function createExtensionHarness(cwd) {
 			events.set(event, handler);
 		},
 		registerMessageRenderer() {},
+		sendMessage(message) {
+			extensionMessages.push(message);
+		},
 		sendUserMessage(message, options) {
 			sentMessages.push({ message, options });
 		},
@@ -119,6 +123,7 @@ function createExtensionHarness(cwd) {
 		events,
 		uiCalls,
 		sentMessages,
+		extensionMessages,
 		ctx,
 		owner,
 		hasEditorOverride() {
@@ -466,6 +471,138 @@ test("shutdown during model acquisition prevents stale UI and process startup", 
 			);
 		},
 	);
+});
+
+test("session shutdown stops /micme devices without publishing a panel", { skip: process.platform === "win32" && "requires a POSIX executable fixture" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-devices-shutdown-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const processLog = join(root, "processes.log");
+	await writeExecutable(join(root, "ffmpeg"), `#!/bin/sh
+printf 'scan %s\\n' "$$" > "$MICME_TEST_PROCESS_LOG"
+/bin/sleep 1
+printf 'scan finished\\n' >> "$MICME_TEST_PROCESS_LOG"
+printf '* default [Studio Mic]\\n'
+`);
+
+	await withEnv({ PI_CODING_AGENT_DIR: root, PATH: root, MICME_TEST_PROCESS_LOG: processLog }, async () => {
+		const harness = createExtensionHarness(root);
+		const scan = harness.commands.get("micme").handler("devices", harness.ctx);
+		try {
+			await waitFor(async () => processIds(await readProcessRows(processLog)).length === 1, "device scan did not start");
+			const [pid] = processIds(await readProcessRows(processLog));
+			await emit(harness, "session_shutdown", { reason: "new" });
+			assert.equal(await processIsAlive(pid), false, "device scan survived session shutdown");
+			await scan;
+			assert.deepEqual(await readProcessRows(processLog), [`scan ${pid}`], "device scan finished instead of being cancelled");
+			assert.deepEqual(harness.extensionMessages, []);
+			assert.ok(!harness.uiCalls.some((entry) => entry.method === "setWidget" && entry.key === "micme-devices"));
+		} finally {
+			await scan;
+		}
+	});
+});
+
+function captureSettingsDialog(harness) {
+	const dialog = { renders: 0, closed: false, component: undefined };
+	harness.ctx.ui.custom = (factory) => new Promise((resolve) => {
+		dialog.component = factory({ requestRender: () => dialog.renders++ }, theme, {}, () => {
+			dialog.closed = true;
+			resolve();
+		});
+	});
+	return dialog;
+}
+
+test("session shutdown cancels an open /micme conf model save without late UI or writes", { timeout: 8_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-conf-shutdown-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const configPath = join(root, "micme.json");
+	const modelDir = join(root, "models");
+	const config = '{}\n';
+	await writeFile(configPath, config);
+	const response = createDeferred();
+	let fetchSignal;
+
+	await withEnv({
+		PI_CODING_AGENT_DIR: root,
+		PATH: join(root, "bin"),
+		MICME_MODEL_DIR: modelDir,
+		MICME_AUTO_DOWNLOAD_MODEL: "1",
+		MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+		MICME_WHISPER_CPP_MODEL: undefined,
+	}, () => withMockFetch(async (_url, { signal }) => {
+		fetchSignal = signal;
+		return response.promise;
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		const dialog = captureSettingsDialog(harness);
+		const settings = harness.commands.get("micme").handler("conf", harness.ctx);
+		try {
+			await waitFor(() => dialog.component && !dialog.component.render(100).join("\n").includes("Loading "), "settings discovery did not finish");
+			for (const key of "/Whisper.cpp model") dialog.component.handleInput(key);
+			dialog.component.handleInput("\r");
+			dialog.component.handleInput("\x1b[A");
+			assert.match(dialog.component.render(100).join("\n"), /→ ○ tiny\.en\s/);
+			dialog.component.handleInput("\r");
+			await waitFor(() => fetchSignal, "model fetch did not start");
+			const callsBeforeShutdown = harness.uiCalls.length;
+			const renders = dialog.renders;
+
+			await emit(harness, "session_shutdown", { reason: "new" });
+			assert.equal(fetchSignal.aborted, true);
+			assert.equal(dialog.closed, true);
+			const { uiCalls } = harness;
+			const shutdownCalls = uiCalls.slice(callsBeforeShutdown);
+			assert.deepEqual(shutdownCalls.filter((entry) => entry.method === "setStatus").map((entry) => entry.value), [undefined]);
+			assert.ok(!shutdownCalls.some((entry) => entry.method === "notify"));
+			const callsAfterShutdown = uiCalls.length;
+			response.resolve(modelResponse());
+			dialog.component.handleInput("\r");
+			await settings;
+			assert.equal(await readFile(configPath, "utf8"), config);
+			assert.deepEqual(await readdir(modelDir), []);
+			assert.equal(uiCalls.length, callsAfterShutdown);
+			assert.equal(dialog.renders, renders);
+		} finally {
+			dialog.component?.handleInput("\x03");
+			dialog.component?.handleInput("q");
+			response.resolve(modelResponse());
+			await settings;
+		}
+	}));
+});
+
+test("session shutdown stops /micme conf discovery without updating the old screen", { skip: process.platform === "win32" && "requires a POSIX executable fixture" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-conf-discovery-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const processLog = join(root, "processes.log");
+	// Finish before the independent Python query timeout unless shutdown stops the child.
+	await writeExecutable(join(root, "python3"), `#!/bin/sh
+printf 'python %s\\n' "$$" > "$MICME_TEST_PROCESS_LOG"
+/bin/sleep 1
+printf 'python finished\\n' >> "$MICME_TEST_PROCESS_LOG"
+printf 'tiny\\n'
+`);
+
+	await withEnv({ PI_CODING_AGENT_DIR: root, PATH: root, MICME_TEST_PROCESS_LOG: processLog }, async () => {
+		const harness = createExtensionHarness(root);
+		const dialog = captureSettingsDialog(harness);
+		const settings = harness.commands.get("micme").handler("conf", harness.ctx);
+		try {
+			await waitFor(async () => processIds(await readProcessRows(processLog)).length === 1, "Python discovery did not start");
+			const [pid] = processIds(await readProcessRows(processLog));
+			const renders = dialog.renders;
+			await emit(harness, "session_shutdown", { reason: "new" });
+			assert.equal(await processIsAlive(pid), false, "settings discovery survived session shutdown");
+			assert.equal(dialog.closed, true);
+			await settings;
+			assert.deepEqual(await readProcessRows(processLog), [`python ${pid}`], "Python discovery finished instead of being cancelled");
+			assert.equal(dialog.renders, renders);
+		} finally {
+			dialog.component?.handleInput("q");
+			await settings;
+		}
+	});
 });
 
 test("a pending default DirectShow scan yields to a UI timer and session shutdown", { skip: process.platform === "win32" && "requires POSIX fixtures" }, async (t) => {
