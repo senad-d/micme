@@ -376,14 +376,27 @@ export function splitStreamingWords(text: string) {
 }
 
 export function streamingWordOverlap(previousWords: string[], currentWords: string[]) {
-	let overlap = 0;
 	const maxOverlap = Math.min(previousWords.length, currentWords.length);
-	for (let size = 1; size <= maxOverlap; size++) {
-		if (streamingWordsEqual(previousWords.slice(-size), currentWords.slice(0, size))) {
-			overlap = size;
-		}
+	if (maxOverlap === 0) return 0;
+
+	// KMP: on a mismatch, reuse the longest shorter prefix that has already matched.
+	const prefix = currentWords.slice(0, maxOverlap).map(normalizeStreamingWord);
+	const fallback = [0];
+	for (let index = 1; index < maxOverlap; index++) {
+		fallback[index] = advanceStreamingOverlap(prefix, fallback, fallback[index - 1], prefix[index]);
 	}
-	return overlap;
+
+	// Only this tail can overlap, so a full prefix match can occur only at its end.
+	let matched = 0;
+	for (let index = previousWords.length - maxOverlap; index < previousWords.length; index++) {
+		matched = advanceStreamingOverlap(prefix, fallback, matched, normalizeStreamingWord(previousWords[index]));
+	}
+	return matched;
+}
+
+function advanceStreamingOverlap(prefix: string[], fallback: number[], matched: number, word: string) {
+	while (matched > 0 && prefix[matched] !== word) matched = fallback[matched - 1];
+	return prefix[matched] === word ? matched + 1 : 0;
 }
 
 export function commonStreamingPrefixLength(previousWords: string[], currentWords: string[]) {

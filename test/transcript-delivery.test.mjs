@@ -68,6 +68,16 @@ test("pasteOrSubmitTranscript sends immediately when auto-submit is enabled and 
 	});
 });
 
+test("pasteOrSubmitTranscript strips C1 CSI before pasting or sending", async () => {
+	const transcript = "left\u009B0mright";
+	const harness = createHarness();
+	await withEnv({ MICME_AUTO_SUBMIT: "0" }, () => pasteOrSubmitTranscript(harness.ctx, harness.pi, transcript));
+	await withEnv({ MICME_AUTO_SUBMIT: "1" }, () => pasteOrSubmitTranscript(harness.ctx, harness.pi, transcript));
+
+	assert.deepEqual(harness.pasted, ["left right "]);
+	assert.deepEqual(harness.sent, [{ message: "left right", options: undefined }]);
+});
+
 test("pasteOrSubmitTranscript queues follow-up when auto-submit runs during an active turn", async () => {
 	await withEnv({ MICME_AUTO_SUBMIT: "1" }, async () => {
 		const harness = createHarness({ idle: false });

@@ -147,7 +147,7 @@ export function writeMicmeConfigValues(values: Record<string, string | undefined
 
 async function commitMicmeConfigValues(configPath: string, values: Record<string, string | undefined>, options: MicmeConfigWriteOptions) {
 	const configDir = dirname(configPath);
-	await mkdir(configDir, { recursive: true });
+	await mkdir(configDir, { recursive: true, mode: 0o700 });
 	const lease = await acquireMicmeConfigLock(configPath, options);
 	const tempPath = join(configDir, `.micme.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
 

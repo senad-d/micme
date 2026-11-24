@@ -43,6 +43,7 @@ export type RunResult = {
 	code: number | null;
 	signal: NodeJS.Signals | null;
 	stdout: string;
+	stdoutTruncated: boolean;
 	stderr: string;
 	timedOut: boolean;
 	cancelled?: boolean;
