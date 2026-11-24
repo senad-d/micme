@@ -1668,6 +1668,51 @@ setInterval(() => {}, 1_000);
 	});
 }
 
+test("stopping a live-only stream with no frames warns without delivering a transcript", { skip: process.platform === "win32" && "uses a POSIX streaming fixture" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-stream-empty-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const stream = join(root, "whisper-stream");
+	const model = join(root, "ggml-small.en.bin");
+	const processLog = join(root, "processes.log");
+	await Promise.all([writeStreamingProcess(stream), writeFile(model, "model")]);
+
+	await withEnv({
+		TMPDIR: root,
+		PI_CODING_AGENT_DIR: join(root, "agent"),
+		MICME_TRANSCRIPTION_MODE: "stream",
+		MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+		MICME_STREAM_FINALIZE_WITH_CLIP: "0",
+		MICME_WHISPER_STREAM_BIN: stream,
+		MICME_WHISPER_CPP_MODEL: model,
+		MICME_AUTO_SUBMIT: "1",
+		MICME_KEEP_AUDIO: "0",
+		MICME_TEST_PROCESS_LOG: processLog,
+		MICME_TEST_STOP_DELAY_MS: "0",
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		const command = harness.commands.get("micme");
+		harness.ctx.ui.getEditorText = () => "existing draft";
+		try {
+			await command.handler("", harness.ctx);
+			assert.equal(harness.owner.getPhase(), "streaming");
+			assert.ok(Array.isArray(latestRecordingWidget(harness)), "recording widget was never shown");
+			await waitFor(async () => (await readProcessRows(processLog)).length === 1, "stream did not start");
+
+			await command.handler("", harness.ctx);
+			assert.equal(harness.owner.getPhase(), "idle");
+			assert.equal(latestRecordingWidget(harness), undefined);
+			const warnings = harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "warning");
+			assert.equal(warnings.length, 1, JSON.stringify(harness.uiCalls));
+			assert.match(warnings[0].message, /did not recognize any words.*live stream/i);
+			assert.equal(harness.uiCalls.some((entry) => entry.method === "notify" && entry.level === "error"), false);
+			assert.deepEqual(harness.sentMessages, []);
+			assert.equal(harness.uiCalls.some((entry) => entry.method === "pasteToEditor" || entry.method === "setEditorText"), false);
+		} finally {
+			await emit(harness, "session_shutdown");
+		}
+	});
+});
+
 test("/micme last survives another committed frame and stopping a live stream", { skip: process.platform === "win32" && "uses a POSIX streaming fixture" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-stream-replay-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
