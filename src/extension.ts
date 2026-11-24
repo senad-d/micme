@@ -646,6 +646,7 @@ async function finalizeStreamingClip(
 }
 
 async function transcribeRecordingClip(owner: MicmeSessionOwner, operation: MicmeOperation, recording: Recording) {
+	requireValidMicmeConfig();
 	const { audioPath, directory, tempDir } = recording;
 	const ctx = operation.context;
 	const filesPath = directory?.filesPath ?? tempDir;
