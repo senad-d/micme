@@ -80,6 +80,23 @@ function buildModelFixtures(modelDir) {
 	];
 }
 
+test("doctor reports only supported placeholders from configured hooks", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-hook-redaction-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const secret = "{DummyBracedSecret}";
+	await writeFile(join(root, "micme.json"), JSON.stringify({
+		MICME_MODEL_DIR: root,
+		MICME_RECORD_COMMAND: `printf ${secret} {audio} {audioRaw} {tempDir} {tempDirRaw}`,
+		MICME_TRANSCRIBE_COMMAND: `printf ${secret} {transcript} {transcriptRaw}`,
+	}));
+
+	const doctor = runNode(["scripts/doctor.mjs"], isolatedEnvironment(root, join(root, "bin")));
+
+	assert.equal(doctor.includes(secret), false, "doctor exposed an unsupported brace-wrapped value");
+	assert.match(doctor, /custom record command: configured \(\d+ chars; placeholders: \{audio\}, \{audioRaw\}, \{tempDir\}, \{tempDirRaw\}; full value redacted\)/);
+	assert.match(doctor, /custom transcribe command: configured \(\d+ chars; placeholders: \{transcript\}, \{transcriptRaw\}; full value redacted\)/);
+});
+
 test("JavaScript doctor starts without type stripping and matches the runtime model and backend contract", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-doctor-contract-"));
 	t.after(() => rm(root, { recursive: true, force: true }));

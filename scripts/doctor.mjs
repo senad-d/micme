@@ -29,7 +29,7 @@ function info(label, detail = "") {
 
 function summarizeConfiguredCommand(value) {
   const trimmed = value.trim();
-  const placeholders = [...new Set([...trimmed.matchAll(/\{([A-Za-z]+?)(Raw)?\}/g)].map((match) => match[0]))];
+  const placeholders = [...new Set(trimmed.match(/\{(?:audio|tempDir|transcript)(?:Raw)?\}/g) ?? [])];
   const placeholderText = placeholders.length ? `; placeholders: ${placeholders.join(", ")}` : "";
   return `configured (${trimmed.length} chars${placeholderText}; full value redacted)`;
 }
