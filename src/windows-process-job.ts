@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
+import type { CommandSpec } from "./types.ts";
 
 // The launcher waits for IPC so nothing from the hook can run before job assignment.
 // The hook inherits Micme's pipes directly, including the recorder's graceful stdin.
@@ -9,9 +10,9 @@ function reportError(error) {
 	const { message, code, errno, syscall, path, spawnargs } = error;
 	process.send({ message, code, errno, syscall, path, spawnargs }, () => process.exit(1));
 }
-process.once("message", ({ command, args, pipeInput }) => {
+process.once("message", ({ command, args, pipeInput, spawnOptions }) => {
 	try {
-		const child = spawn(command, args, { stdio: [pipeInput ? 0 : "ignore", 1, 2], windowsHide: true });
+		const child = spawn(command, args, { ...spawnOptions, stdio: [pipeInput ? 0 : "ignore", 1, 2], windowsHide: true });
 		child.once("error", reportError);
 		child.once("exit", (code) => process.exit(code ?? 1));
 	} catch (error) {
@@ -105,7 +106,9 @@ class WindowsProcessJob {
 	}
 }
 
-export function spawnWindowsJobProcess(command: string, args: string[], pipeInput: boolean, retainUntilStop: boolean) {
+export class WindowsHookLaunchError extends Error {}
+
+export function spawnWindowsJobProcess(command: string, args: string[], pipeInput: boolean, retainUntilStop: boolean, spawnOptions?: CommandSpec["spawnOptions"]) {
 	const job = new WindowsProcessJob(retainUntilStop);
 	let launcher: ChildProcess | undefined;
 	try {
@@ -127,10 +130,11 @@ export function spawnWindowsJobProcess(command: string, args: string[], pipeInpu
 
 	const child = launcher;
 	jobs.set(child, job);
-	child.on("message", (error: NodeJS.ErrnoException) => child.emit("error", Object.assign(new Error(error.message), error)));
-	child.send({ command, args, pipeInput }, (error) => {
+	const reportLaunchError = (error: NodeJS.ErrnoException) => child.emit("error", Object.assign(new WindowsHookLaunchError(error.message), error));
+	child.on("message", reportLaunchError);
+	child.send({ command, args, pipeInput, spawnOptions }, (error) => {
 		// Forced job termination can close IPC before the launcher reads this.
-		if (error && jobs.has(child)) child.emit("error", error);
+		if (error && jobs.has(child)) reportLaunchError(error);
 	});
 	return child;
 }
@@ -146,13 +150,11 @@ export function windowsJobHasProcesses(child: ChildProcess) {
 
 export function terminateWindowsJob(child: ChildProcess) {
 	const job = jobs.get(child);
-	if (!job) return false;
-	jobs.delete(child);
-	try {
-		return job.terminate();
-	} finally {
-		job.close();
-	}
+	// After a failed termination the caller still needs the job to tell a
+	// real tree exit from a wrapper that left live workers behind.
+	if (!job?.terminate()) return false;
+	closeWindowsJob(child);
+	return true;
 }
 
 export function closeWindowsJob(child: ChildProcess) {

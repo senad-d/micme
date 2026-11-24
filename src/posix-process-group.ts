@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import type { ExitResult } from "./types.ts";
+import type { CommandSpec, ExitResult } from "./types.ts";
 
 // A detached launcher is the session and group leader. Only it signals its own
 // group (kill(0, ...)), even after the hook exits. The parent never signals a PGID.
@@ -15,9 +15,9 @@ function report(result) {
 function reportError({ message, code, errno, syscall, path, spawnargs }) {
 	report({ error: { message, code, errno, syscall, path, spawnargs } });
 }
-function launch({ command, args, pipeInput }) {
+function launch({ command, args, pipeInput, spawnOptions }) {
 	try {
-		const child = spawn(command, args, { stdio: [pipeInput ? 0 : "ignore", 1, 2] });
+		const child = spawn(command, args, { ...spawnOptions, stdio: [pipeInput ? 0 : "ignore", 1, 2] });
 		if (child.pid) report({ pid: child.pid });
 		child.once("error", reportError);
 		child.once("exit", (code, signal) => report({ code, signal }));
@@ -38,14 +38,15 @@ process.on("message", (message) => {
 const supervisors = new WeakSet<ChildProcess>();
 const hookPids = new WeakMap<ChildProcess, number>();
 
-export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean) {
+export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean, spawnOptions?: CommandSpec["spawnOptions"]) {
 	const child = spawn(process.execPath, ["--input-type=commonjs", "-e", LAUNCHER], {
 		detached: true,
 		stdio: [pipeInput ? "pipe" : "ignore", "pipe", "pipe", "ipc"],
 	});
 	if (child.pid) {
 		supervisors.add(child);
-		child.send({ command, args, pipeInput }, () => undefined);
+		child.once("close", () => supervisors.delete(child));
+		child.send({ command, args, pipeInput, spawnOptions }, () => undefined);
 	}
 	return child;
 }
@@ -82,10 +83,15 @@ export function observePosixGroupClose(child: ChildProcess, settle: (exit: ExitR
 	return () => hookExit ?? { code: child.exitCode, signal: child.signalCode };
 }
 
-export function signalPosixGroup(child: ChildProcess, signal: NodeJS.Signals) {
+export function signalPosixGroup(child: ChildProcess, signal: NodeJS.Signals, onSent: (error: unknown) => void = () => undefined) {
 	if (!supervisors.has(child) || !child.connected) return false;
-	child.send(signal, () => undefined);
-	return true;
+	try {
+		child.send(signal, onSent);
+		return true;
+	} catch (error) {
+		onSent(error);
+		return false;
+	}
 }
 
 export async function posixRecorderState(child: ChildProcess) {
@@ -106,10 +112,11 @@ export async function posixGroupHasWorkers(child: ChildProcess, remainingMs: num
 function readGroupWorkers(child: ChildProcess, remainingMs: number) {
 	if (!supervisors.has(child) || !child.connected) return Promise.resolve([]);
 	return new Promise<number[] | undefined>((resolve) => {
-		execFile("/bin/ps", ["-A", "-o", "pid=", "-o", "pgid=", "-o", "stat="], {
+		const snapshot = execFile("/bin/ps", ["-A", "-o", "pid=", "-o", "pgid=", "-o", "stat="], {
 			encoding: "utf8", timeout: Math.max(1, Math.floor(Math.min(remainingMs, 200))), killSignal: "SIGKILL",
 		}, (error, output) => {
-			if (error) return resolve(undefined); // Unknown: allow the rest of the grace period.
+			// A timeout can truncate stdout even if ps reports a successful exit.
+			if (error || snapshot.killed) return resolve(undefined);
 			const workers = [];
 			for (const line of output.split("\n")) {
 				const [rawPid, group, state] = line.trim().split(/\s+/);
