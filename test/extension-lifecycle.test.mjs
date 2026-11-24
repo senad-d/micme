@@ -820,7 +820,7 @@ const poll = setInterval(() => {
 			const pid = Number(await readFile(pidFile, "utf8"));
 			assert.ok(Number.isInteger(pid) && pid > 0);
 			await writeFile(join(root, "exit"), "");
-			await waitFor(() => !processIsAlive(pid), "recorder did not exit before stop");
+			await waitFor(async () => !(await processIsAlive(pid)), "recorder did not exit before stop");
 
 			const stop = command.handler("", harness.ctx);
 			const drain = join(root, "drain");
