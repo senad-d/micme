@@ -58,9 +58,11 @@ That redaction does not apply to hook output. When a custom transcriber exits wi
 
 ## Model downloads
 
-When `MICME_AUTO_DOWNLOAD_MODEL=1` (default), Micme can download missing standard whisper.cpp model files from the whisper.cpp Hugging Face repository on first use or model selection. Downloads are stored in `MICME_MODEL_DIR`, defaulting to `~/.cache/whisper.cpp`.
+Automatic downloads are enabled when `MICME_AUTO_DOWNLOAD_MODEL` is unset. If a standard whisper.cpp model is missing, Micme can contact the whisper.cpp repository on Hugging Face without a separate opt-in the first time it transcribes a clip or starts streaming transcription. Selecting a missing standard model in `/micme conf` can also trigger a download.
 
-Disable model downloads with:
+Without an explicit model path, Micme downloads to `MICME_MODEL_DIR`, which defaults to `~/.cache/whisper.cpp`. Setting `MICME_WHISPER_CPP_MODEL` overrides the cache location: for example, if `/path/to/ggml-tiny.bin` is missing, Micme downloads the model to that path, even if it is outside the cache. If translation requires a different model, Micme uses the corresponding filename in the same directory as the explicit path.
+
+Disable Micme's automatic whisper.cpp downloads with:
 
 ```bash
 MICME_AUTO_DOWNLOAD_MODEL=0
@@ -84,7 +86,7 @@ Micme does not discover project configs by default. But if you start Pi from a p
 
 Micme has no telemetry. It does not send audio or transcripts to a remote service by default. For local retention and cleanup, see [Microphone and local audio handling](#microphone-and-local-audio-handling).
 
-Network access can occur only when you explicitly use features that need it, such as automatic model downloads, or when your own custom commands contact the network.
+Local transcription does not imply offline first use: see [Model downloads](#model-downloads) for when Micme can contact Hugging Face. Your own custom commands can also contact the network.
 
 ## Reporting vulnerabilities
 
