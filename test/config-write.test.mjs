@@ -45,6 +45,50 @@ async function runChildWriter(root, key, value, mask = "") {
 	});
 }
 
+function runConfigFifoCheck(root, script, ...args) {
+	// A synchronous FIFO open cannot be interrupted by a timer in the child.
+	return execFileAsync(process.execPath, ["--input-type=module", "--eval", script, configModuleUrl, ...args], {
+		env: { ...process.env, PI_CODING_AGENT_DIR: root },
+		timeout: 5_000,
+		killSignal: "SIGKILL",
+	});
+}
+
+test("importing config with a writerless FIFO returns an invalid config state", { skip: process.platform === "win32" && "requires a POSIX FIFO" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-config-fifo-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "micme.json");
+	await execFileAsync("mkfifo", [path]);
+
+	const { stdout } = await runConfigFifoCheck(root, `
+		const { loadMicmeJson } = await import(process.argv[1]);
+		console.log(JSON.stringify(loadMicmeJson()));
+	`);
+
+	assert.deepEqual(JSON.parse(stdout), { path, values: {}, error: "not a regular file" });
+});
+
+test("saving settings rejects a writerless config FIFO without replacing it", { skip: process.platform === "win32" && "requires a POSIX FIFO" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-config-fifo-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const fifoDir = join(root, "fifo");
+	await mkdir(fifoDir);
+	const path = join(fifoDir, "micme.json");
+	await execFileAsync("mkfifo", [path]);
+
+	// Import with a missing config first to isolate the save path.
+	await runConfigFifoCheck(root, `
+		import assert from "node:assert/strict";
+		const [moduleUrl, fifoDir] = process.argv.slice(1);
+		const { writeMicmeConfigValue } = await import(moduleUrl);
+		process.env.PI_CODING_AGENT_DIR = fifoDir;
+		await assert.rejects(writeMicmeConfigValue("MICME_LANGUAGE", "en"), /Cannot save Micme config: .* is not a regular file/);
+	`, fifoDir);
+
+	assert.equal((await stat(path)).isFIFO(), true);
+	assert.deepEqual(await readdir(fifoDir), ["micme.json"]);
+});
+
 test("concurrent promise writes preserve disjoint keys and metadata repeatedly", async (t) => {
 	const initial = { $schema: "local-schema.json", owner: "keep-me", MICME_EXISTING: "existing" };
 	const root = await createConfigRoot(t, initial);
