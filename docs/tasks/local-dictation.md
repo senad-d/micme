@@ -160,7 +160,7 @@ POSIX: nonblocking, no-follow leaf open through the owned directory, verify regu
 
 ### 4. Add an isolated worker and model resolver
 
-- [ ] Resolve and provision the new local worker/weights through a separately testable API without changing the engine an existing recording starts.
+- [x] Resolve and provision the new local worker/weights through a separately testable API without changing the engine an existing recording starts.
 
 #### Why
 

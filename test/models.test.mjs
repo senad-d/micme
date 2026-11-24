@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ const {
 	discoverWhisperCppModels,
 	downloadFile,
 	ensureWhisperCppModel,
+	ensureWhisperVadModel,
 	formatBytes,
 	formatDownloadProgress,
 	getDefaultWhisperCppModelPath,
@@ -353,12 +355,18 @@ test("model discovery scans configured, project, and cache paths", async (t) => 
 	await writeFile(join(cwd, ".micme", "models", "ggml-hidden.bin"), "hidden");
 	await writeFile(join(modelDir, "ggml-base.en.bin"), "cache");
 	await writeFile(join(modelDir, "notes.txt"), "ignored");
+	const vad = join(modelDir, "vad", "ggml-silero-v5.1.2.bin");
+	const customVad = join(cwd, "models", "ggml-custom-vad.bin");
+	await mkdir(join(modelDir, "vad"));
+	await writeFile(vad, "standard VAD");
+	await writeFile(customVad, "custom VAD");
 
 	await withEnv(
 		{
 			PI_CODING_AGENT_DIR: join(root, "agent"),
 			MICME_MODEL_DIR: modelDir,
 			MICME_WHISPER_CPP_MODEL: join(root, "missing", "ggml-custom.bin"),
+			MICME_VAD_MODEL: customVad,
 		},
 		async () => {
 			const scanned = scanModelFiles(cwd).map((path) => path.slice(root.length + 1)).sort();
@@ -376,6 +384,9 @@ test("model discovery scans configured, project, and cache paths", async (t) => 
 			assert.ok(values.includes(join(root, "missing", "ggml-custom.bin")));
 			assert.ok(values.includes(join(modelDir, "ggml-small.en.bin")));
 			assert.equal(candidates.find((candidate) => candidate.value.endsWith("ggml-base.en.bin"))?.installed, true);
+			assert.ok(!scanned.includes("cache/vad/ggml-silero-v5.1.2.bin"));
+			assert.ok(!values.includes(vad));
+			assert.ok(!values.includes(customVad));
 		},
 	);
 });
@@ -513,4 +524,157 @@ test("ensureWhisperCppModel validates targets and downloads standard models", as
 	assert.ok(statuses.some((entry) => entry.value?.includes("downloading ggml-tiny.bin")));
 	assert.ok(statuses.some((entry) => entry.value === undefined));
 	assert.ok(notifications.some((entry) => entry.message.includes("Downloaded ggml-tiny.bin")));
+});
+
+const VAD_FILE = "ggml-silero-v5.1.2.bin";
+const VAD_BYTES = 885_098;
+const VAD_URL = `https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/${VAD_FILE}`;
+
+test("downloadFile publishes a matching digest and can verify it offline on a cache hit", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-model-integrity-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "model.bin");
+	const content = "verified fixture";
+	const integrity = { bytes: content.length, sha256: createHash("sha256").update(content).digest("hex") };
+	const url = "https://example.test/model.bin";
+	const fetch = t.mock.method(globalThis, "fetch", async () => modelResponse(content));
+	await downloadFile(url, target, undefined, { integrity });
+	await downloadFile(url, target, undefined, { integrity });
+	assert.deepEqual(await readdir(root), ["model.bin"]);
+	assert.equal(await readFile(target, "utf8"), content);
+	await writeFile(target, "x".repeat(content.length));
+	await assert.rejects(downloadFile(url, target, undefined, { integrity }), /SHA-256 mismatch/i);
+	assert.equal(fetch.mock.callCount(), 1);
+});
+
+test("the standard VAD download uses the pinned upstream revision and never publishes a bad digest", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-vad-integrity-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "vad", VAD_FILE);
+	const harness = createDownloadContext();
+	const fetch = t.mock.method(globalThis, "fetch", async (url) => {
+		assert.equal(url, VAD_URL);
+		return modelResponse("x".repeat(VAD_BYTES));
+	});
+	await withEnv({ MICME_MODEL_DIR: root, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+		await assert.rejects(ensureWhisperVadModel(target, harness.ctx), /SHA-256 mismatch.*ggml-silero/i);
+	});
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.deepEqual(await readdir(join(root, "vad")), []);
+	assert.equal(harness.statuses.at(-1)?.value, undefined);
+	assert.ok(!harness.notifications.some((entry) => entry.message.startsWith("Downloaded ")));
+});
+
+test("the standard VAD transfer stops after more than the pinned number of bytes", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-vad-oversize-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "vad", VAD_FILE);
+	let cancelled = false;
+	t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+		start(controller) {
+			controller.enqueue(Buffer.alloc(VAD_BYTES + 1));
+		},
+		cancel() {
+			cancelled = true;
+		},
+	})));
+	await withEnv({ MICME_MODEL_DIR: root, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+		await assert.rejects(ensureWhisperVadModel(target), /model size mismatch.*ggml-silero/i);
+	});
+	assert.equal(cancelled, true);
+	assert.deepEqual(await readdir(join(root, "vad")), []);
+});
+
+test("a corrupt cached standard VAD is rejected locally and not replaced", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-vad-cache-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "vad", VAD_FILE);
+	const content = "x".repeat(VAD_BYTES);
+	await mkdir(join(root, "vad"));
+	await writeFile(target, content);
+	t.mock.method(globalThis, "fetch", () => assert.fail("cached models must not use network"));
+	await withEnv({ MICME_MODEL_DIR: root, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+		await assert.rejects(ensureWhisperVadModel(target), /SHA-256 mismatch.*ggml-silero/i);
+	});
+	assert.equal(await readFile(target, "utf8"), content);
+});
+
+test("VAD acquisition refuses nonregular model targets without touching them", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-vad-nonregular-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "vad", VAD_FILE);
+	await mkdir(target, { recursive: true });
+	t.mock.method(globalThis, "fetch", () => assert.fail("nonregular targets must not use network"));
+	await withEnv({ MICME_MODEL_DIR: root, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+		await assert.rejects(ensureWhisperVadModel(target), /VAD model path exists but is not a file/i);
+	});
+	assert.deepEqual(await readdir(join(root, "vad")), [VAD_FILE]);
+});
+
+test("a missing VAD override is never downloaded merely because it has the official basename", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-vad-custom-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "custom", VAD_FILE);
+	t.mock.method(globalThis, "fetch", () => assert.fail("custom paths must not use network"));
+	await withEnv({ MICME_MODEL_DIR: root, MICME_AUTO_DOWNLOAD_MODEL: "1", MICME_VAD_MODEL: target }, async () => {
+		await assert.rejects(ensureWhisperVadModel(target), /VAD model is missing.*MICME_VAD_MODEL/i);
+	});
+	assert.deepEqual(await readdir(root), []);
+});
+
+test("missing standard VAD respects auto-download opt-out", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-vad-offline-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "vad", VAD_FILE);
+	t.mock.method(globalThis, "fetch", () => assert.fail("disabled downloads must not use network"));
+	await withEnv({ MICME_MODEL_DIR: root, MICME_AUTO_DOWNLOAD_MODEL: "0" }, async () => {
+		await assert.rejects(ensureWhisperVadModel(target), /VAD model is missing.*auto-download is disabled/i);
+	});
+	assert.deepEqual(await readdir(root), []);
+});
+
+test("VAD callers share a transfer; only the last cancelled caller stops and cleans it", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-vad-shared-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const target = join(root, "vad", VAD_FILE);
+	const started = createDeferred();
+	const stalled = createDeferred();
+	const firstController = new AbortController();
+	const secondController = new AbortController();
+	let transferSignal;
+	let reads = 0;
+	const fetch = t.mock.method(globalThis, "fetch", async (_url, options) => {
+		transferSignal = options.signal;
+		return {
+			ok: true,
+			headers: new Headers(),
+			body: {
+				getReader: () => ({
+					async read() {
+						if (reads++ === 0) return { done: false, value: Buffer.alloc(64 * 1024) };
+						started.resolve();
+						return stalled.promise;
+					},
+					async cancel() {
+						stalled.resolve({ done: true });
+					},
+				}),
+			},
+		};
+	});
+	await withEnv({ MICME_MODEL_DIR: root, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+		const first = ensureWhisperVadModel(target, undefined, { signal: firstController.signal });
+		const second = ensureWhisperVadModel(target, undefined, { signal: secondController.signal });
+		await started.promise;
+		assert.match((await readdir(join(root, "vad")))[0], /\.download-/);
+		assert.equal(existsSync(target), false);
+		firstController.abort();
+		await assert.rejects(first, { name: "AbortError" });
+		assert.equal(transferSignal.aborted, false);
+		assert.equal(fetch.mock.callCount(), 1);
+		secondController.abort();
+		await assert.rejects(second, { name: "AbortError" });
+	});
+	assert.equal(transferSignal.aborted, true);
+	assert.deepEqual(await readdir(join(root, "vad")), []);
 });

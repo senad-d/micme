@@ -54,6 +54,12 @@ export const DEFAULT_TRANSCRIBE_BACKEND = "auto";
 export const DEFAULT_WHISPER_CPP_MODEL_NAME = "small.en";
 export const DEFAULT_PYTHON_WHISPER_MODEL_NAME = "base.en";
 export const WHISPER_CPP_MODEL_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+// ggml-org/whisper-vad release artifact and its upstream LFS identity at this revision.
+export const WHISPER_VAD_MODEL = {
+	file: "ggml-silero-v5.1.2.bin",
+	url: "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v5.1.2.bin",
+	integrity: { bytes: 885_098, sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf" },
+} as const;
 export const WHISPER_CPP_MODEL_NAMES = [
 	"tiny.en",
 	"tiny",
