@@ -118,7 +118,7 @@ test("audio device listing parses PulseAudio output", async (t) => {
 	assert.match(panel, /warning/);
 });
 
-test("registered device renderer receives DirectShow panels", async (t) => {
+test("DirectShow discovery keeps capture names separate from normalized panel and picker labels", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX shell shims are not portable to Windows");
 		return;
@@ -135,7 +135,7 @@ test("registered device renderer receives DirectShow panels", async (t) => {
 			"echo 'DirectShow video devices' >&2",
 			"echo '\"Integrated Camera\"' >&2",
 			"echo 'DirectShow audio devices' >&2",
-			"echo '\"Studio Mic\"' >&2",
+			"echo '\"Studio  Mic\"' >&2",
 			"echo 'Immediate exit requested' >&2",
 			"exit 1",
 		].join("\n"),
@@ -155,6 +155,7 @@ test("registered device renderer receives DirectShow panels", async (t) => {
 	await withPlatform("win32", async () => {
 		await withEnv({ PATH: bin, PATHEXT: ".EXE", LANG: "C.UTF-8" }, async () => {
 			await listAudioDevices(createWidgetCtx().ctx, pi);
+			assert.deepEqual(await discoverAudioDevices(), [{ label: "Studio Mic", value: "Studio  Mic", description: "DirectShow audio input" }]);
 		});
 	});
 
