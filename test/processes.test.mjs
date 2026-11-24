@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -23,6 +25,8 @@ const {
 	stopProcess,
 	stopRecorder,
 } = await import("../src/processes.ts");
+const { buildRecorderCommand } = await import("../src/audio.ts");
+const { transcribeWithCustomCommand } = await import("../src/transcription.ts");
 
 function withEnv(values, fn) {
 	const previous = new Map();
@@ -109,6 +113,68 @@ test("findExecutable ignores non-executable PATH entries", async (t) => {
 	});
 });
 
+test("Windows shell selection stays on the system interpreter across project directories", async (t) => {
+	const project = await mkdtemp(join(tmpdir(), "micme-shell-project-"));
+	t.after(() => rm(project, { recursive: true, force: true }));
+	await writeFile(join(project, "cmd.exe"), "");
+
+	const command = 'echo "hello world"';
+	const expected = { command: String.raw`D:\Windows\System32\cmd.exe`, args: ["/d", "/s", "/c", command], display: command };
+	const originalDirectory = process.cwd();
+	try {
+		withEnv({ SystemRoot: String.raw`D:\Windows`, PATH: project, ComSpec: String.raw`C:\Project\cmd.exe` }, () => {
+			withPlatform("win32", () => {
+				assert.deepEqual(shellCommand(command), expected);
+				process.chdir(project);
+				assert.deepEqual(shellCommand(command), expected);
+			});
+		});
+	} finally {
+		process.chdir(originalDirectory);
+	}
+});
+
+test("Windows shell selection fails closed without a drive-qualified system root", () => {
+	for (const SystemRoot of [undefined, "Windows", "C:Windows", String.raw`\Windows`, String.raw`\\server\share`]) {
+		withEnv({ SystemRoot }, () => {
+			withPlatform("win32", () => {
+				assert.throws(() => shellCommand("echo hi"), /SystemRoot must be a drive-qualified absolute path/);
+			});
+		});
+	}
+});
+
+test("configured Windows hooks pass the system interpreter and original shell arguments to spawn", async (t) => {
+	const project = await mkdtemp(join(tmpdir(), "micme-hook-spawn-"));
+	t.after(() => rm(project, { recursive: true, force: true }));
+	const audioPath = join(project, "raw.wav");
+	const recordCommand = 'echo "recording hook"';
+	const transcribeCommand = 'echo "transcription hook"';
+	const spawn = childProcess.spawn;
+	// Substitute a portable child at the OS boundary; keep the hook and runner logic real.
+	const spawnMock = t.mock.method(childProcess, "spawn", (_command, _args, options) => spawn(process.execPath, ["-p", "'hook output'"], options));
+	syncBuiltinESMExports();
+	try {
+		const [recording, transcription] = withEnv({ SystemRoot: String.raw`D:\Windows`, MICME_RECORD_COMMAND: recordCommand }, () =>
+			withPlatform("win32", () => [
+				spawnRecording(buildRecorderCommand(audioPath), audioPath, project),
+				transcribeWithCustomCommand(transcribeCommand, audioPath, project),
+			]),
+		);
+		const [exit, transcript] = await Promise.all([recording.exitPromise, transcription]);
+		assert.equal(exit.code, 0);
+		assert.equal(recording.stdout().trim(), "hook output");
+		assert.equal(transcript.trim(), "hook output");
+		assert.deepEqual(spawnMock.mock.calls.map(({ arguments: [command, args] }) => [command, args]), [
+			[String.raw`D:\Windows\System32\cmd.exe`, ["/d", "/s", "/c", recordCommand]],
+			[String.raw`D:\Windows\System32\cmd.exe`, ["/d", "/s", "/c", transcribeCommand]],
+		]);
+	} finally {
+		spawnMock.mock.restore();
+		syncBuiltinESMExports();
+	}
+});
+
 test("process runners capture output, timeouts, and shell details", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-process-run-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -134,11 +200,8 @@ test("process runners capture output, timeouts, and shell details", async (t) =>
 	alreadyCancelled.abort();
 	assert.equal((await runProcess("missing-command-that-must-not-spawn", [], 2_000, { signal: alreadyCancelled.signal })).cancelled, true);
 
-	const shell = await runShell("printf shell", 2_000);
-	assert.equal(shell.stdout, "shell");
-	withPlatform("win32", () => {
-		assert.deepEqual(shellCommand("echo hi"), { command: "cmd.exe", args: ["/d", "/s", "/c", "echo hi"], display: "echo hi" });
-	});
+	const shell = await runShell("echo shell", 2_000);
+	assert.equal(shell.stdout.trim(), "shell");
 	withPlatform("linux", () => {
 		assert.deepEqual(shellCommand("echo hi"), { command: "sh", args: ["-lc", "echo hi"], display: "echo hi" });
 	});
