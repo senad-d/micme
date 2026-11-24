@@ -30,6 +30,7 @@ import {
 	getTranscriptionMode,
 	getTranscriptionModeProfile,
 	reloadMicmeConfig,
+	requireValidMicmeConfig,
 	writeMicmeConfigValues,
 } from "./config.ts";
 import { discoverAudioDevices } from "./audio.ts";
@@ -111,7 +112,8 @@ export async function showConfiguration(ctx: ExtensionContext) {
 		notifySanitized(ctx, `Micme config is invalid at ${configState.path}: ${configState.error}. Fix it before saving settings.`, "warning");
 	}
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-		const discovery = createInitialConfigurationDiscovery();
+		const canDiscover = !configState.error;
+		const discovery = createInitialConfigurationDiscovery(canDiscover);
 		const controller = new AbortController();
 		let closed = false;
 		const screen = new ConfigurationScreen({
@@ -126,28 +128,30 @@ export async function showConfiguration(ctx: ExtensionContext) {
 			onError: (error) => notifySanitized(ctx, error instanceof Error ? error.message : String(error), "error"),
 			onSave: (id, newValue) => saveConfigurationValue(ctx, id, newValue, { signal: controller.signal }),
 			requestRender: () => tui.requestRender(),
-			statusText: formatDiscoveryStatus(discovery.pending),
+			statusText: canDiscover ? formatDiscoveryStatus(discovery.pending) : "Fix Micme config and reopen settings to run discovery.",
 		});
 
-		startConfigurationDiscovery({
-			ctx,
-			cwd: ctx.cwd,
-			theme,
-			discovery,
-			screen,
-			isClosed: () => closed,
-		});
+		if (canDiscover) {
+			startConfigurationDiscovery({
+				ctx,
+				cwd: ctx.cwd,
+				theme,
+				discovery,
+				screen,
+				isClosed: () => closed,
+			});
+		}
 
 		return screen;
 	});
 }
 
-function createInitialConfigurationDiscovery(): ConfigurationDiscoveryState {
+function createInitialConfigurationDiscovery(enabled: boolean): ConfigurationDiscoveryState {
 	return {
 		audioDevices: [],
 		modelCandidates: [],
 		pythonModelCandidates: [],
-		pending: new Set(["audio devices", "whisper.cpp models", "Python Whisper models"]),
+		pending: new Set(enabled ? ["audio devices", "whisper.cpp models", "Python Whisper models"] : []),
 	};
 }
 
@@ -1216,6 +1220,7 @@ export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTh
 export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string, options: { signal?: AbortSignal } = {}): Promise<Record<string, string>> {
 	if (!id.startsWith("MICME_")) return {};
 	options.signal?.throwIfAborted();
+	requireValidMicmeConfig();
 
 	const valuesToWrite = getConfigurationValuesToWrite(id, value);
 	if (id === "MICME_WHISPER_CPP_MODEL" && value) {

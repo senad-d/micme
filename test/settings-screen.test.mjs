@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 
 const { reloadMicmeConfig, getTranscriptionModeProfile } = await import("../src/config.ts");
 const { buildConfigurationItems, createModelSelector, showConfiguration, uniqueStrings } = await import("../src/settings.ts");
@@ -325,16 +328,84 @@ test("closing configuration during model acquisition cancels without stale saves
 	});
 });
 
-test("configuration screen reports invalid config safely", async (t) => {
+test("a missing model selected after config corruption downloads only after repair and reopen", async (t) => {
+	await withTempAgent(t, (root) => withEnv({
+		MICME_AUTO_DOWNLOAD_MODEL: "1",
+		MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+		MICME_WHISPER_CPP_MODEL: undefined,
+	}, async () => {
+		const configPath = join(root, "micme.json");
+		const modelPath = join(root, "models", "ggml-tiny.en.bin");
+		const malformed = "{ invalid json";
+		await writeFile(configPath, "{}");
+		const fetch = t.mock.method(globalThis, "fetch", async () => new Response("model bytes"));
+
+		const rejected = createHarness(root);
+		await openMissingModelPicker(rejected);
+		await writeFile(configPath, malformed);
+		rejected.component.handleInput("\r");
+		await waitFor(() => rejected.component.render(100).join("\n").includes("Save failed"), "model choice was not rejected");
+		assert.equal(fetch.mock.callCount(), 0);
+		assert.match(rejected.notifications.find((entry) => entry.level === "error")?.message ?? "", /not valid JSON/);
+		assert.equal(await readFile(configPath, "utf8"), malformed);
+		rejected.component.handleInput("q");
+
+		await writeFile(configPath, "{}");
+		const repaired = createHarness(root);
+		await openMissingModelPicker(repaired);
+		repaired.component.handleInput("\r");
+		await waitFor(async () => {
+			const saved = JSON.parse(await readFile(configPath, "utf8"));
+			return saved.MICME_WHISPER_CPP_MODEL === modelPath && !repaired.component.render(100).join("\n").includes("Saving ");
+		}, "model choice was not saved after repair");
+		assert.equal(fetch.mock.callCount(), 1);
+		assert.equal(await readFile(modelPath, "utf8"), "model bytes");
+		repaired.component.handleInput("q");
+	}));
+});
+
+async function openMissingModelPicker(harness) {
+	await showConfiguration(harness.ctx);
+	await waitFor(() => !harness.component.render(100).join("\n").includes("Loading "), "configuration discovery did not finish");
+	harness.component.handleInput("/");
+	typeText(harness.component, "Whisper.cpp model");
+	harness.component.handleInput("\r");
+	assert.match(harness.component.render(100).join("\n"), /Select whisper\.cpp model/i);
+	harness.component.handleInput("\x1b[A");
+	assert.match(harness.component.render(100).join("\n"), /→ ○ tiny\.en\s/);
+}
+
+test("configuration screen skips external discovery but shows repair information for malformed config", async (t) => {
+	mockPlatform(t, "darwin");
 	await withTempAgent(t, async (root) => {
-		await writeFile(join(root, "micme.json"), "{ invalid json");
-		reloadMicmeConfig();
+		const configPath = join(root, "micme.json");
+		await writeFile(configPath, "{ invalid json");
+		const bin = join(root, "bin");
+		await mkdir(bin);
+		await writeFile(join(bin, "ffmpeg"), "", { mode: 0o755 });
+		await writeFile(join(bin, "python3"), "", { mode: 0o755 });
 		const harness = createHarness(root);
+		const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("unexpected discovery process"); });
+		syncBuiltinESMExports();
+		try {
+			await showConfiguration(harness.ctx);
+			await nextImmediate();
 
-		await showConfiguration(harness.ctx);
-
-		assert.equal(harness.notifications[0]?.level, "warning");
-		assert.match(harness.notifications[0]?.message ?? "", /Micme config is invalid/);
+			assert.equal(spawn.mock.callCount(), 0);
+			const notification = harness.notifications[0];
+			assert.equal(notification?.level, "warning");
+			assert.ok(notification?.message.includes(configPath));
+			assert.match(notification.message, /not valid JSON.*Fix it/);
+			const rendered = harness.component.render(100).join("\n");
+			assert.match(rendered, /micme\.json/);
+			assert.match(rendered, /reopen settings to run discovery/);
+			assert.doesNotMatch(rendered, /Loading /);
+			harness.component.handleInput("q");
+			assert.equal(harness.doneCount, 1);
+		} finally {
+			spawn.mock.restore();
+			syncBuiltinESMExports();
+		}
 	});
 });
 
