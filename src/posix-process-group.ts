@@ -51,7 +51,7 @@ export function spawnPosixGroupProcess(command: string, args: string[], pipeInpu
 	return child;
 }
 
-export function observePosixGroupClose(child: ChildProcess, settle: (exit: ExitResult) => void) {
+export function observePosixGroupClose(child: ChildProcess, settle: (exit: ExitResult) => void, reportExit?: (exit: ExitResult) => void) {
 	let hookExit: ExitResult | undefined;
 	let pendingPipes = 0;
 	const finish = () => {
@@ -73,11 +73,13 @@ export function observePosixGroupClose(child: ChildProcess, settle: (exit: ExitR
 		else if (error) settle({ code: null, signal: null, error: Object.assign(new Error(error.message), error) });
 		else {
 			hookExit = { code, signal };
+			reportExit?.(hookExit);
 			finish();
 		}
 	});
 	child.once("exit", (code, signal) => {
 		hookExit ??= { code, signal };
+		reportExit?.(hookExit);
 		finish();
 	});
 	return () => hookExit ?? { code: child.exitCode, signal: child.signalCode };
