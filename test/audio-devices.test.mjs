@@ -8,6 +8,7 @@ const { reloadMicmeConfig } = await import("../src/config.ts");
 const { MAX_CAPTURED_OUTPUT_CHARS } = await import("../src/constants.ts");
 const { buildConfigurationItems } = await import("../src/settings.ts");
 const {
+	buildRecorderCommand,
 	discoverAudioDevices,
 	listAudioDevices,
 	parseAvfoundationAudioDevices,
@@ -292,19 +293,41 @@ test("audio preprocessing and validation surface ffmpeg failures", async (t) => 
 
 	await writeExecutable(
 		join(bin, "ffmpeg"),
-		"#!/bin/sh\necho '[Parsed_volumedetect_0 @ 0x1234] mean_volume: -90 dB' >&2\necho '[Parsed_volumedetect_0 @ 0x1234] max_volume: -80 dB' >&2\nexit 0\n",
-	);
-	await withEnv({ PATH: bin, MICME_MIN_MAX_VOLUME_DB: "-50" }, async () => {
-		await assert.rejects(validateRecordedAudio(input), /almost-silent audio/);
-	});
-
-	await writeExecutable(
-		join(bin, "ffmpeg"),
 		"#!/bin/sh\necho '[Parsed_volumedetect_0 @ 0x1234] mean_volume: -inf dB' >&2\necho '[Parsed_volumedetect_0 @ 0x1234] max_volume: -inf dB' >&2\nexit 0\n",
 	);
 	await withEnv({ PATH: bin, MICME_MIN_MAX_VOLUME_DB: "-50" }, async () => {
 		await assert.rejects(validateRecordedAudio(input), /almost-silent audio \(max -inf dB/);
 	});
+});
+
+test("Linux silence diagnostic names the setting used by the Pulse recorder", async (t) => {
+	if (process.platform === "win32") {
+		t.skip("POSIX shell shims are not portable to Windows");
+		return;
+	}
+
+	const root = await mkdtemp(join(tmpdir(), "micme-audio-pulse-silence-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const input = join(root, "raw.wav");
+	await writeExecutable(join(root, "ffmpeg"), "#!/bin/sh\necho '[Parsed_volumedetect_0 @ 0x1234] max_volume: -80 dB' >&2\n");
+
+	await withPlatform("linux", () => withEnv(
+		{
+			PATH: root,
+			PI_CODING_AGENT_DIR: root,
+			MICME_RECORD_COMMAND: undefined,
+			MICME_PULSE_SOURCE: "alsa_input.usb",
+			MICME_MIN_MAX_VOLUME_DB: "-50",
+			MICME_VALIDATE_AUDIO: "1",
+			MICME_SKIP_AUDIO_VALIDATION: "0",
+		},
+		async () => {
+			const { args } = buildRecorderCommand(input);
+			const formatIndex = args.indexOf("-f");
+			assert.deepEqual(args.slice(formatIndex, formatIndex + 4), ["-f", "pulse", "-i", "alsa_input.usb"]);
+			await assert.rejects(validateRecordedAudio(input), /almost-silent audio.*set MICME_PULSE_SOURCE to the real microphone/);
+		},
+	));
 });
 
 test("audio validation rejects missing, malformed, partial, and truncated metrics", async (t) => {

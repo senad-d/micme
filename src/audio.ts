@@ -64,6 +64,7 @@ const DEVICE_PANEL_MAX_WIDTH = 100;
 const DEVICE_PANEL_MIN_WIDTH = 36;
 const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
 const FFMPEG_SIGNAL_STOP_EXIT_CODE = 255;
+const PULSE_SOURCE_KEY = "MICME_PULSE_SOURCE";
 const FFMPEG_CONTEXT_PREFIX_PATTERN = /^\[[^[\]]+ @ 0x[\da-f]+\]\s*/i;
 const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
 const DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN = /^"(.+)"$/;
@@ -745,10 +746,13 @@ export async function validateRecordedAudio(audioPath: string, signal?: AbortSig
 
 	const minimumMaxVolumeDb = getMinMaxVolumeDb();
 	if (diagnostics.maxVolumeDb < minimumMaxVolumeDb) {
+		const deviceKey = process.platform === "linux" ? PULSE_SOURCE_KEY
+			: process.platform === "win32" ? "MICME_DSHOW_AUDIO_DEVICE"
+			: "MICME_AUDIO_DEVICE";
 		throw new Error(
 			`Micme recorded almost-silent audio (max ${formatVolumeDb(diagnostics.maxVolumeDb)} dB; threshold ${minimumMaxVolumeDb.toFixed(1)} dB). ` +
 				"Whisper often hallucinates phrases like 'Thank you very much' from silence. " +
-				`Run /micme devices and set ${process.platform === "win32" ? "MICME_DSHOW_AUDIO_DEVICE" : "MICME_AUDIO_DEVICE"} to the real microphone, or set MICME_VALIDATE_AUDIO=0 to bypass this check.`,
+				`Run /micme devices and set ${deviceKey} to the real microphone, or set MICME_VALIDATE_AUDIO=0 to bypass this check.`,
 		);
 	}
 
@@ -812,7 +816,7 @@ export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioP
 	}
 
 	if (process.platform === "linux") {
-		const input = env("MICME_PULSE_SOURCE") || "default";
+		const input = env(PULSE_SOURCE_KEY) || "default";
 		const args = buildFfmpegRecorderArgs("pulse", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
 		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
 	}
