@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -62,6 +62,8 @@ type JsonObject = Record<string, unknown>;
 type NumericSettingBounds = { minimum: number; maximum: number };
 type ConfigLockLease = { path: string; ownerPath: string; token: string };
 
+class NonRegularConfigError extends Error {}
+
 export type MicmeConfigWriteOptions = {
 	signal?: AbortSignal;
 	lockTimeoutMs?: number;
@@ -115,16 +117,34 @@ export function requireValidMicmeConfig() {
 
 export function loadMicmeJson(): MicmeConfigState {
 	const path = getMicmeConfigPath();
-	if (!existsSync(path)) return { path, values: {} };
-
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
+		const source = readMicmeConfigSource(path);
+		if (source === undefined) return { path, values: {} };
+		const parsed: unknown = JSON.parse(source);
 		if (!isJsonObject(parsed)) {
 			return { path, values: {}, error: "top-level value must be a JSON object" };
 		}
 		return { path, values: extractMicmeValues(parsed) };
-	} catch {
-		return { path, values: {}, error: "file is not valid JSON" };
+	} catch (error) {
+		return { path, values: {}, error: error instanceof NonRegularConfigError ? error.message : "file is not valid JSON" };
+	}
+}
+
+function readMicmeConfigSource(path: string): string | undefined {
+	let fd: number;
+	try {
+		// A blocking open could hang on a writerless FIFO before we can check its type.
+		fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+	} catch (error) {
+		if (isNodeError(error, "ENOENT")) return undefined;
+		throw error;
+	}
+
+	try {
+		if (!fstatSync(fd).isFile()) throw new NonRegularConfigError("not a regular file");
+		return readFileSync(fd, "utf8").replace(/^\uFEFF/, "");
+	} finally {
+		closeSync(fd);
 	}
 }
 
@@ -543,20 +563,20 @@ function parseFiniteNumber(value: string | undefined) {
 }
 
 function readMicmeJsonObjectForWrite(configPath: string): JsonObject {
-	if (!existsSync(configPath)) return { $schema: MICME_SCHEMA_URL };
-
-	let source: string;
+	let source: string | undefined;
 	let parsed: JsonObject;
 	const preserved = { count: 0 };
 	try {
-		source = readFileSync(configPath, "utf8").replace(/^\uFEFF/, "");
+		source = readMicmeConfigSource(configPath);
+		if (source === undefined) return { $schema: MICME_SCHEMA_URL };
 		const value: unknown = JSON.parse(source, preserveConfigNumber.bind(undefined, preserved));
 		// The reviver wraps numbers in objects, so check the original root token too.
 		if (!isJsonObject(value) || !source.trimStart().startsWith("{")) throw new Error("top-level value must be a JSON object");
 		parsed = value;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Cannot save Micme config: ${configPath} is invalid JSON (${message}). Fix or remove it first.`, { cause: error });
+		const reason = error instanceof NonRegularConfigError ? message : `invalid JSON (${message})`;
+		throw new Error(`Cannot save Micme config: ${configPath} is ${reason}. Fix or remove it first.`, { cause: error });
 	}
 
 	// The reviver never sees values shadowed by duplicate keys. Count tokens in the
