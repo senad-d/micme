@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { delimiter, join, win32 } from "node:path";
 import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } from "./constants.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
 import { sanitizeTerminalOutput, stripTerminalControlSequences } from "./terminal-text.ts";
@@ -129,7 +129,12 @@ export function runShell(command: string, timeoutMs: number, options: RunProcess
 
 export function shellCommand(command: string): CommandSpec {
 	if (process.platform === "win32") {
-		return { command: "cmd.exe", args: ["/d", "/s", "/c", command], display: command };
+		// Use the host's Windows installation directory, not ComSpec or executable lookup.
+		const systemRoot = process.env.SystemRoot;
+		if (!systemRoot || !/^[a-z]:[\\/]/i.test(systemRoot)) {
+			throw new Error("Micme cannot locate the Windows system shell: SystemRoot must be a drive-qualified absolute path.");
+		}
+		return { command: win32.join(systemRoot, "System32", "cmd.exe"), args: ["/d", "/s", "/c", command], display: command };
 	}
 	return { command: "sh", args: ["-lc", command], display: command };
 }
