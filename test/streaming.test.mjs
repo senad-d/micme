@@ -15,6 +15,7 @@ const {
 	readStreamingOutputFrames,
 	sanitizeStreamingText,
 	shouldResetStreamingPending,
+	streamingWordOverlap,
 	clearStreamingFlush,
 } = await import("../src/streaming.ts");
 
@@ -178,6 +179,44 @@ test("rolling window frames do not duplicate overlap words", () => {
 	assert.deepEqual(harness.state.emittedWords, ["Cat", "is", "white"]);
 	assert.ok(!getStreamingTranscript(harness.state).includes("is is"));
 	assertAppendOnly(harness.updates);
+});
+
+test("rolling stream preview and stop flush deduplicate repeated words", () => {
+	const harness = runFrames([
+		"Please add go RED go BLUE! go",
+		"GO red go blue go now",
+	]);
+
+	assert.deepEqual(harness.updates, [
+		"Please add GO red go blue go",
+		"Please add GO red go blue go now ",
+	]);
+});
+
+test("streaming overlap finds the longest normalized match through repeated words", () => {
+	const previous = ["earlier", "A", "b", "a", "B", "a", "b", '"A"', "C!", "a"];
+	const current = ["a", "B", "a", "b", "a", "c", "a", "next", "word"];
+
+	// The final "a" also matches by itself, but the longest suffix spans seven words.
+	assert.equal(streamingWordOverlap(previous, current), 7);
+});
+
+test("streaming overlap reads disjoint frames within a linear bound", () => {
+	const frameSize = 4_096;
+	const readBudget = 4 * frameSize;
+	let reads = 0;
+	const trackReads = {
+		get(target, key, receiver) {
+			if (typeof key === "string" && /^\d+$/.test(key) && ++reads > readBudget) {
+				assert.fail(`overlap exceeded ${readBudget} indexed reads for two ${frameSize}-word frames`);
+			}
+			return Reflect.get(target, key, receiver);
+		},
+	};
+	const previous = new Proxy(Array(frameSize).fill("first"), trackReads);
+	const current = new Proxy(Array(frameSize).fill("second"), trackReads);
+
+	assert.equal(streamingWordOverlap(previous, current), 0);
 });
 
 test("unstable corrections can change internally without editor churn", () => {
