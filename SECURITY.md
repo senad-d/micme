@@ -38,7 +38,7 @@ Micme spawns local processes for recording and transcription:
 - `python -I` only for optional Python Whisper model-name discovery in `/micme conf`; isolated mode avoids importing project-local Python files.
 - Optional user-provided shell commands in `MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`.
 
-The default process output is capped. Terminal control sequences (including 8-bit C1 forms) and standalone C1 controls are stripped from process output, transcript text, device panels, and configuration display values before they are shown or inserted into pi.
+Micme retains up to 100,000 characters each of captured stdout and stderr. This limit does not apply to transcript files: Micme reads regular transcript files in full. Terminal control sequences (including 8-bit C1 forms) and standalone C1 controls are stripped from process output, transcript text, device panels, and configuration display values before they are shown or inserted into pi.
 
 ## Custom command risks
 
