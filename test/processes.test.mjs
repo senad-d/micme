@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 
@@ -191,35 +192,50 @@ test("Windows shell selection fails closed without a drive-qualified system root
 	}
 });
 
+function mockHookLaunch(t) {
+	const requests = [];
+	const spawn = childProcess.spawn;
+	const spawnMock = t.mock.method(childProcess, "spawn", (_command, args, options) => {
+		const launcher = spawn(process.execPath, args, options);
+		const send = launcher.send.bind(launcher);
+		launcher.send = (message, ...rest) => {
+			if (typeof message !== "object") return send(message, ...rest);
+			requests.push(message);
+			// Keep the actual supervisor and redirect only the hook's executable.
+			return send({ ...message, command: process.execPath, args: ["-p", String.raw`'hook\x20output'`] }, ...rest);
+		};
+		return launcher;
+	});
+	syncBuiltinESMExports();
+	t.after(() => {
+		spawnMock.mock.restore();
+		syncBuiltinESMExports();
+	});
+	return requests;
+}
+
 test("configured Windows hooks pass the system interpreter and original shell arguments to spawn", async (t) => {
 	const project = await mkdtemp(join(tmpdir(), "micme-hook-spawn-"));
 	t.after(() => rm(project, { recursive: true, force: true }));
 	const audioPath = join(project, "raw.wav");
 	const recordCommand = 'echo "recording hook"';
 	const transcribeCommand = 'echo "transcription hook"';
-	const spawn = childProcess.spawn;
-	// Substitute a portable child at the OS boundary; keep the hook and runner logic real.
-	const spawnMock = t.mock.method(childProcess, "spawn", (_command, _args, options) => spawn(process.execPath, ["-p", "'hook output'"], options));
-	syncBuiltinESMExports();
-	try {
-		const [recording, transcription] = withEnv({ SystemRoot: String.raw`D:\Windows`, MICME_RECORD_COMMAND: recordCommand }, () =>
-			withPlatform("win32", () => [
-				spawnRecording(buildRecorderCommand(audioPath), audioPath, project),
-				transcribeWithCustomCommand(transcribeCommand, audioPath, project),
-			]),
-		);
-		const [exit, transcript] = await Promise.all([recording.exitPromise, transcription]);
-		assert.equal(exit.code, 0);
-		assert.equal(recording.stdout().trim(), "hook output");
-		assert.equal(transcript.trim(), "hook output");
-		assert.deepEqual(spawnMock.mock.calls.map(({ arguments: [command, args] }) => [command, args]), [
-			[String.raw`D:\Windows\System32\cmd.exe`, ["/d", "/s", "/c", recordCommand]],
-			[String.raw`D:\Windows\System32\cmd.exe`, ["/d", "/s", "/c", transcribeCommand]],
-		]);
-	} finally {
-		spawnMock.mock.restore();
-		syncBuiltinESMExports();
-	}
+	const requests = mockHookLaunch(t);
+	const [recording, transcription] = withEnv({ SystemRoot: String.raw`D:\Windows`, MICME_RECORD_COMMAND: recordCommand }, () =>
+		withPlatform("win32", () => [
+			spawnRecording(buildRecorderCommand(audioPath), audioPath, project),
+			transcribeWithCustomCommand(transcribeCommand, audioPath, project),
+		]),
+	);
+	t.after(() => stopProcess(recording));
+	const [exit, transcript] = await Promise.all([recording.exitPromise, transcription]);
+	assert.equal(exit.code, 0);
+	assert.equal(recording.stdout().trim(), "hook output");
+	assert.equal(transcript.trim(), "hook output");
+	assert.deepEqual(requests.map(({ command, args }) => [command, args]), [
+		[String.raw`D:\Windows\System32\cmd.exe`, ["/d", "/s", "/c", recordCommand]],
+		[String.raw`D:\Windows\System32\cmd.exe`, ["/d", "/s", "/c", transcribeCommand]],
+	]);
 });
 
 for (const delayed of [false, true]) {
@@ -231,8 +247,7 @@ for (const delayed of [false, true]) {
 		const tempDir = join(root, "%USERNAME%", "a & b!USERNAME!^");
 		const audioPath = join(tempDir, "raw.wav");
 		const template = 'tool {audio} {audio} {transcript} "{tempDirRaw}" {unknown}';
-		const spawn = childProcess.spawn;
-		const spawnMock = t.mock.method(childProcess, "spawn", () => spawn(process.execPath, ["-p", "'hook output'"]));
+		const requests = mockHookLaunch(t);
 		const probeMock = t.mock.method(childProcess, "spawnSync", () => ({ status: 0, stdout: delayed ? "micmeprobe\r\n" : "micme!probe\r\n" }));
 		syncBuiltinESMExports();
 		try {
@@ -242,11 +257,12 @@ for (const delayed of [false, true]) {
 					transcribeWithCustomCommand(template, audioPath, tempDir),
 				]),
 			);
+			t.after(() => stopProcess(recording));
 			const [exit, transcript] = await Promise.all([recording.exitPromise, transcription]);
 			assert.equal(exit.code, 0);
 			assert.equal(transcript.trim(), "hook output");
-			assert.equal(spawnMock.mock.calls.length, 2);
-			for (const { arguments: [, args, options] } of spawnMock.mock.calls) {
+			assert.equal(requests.length, 2);
+			for (const { args, spawnOptions: options } of requests) {
 				assert.deepEqual(args.slice(0, -1), ["/d", "/s", "/c"], "the hook must inherit the shell's expansion mode");
 				const delimiter = delayed ? "!" : "%";
 				const refs = new RegExp(String.raw`^"tool "${delimiter}(\w+)${delimiter}" "${delimiter}\1${delimiter}" "${delimiter}(\w+)${delimiter}" `).exec(args.at(-1));
@@ -260,7 +276,6 @@ for (const delayed of [false, true]) {
 				assert.equal(Object.hasOwn(process.env, refs[2]), false);
 			}
 		} finally {
-			spawnMock.mock.restore();
 			probeMock.mock.restore();
 			syncBuiltinESMExports();
 		}
@@ -316,12 +331,38 @@ test("both Windows hooks preserve literal paths and the host's Raw expansion beh
 	assert.deepEqual(JSON.parse(transcript), expected);
 });
 
-function mockSignalChild(t, kill) {
+async function loadPosixSignalRunner() {
+	if (process.platform !== "win32") return { runProcess, spawnRecording, stopProcess, stopRecorder };
+	// These are mock supervisor tests, not tests of the host's process manager.
+	const platform = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+	try {
+		return await import("../src/processes.ts?mock-posix-supervisor");
+	} finally {
+		Object.defineProperty(process, "platform", platform);
+	}
+}
+
+const signalRunner = await loadPosixSignalRunner();
+
+function mockSignalChild(t, signal) {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
-	const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null, kill });
+	const child = Object.assign(new EventEmitter(), {
+		pid: 123,
+		exitCode: null,
+		signalCode: null,
+		connected: true,
+		stdout: new PassThrough(),
+		send(message, callback) {
+			if (typeof message === "string") signal.call(this, message, callback);
+		},
+		disconnect() { this.connected = false; },
+		unref() {},
+	});
 	const spawnMock = t.mock.method(childProcess, "spawn", () => child);
 	syncBuiltinESMExports();
 	t.after(() => {
+		t.mock.timers.reset();
 		spawnMock.mock.restore();
 		syncBuiltinESMExports();
 	});
@@ -334,15 +375,17 @@ function signalPermissionError() {
 
 test("process abort reports failed escalation and handles child errors until close", async (t) => {
 	const signals = [];
-	const child = mockSignalChild(t, function (signal) {
+	const child = mockSignalChild(t, function (signal, callback) {
 		signals.push(signal);
 		this.emit("error", signalPermissionError());
-		return false;
+		callback(signalPermissionError());
 	});
 	const controller = new AbortController();
-	const run = runProcess("mock-process", [], 10_000, { signal: controller.signal }).catch((error) => error);
+	const run = signalRunner.runProcess("mock-process", [], 10_000, { signal: controller.signal }).catch((error) => error);
 	controller.abort();
+	await setImmediate();
 	t.mock.timers.tick(1_000);
+	await setImmediate();
 	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 
 	t.mock.timers.tick(1_000);
@@ -357,19 +400,20 @@ test("process abort reports failed escalation and handles child errors until clo
 
 test("recorder stop failure does not settle a live child", async (t) => {
 	const signals = [];
-	const child = mockSignalChild(t, function (signal) {
+	const child = mockSignalChild(t, function (signal, callback) {
 		signals.push(signal);
-		if (signal === "SIGINT") return true;
+		if (signal === "SIGINT") return callback(null);
 		this.emit("error", signalPermissionError());
-		return false;
+		callback(signalPermissionError());
 	});
-	const recording = spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, "raw.wav", ".");
-	const stop = stopProcess(recording).catch((error) => error);
+	const recording = signalRunner.spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, "raw.wav", ".");
+	const stop = signalRunner.stopProcess(recording).catch((error) => error);
+	await setImmediate();
 	t.mock.timers.tick(RECORDER_STOP_GRACE_MS);
-	await Promise.resolve();
+	await setImmediate();
 	assert.equal(recording.isSettled(), false);
 	t.mock.timers.tick(1_000);
-	await Promise.resolve();
+	await setImmediate();
 	assert.deepEqual(signals, ["SIGINT", "SIGTERM", "SIGKILL"]);
 
 	t.mock.timers.tick(1_000);
@@ -388,8 +432,9 @@ test("a real close wins over a failed SIGKILL on timeout", async (t) => {
 	const child = mockSignalChild(t, () => {
 		throw signalPermissionError();
 	});
-	const run = runProcess("mock-process", [], 25);
+	const run = signalRunner.runProcess("mock-process", [], 25);
 	t.mock.timers.tick(25);
+	await setImmediate();
 	child.emit("close", 0, null);
 	const result = await run;
 	assert.equal(result.code, 0);
@@ -443,6 +488,221 @@ test("process runners capture output, timeouts, and shell details", async (t) =>
 	await assert.rejects(readFile(join(temp, "file")), /ENOENT/);
 });
 
+async function makeProcessTree(t, { detached = false, closeStderrOnTerm = false, closeBeforeStop = false, flushOnStop = false } = {}) {
+	const root = await mkdtemp(join(tmpdir(), "micme-process-tree-"));
+	const ready = join(root, "ready.json");
+	const audioPath = join(root, "recording.wav");
+	const worker = `
+		const fs = require("node:fs");
+		const [ready, wrapperPid] = process.argv.slice(1);
+		process.on("SIGINT", () => {});
+		process.on("SIGTERM", () => { if (${closeStderrOnTerm}) fs.closeSync(2); });
+		process.stderr.write("worker ready\\n");
+		if (${closeBeforeStop}) fs.closeSync(2);
+		if (${flushOnStop}) process.stdin.on("data", (chunk) => {
+			if (!chunk.includes("q")) return;
+			fs.writeFileSync(${JSON.stringify(audioPath)}, Buffer.alloc(600));
+			process.exit(0);
+		});
+		fs.writeFileSync(ready + ".tmp", JSON.stringify([Number(wrapperPid), process.pid]));
+		fs.renameSync(ready + ".tmp", ready);
+		setTimeout(() => process.exit(0), 10_000);
+	`;
+	const wrapper = `
+		const worker = require("node:child_process").spawn(process.execPath,
+			["-e", ${JSON.stringify(worker)}, ${JSON.stringify(ready)}, String(process.pid)],
+			{ stdio: [${JSON.stringify(flushOnStop ? "inherit" : "ignore")}, "ignore", "inherit"], detached: ${detached}, windowsHide: true });
+		if (${detached || closeBeforeStop || flushOnStop}) worker.unref();
+	`;
+	t.after(async () => {
+		const pids = await readFile(ready, "utf8").then(JSON.parse, () => []);
+		for (const pid of pids) {
+			if (await isProcessRunning(pid)) process.kill(pid, "SIGKILL");
+		}
+		await rm(root, { recursive: true, force: true });
+	});
+	return { root, ready, audioPath, args: ["-e", wrapper] };
+}
+
+async function isProcessRunning(pid) {
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		if (error.code === "ESRCH") return false;
+		throw error;
+	}
+	if (process.platform !== "linux") return true;
+	// A reparented worker can remain a zombie in a container after it has exited.
+	const proc = await readFile(`/proc/${pid}/stat`, "utf8").catch((error) => {
+		if (error.code === "ENOENT" || error.code === "ESRCH") return "";
+		throw error;
+	});
+	return Boolean(proc) && !/\) Z /.test(proc);
+}
+
+async function assertTreeExited(ready) {
+	await assertPidsExited(JSON.parse(await readFile(ready, "utf8")));
+}
+
+async function assertPidsExited(pids) {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (!(await Promise.all(pids.map(isProcessRunning))).some(Boolean)) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	assert.fail(`wrapper or worker still running: ${pids.join(", ")}`);
+}
+
+test("timeout stops both the wrapper and its pipe-inheriting worker", async (t) => {
+	const fixture = await makeProcessTree(t);
+	const outcome = await raceWithTimeout(runProcess(process.execPath, fixture.args, 1_500), 5_000);
+	assert.equal(outcome?.timedOut, true);
+	assert.match(outcome.stderr, /worker ready/);
+	await assertTreeExited(fixture.ready);
+});
+
+test("abort escalates when the pipe-inheriting worker closes stderr but keeps running", async (t) => {
+	const fixture = await makeProcessTree(t, { closeStderrOnTerm: true });
+	const controller = new AbortController();
+	const operation = runProcess(process.execPath, fixture.args, 8_000, { signal: controller.signal });
+	await waitForFile(fixture.ready);
+	controller.abort();
+	const outcome = await raceWithTimeout(operation, 4_000);
+	assert.equal(outcome?.cancelled, true);
+	assert.equal(outcome.timedOut, false);
+	await assertTreeExited(fixture.ready);
+});
+
+test("recorder stop escalates when the wrapper's pipe-inheriting worker ignores graceful signals", async (t) => {
+	const { root, args, ready } = await makeProcessTree(t);
+	const audioPath = join(root, "recording.wav");
+	await writeFile(audioPath, Buffer.alloc(600));
+	const recording = spawnRecording({ command: process.execPath, args, display: "recorder wrapper" }, audioPath, root);
+	await waitForFile(ready);
+	const result = await raceWithTimeout(stopRecorder(recording).then(() => "stopped"), 6_000);
+	assert.equal(result, "stopped");
+	await assertTreeExited(ready);
+});
+
+test("recorder stop lets an owned worker flush but still rejects an earlier zero exit from its wrapper", async (t) => {
+	const { root, ready, audioPath, args } = await makeProcessTree(t, { flushOnStop: true });
+	const recording = spawnRecording({ command: process.execPath, args, display: "recorder wrapper", stopInput: "q\n" }, audioPath, root);
+	await waitForFile(ready);
+	const [wrapper, worker] = JSON.parse(await readFile(ready, "utf8"));
+	await assertPidsExited([wrapper]);
+	assert.equal(await isProcessRunning(worker), true);
+	assert.equal(recording.isSettled(), false, "the worker still owns the recorder pipe");
+
+	await assert.rejects(stopRecorder(recording), /recorder exited unexpectedly \(code 0\)/);
+	assert.equal((await stat(audioPath)).size, 600, "the worker should still receive the graceful stop input");
+	await assertPidsExited([worker]);
+});
+
+test("recorder shutdown stops an owned worker after the wrapper and its pipes have closed", async (t) => {
+	const { root, args, ready } = await makeProcessTree(t, { closeBeforeStop: true });
+	const recording = spawnRecording({ command: process.execPath, args, display: "recorder wrapper" }, join(root, "recording.wav"), root);
+	await waitForFile(ready);
+	assert.equal((await raceWithTimeout(recording.exitPromise, 2_000))?.code, 0, "wrapper and pipes must close before shutdown");
+	const [, worker] = JSON.parse(await readFile(ready, "utf8"));
+	assert.equal(await isProcessRunning(worker), true, "worker must still be running before shutdown");
+
+	const result = await raceWithTimeout(stopProcess(recording), 5_000);
+	assert.equal(result?.code, 0);
+	await assertTreeExited(ready);
+});
+
+test("recorder shutdown does not mistake a truncated process snapshot for an empty tree", { skip: process.platform === "win32" }, async (t) => {
+	const { root, args, ready } = await makeProcessTree(t, { closeBeforeStop: true });
+	const recording = spawnRecording({ command: process.execPath, args, display: "recorder wrapper" }, join(root, "recording.wav"), root);
+	await waitForFile(ready);
+	assert.equal((await raceWithTimeout(recording.exitPromise, 2_000))?.code, 0);
+	const [, worker] = JSON.parse(await readFile(ready, "utf8"));
+	assert.equal(await isProcessRunning(worker), true);
+
+	const execFile = childProcess.execFile;
+	let truncated = false;
+	const snapshot = t.mock.method(childProcess, "execFile", (file, commandArgs, options, callback) => {
+		assert.equal(file, "/bin/ps");
+		if (truncated) return execFile("/bin/ps", commandArgs, options, callback);
+		truncated = true;
+		// A timeout can destroy the output streams after ps has exited with code 0.
+		setTimeout(callback, options.timeout + 1, null, "", "");
+		return { killed: true, exitCode: 0, signalCode: null };
+	});
+	syncBuiltinESMExports();
+	t.after(() => {
+		snapshot.mock.restore();
+		syncBuiltinESMExports();
+	});
+
+	assert.equal((await raceWithTimeout(stopProcess(recording), 5_000))?.code, 0);
+	await assertTreeExited(ready);
+});
+
+test("recorder shutdown never signals a recycled POSIX process group ID", { skip: process.platform === "win32" }, async (t) => {
+	const { root, args, ready } = await makeProcessTree(t, { closeBeforeStop: true });
+	const kill = process.kill;
+	const straySignals = [];
+	let groupReused = false;
+	// Simulate reuse without signalling any unrelated OS process.
+	t.mock.method(process, "kill", (pid, signal) => {
+		if (pid >= 0) return kill(pid, signal);
+		if (straySignals.length) throw Object.assign(new Error("group no longer exists"), { code: "ESRCH" });
+		if (groupReused && signal !== 0) straySignals.push(signal);
+		return true;
+	});
+	const recording = spawnRecording({ command: process.execPath, args, display: "recorder wrapper" }, join(root, "recording.wav"), root);
+	await waitForFile(ready);
+	assert.equal((await raceWithTimeout(recording.exitPromise, 2_000))?.code, 0);
+	const [, worker] = JSON.parse(await readFile(ready, "utf8"));
+	assert.equal(await isProcessRunning(worker), true);
+	kill(worker, "SIGKILL");
+	await assertPidsExited([worker]);
+	// If ownership is retained by a separate launcher, simulate its loss too.
+	const launcher = recording.process;
+	if (launcher.exitCode === null && launcher.signalCode === null) {
+		const closed = once(launcher, "close");
+		launcher.kill("SIGKILL");
+		assert.ok(await raceWithTimeout(closed, 2_000), "launcher must have exited before simulating reuse");
+	}
+	groupReused = true;
+	assert.equal((await raceWithTimeout(stopProcess(recording), 1_000))?.code, 0);
+	assert.deepEqual(straySignals, []);
+});
+
+test("successful runs leave background workers with closed pipes alone", async (t) => {
+	const { args, ready } = await makeProcessTree(t, { closeBeforeStop: true });
+	const result = await runProcess(process.execPath, args, 2_000);
+	assert.equal(result.code, 0);
+	await waitForFile(ready);
+	const [, worker] = JSON.parse(await readFile(ready, "utf8"));
+	assert.equal(await isProcessRunning(worker), true);
+});
+
+test("timeout settles even when a worker outside the process group holds the pipe", { skip: process.platform === "win32" }, async (t) => {
+	const fixture = await makeProcessTree(t, { detached: true });
+	const outcome = await raceWithTimeout(runProcess(process.execPath, fixture.args, 1_500), 4_000);
+	assert.equal(outcome?.timedOut, true);
+	assert.notEqual(outcome.code, 0, "a successful wrapper exit must not mask the timeout");
+	assert.match(outcome.stderr, /worker ready/);
+	const [wrapper, worker] = JSON.parse(await readFile(fixture.ready, "utf8"));
+	assert.equal(await isProcessRunning(wrapper), false);
+	assert.equal(await isProcessRunning(worker), true);
+});
+
+test("owned recorder launch applies child-only environment options to the hook", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-hook-env-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const recording = spawnRecording({
+		command: process.execPath,
+		args: ["-e", "process.stdout.write(process.env.MICME_TEST_LAUNCH_VALUE ?? '')"],
+		display: "node",
+		spawnOptions: { env: { ...process.env, MICME_TEST_LAUNCH_VALUE: "hook-only" } },
+	}, join(root, "recording.wav"), root);
+	t.after(() => stopProcess(recording));
+	assert.equal((await recording.exitPromise).code, 0);
+	assert.equal(recording.stdout(), "hook-only");
+});
+
 test("recording process helpers collect output, meter levels, and stop safely", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-recording-process-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -486,6 +746,7 @@ test("recording process helpers collect output, meter levels, and stop safely", 
 			},
 		},
 		isSettled: () => false,
+		getExit: () => ({ code: null, signal: null }),
 		exitPromise: Promise.resolve({ code: 0, signal: null }),
 	};
 	assert.equal(sendStopInput(active), true);
@@ -506,37 +767,72 @@ test("recording process helpers collect output, meter levels, and stop safely", 
 	await stopRecorder({ ...missingAudio, audioPath, stderr: () => "" });
 });
 
+test("recorder stop lets the hook finish through stdin before terminating the tree", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-recorder-graceful-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const audioPath = join(root, "graceful.wav");
+	const ready = join(root, "ready");
+	const graceful = spawnRecording(
+		{
+			command: process.execPath,
+			args: ["-e", `
+				const fs = require("node:fs");
+				const [ready, audio] = process.argv.slice(1);
+				process.stdin.setEncoding("utf8");
+				process.stdin.on("data", (data) => {
+					if (data.includes("q")) {
+						fs.writeFileSync(audio, Buffer.alloc(600));
+						process.exit(0);
+					}
+				});
+				fs.writeFileSync(ready, "");
+				setTimeout(() => process.exit(2), 10_000);
+			`, ready, audioPath],
+			display: "graceful recorder",
+			stopInput: "q\n",
+		},
+		audioPath,
+		root,
+	);
+	await waitForFile(ready);
+	await stopRecorder(graceful);
+	assert.deepEqual(await graceful.exitPromise, { code: 0, signal: null });
+});
+
 test("recorder stop rejects a zero exit before stdio closes", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-recorder-exit-before-close-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const audioPath = join(root, "raw.wav");
 	await writeFile(audioPath, Buffer.alloc(600));
 
-	const kill = t.mock.fn(() => false);
-	const child = mockSignalChild(t, kill);
-	const recording = spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, audioPath, root);
+	const dispatch = t.mock.fn(() => assert.fail("cannot signal a closed supervisor"));
+	const child = mockSignalChild(t, dispatch);
+	const recording = signalRunner.spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, audioPath, root);
+	child.disconnect();
 	child.exitCode = 0;
 	child.emit("exit", 0, null);
-	const stop = stopRecorder(recording);
+	const stop = signalRunner.stopRecorder(recording);
 	child.emit("close", 0, null);
 
 	await assert.rejects(stop, /recorder exited unexpectedly \(code 0\)/);
-	assert.equal(kill.mock.callCount(), 0);
+	assert.equal(dispatch.mock.callCount(), 0);
 });
 
 test("recorder stop reports the known exit when stdio does not close within the grace period", async (t) => {
-	const kill = t.mock.fn(() => false);
-	const child = mockSignalChild(t, kill);
-	const recording = spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, "raw.wav", ".");
+	const dispatch = t.mock.fn(() => assert.fail("cannot signal a closed supervisor"));
+	const child = mockSignalChild(t, dispatch);
+	const recording = signalRunner.spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, "raw.wav", ".");
+	child.disconnect();
 	child.signalCode = "SIGTERM";
 	child.emit("exit", null, "SIGTERM");
-	const stop = stopRecorder(recording).catch((error) => error);
+	const stop = signalRunner.stopRecorder(recording).catch((error) => error);
 
+	await setImmediate();
 	t.mock.timers.tick(RECORDER_STOP_GRACE_MS);
 	const failure = await Promise.race([stop, setImmediate("pending")]);
 	assert.match(failure?.message ?? "", /recorder exited unexpectedly \(signal SIGTERM\)/);
 	assert.equal(recording.isSettled(), false);
-	assert.equal(kill.mock.callCount(), 0);
+	assert.equal(dispatch.mock.callCount(), 0);
 	child.emit("close", null, "SIGTERM");
 });
 
@@ -588,24 +884,6 @@ test("recorder stop rejects spontaneous failures and accepts owned stop paths", 
 	);
 	await signalExit.exitPromise;
 	await assert.rejects(stopRecorder(signalExit), /recorder exited unexpectedly \(signal SIGTERM\)/);
-
-	const gracefulAudio = join(root, "graceful.wav");
-	const graceful = spawnRecording(
-		{
-			command: process.execPath,
-			args: [
-				"-e",
-				`require("node:fs").writeFileSync(${JSON.stringify(gracefulAudio)}, Buffer.alloc(600)); process.stdin.setEncoding("utf8"); process.stdin.on("data", (data) => { if (data.includes("q")) process.exit(0); }); setInterval(() => {}, 1000);`,
-			],
-			display: "graceful recorder",
-			stopInput: "q\n",
-		},
-		gracefulAudio,
-		root,
-	);
-	await waitForFile(gracefulAudio);
-	await stopRecorder(graceful);
-	assert.equal(graceful.stopRequested, true);
 
 	const escalatedAudio = join(root, "escalated.wav");
 	const escalated = spawnRecording(
