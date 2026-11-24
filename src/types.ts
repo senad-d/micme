@@ -1,4 +1,5 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
+import type { RecordingDirectory } from "./recording-dir.ts";
 
 export type TranscriptionMode = "clip" | "stream";
 export type TranscribeBackend = "auto" | "whisper.cpp" | "python" | "custom";
@@ -83,6 +84,7 @@ export type Recording = {
 	process: ChildProcess;
 	audioPath: string;
 	tempDir: string;
+	directory?: RecordingDirectory;
 	startedAt: number;
 	command: CommandSpec;
 	audioLevel: () => number;

@@ -1,12 +1,13 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { accessSync, constants as fsConstants, statSync } from "node:fs";
+import { accessSync, closeSync, constants as fsConstants, fstatSync, statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
-import { delimiter, join, win32 } from "node:path";
+import { delimiter, join, resolve, win32 } from "node:path";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } from "./constants.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
 import { observePosixGroupClose, posixGroupHasWorkers, posixRecorderState, releasePosixGroup, signalPosixGroup, spawnPosixGroupProcess } from "./posix-process-group.ts";
+import type { RecordingDirectory } from "./recording-dir.ts";
 import { sanitizeTerminalOutput, stripTerminalControlSequences } from "./terminal-text.ts";
 import type { CommandSpec, ExitResult, Recording, RunResult } from "./types.ts";
 import { WINDOWS_JOB_STOP_EXIT_CODE, WindowsHookLaunchError, closeWindowsJob, spawnWindowsJobProcess, terminateWindowsJob, windowsJobHasProcesses } from "./windows-process-job.ts";
@@ -18,10 +19,12 @@ const HOST_IS_WINDOWS = process.platform === "win32";
 
 type SpawnSpec = Pick<CommandSpec, "command" | "args" | "spawnOptions">;
 
-function spawnOwnedProcess({ command, args, spawnOptions }: SpawnSpec, pipeInput = false, retainUntilStop = false) {
-	return HOST_IS_WINDOWS
-		? spawnWindowsJobProcess(command, args, pipeInput, retainUntilStop, spawnOptions)
-		: spawnPosixGroupProcess(command, args, pipeInput, spawnOptions);
+function spawnOwnedProcess({ command, args, spawnOptions }: SpawnSpec, pipeInput = false, retainUntilStop = false, cwdFd?: number) {
+	if (HOST_IS_WINDOWS) return spawnWindowsJobProcess(command, args, pipeInput, retainUntilStop, spawnOptions);
+	// Relative executable paths were resolved from Pi's cwd, not the workspace
+	// entered by a descriptor-relative launch.
+	const executable = cwdFd === undefined ? command : command === "sh" ? "/bin/sh" : resolve(command);
+	return spawnPosixGroupProcess(executable, args, pipeInput, spawnOptions, cwdFd);
 }
 
 function observeProcessClose(child: ChildProcess, reportExit?: (exit: ExitResult) => void) {
@@ -50,8 +53,8 @@ function observeProcessClose(child: ChildProcess, reportExit?: (exit: ExitResult
 	return { exitPromise, isSettled: () => settled !== undefined, getExit: () => settled ?? getExit() };
 }
 
-export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string): Recording {
-	const child = spawnOwnedProcess(command, Boolean(command.stopInput), true);
+export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string, directory?: RecordingDirectory): Recording {
+	const child = spawnOwnedProcess(command, Boolean(command.stopInput), true, directory?.cwdFd);
 	// The hook can exit while the supervisor and inherited output pipes stay open.
 	let reportExit!: (exit: ExitResult) => void;
 	const exitObserved = new Promise<ExitResult>((resolve) => { reportExit = resolve; });
@@ -82,6 +85,7 @@ export function spawnRecording(command: CommandSpec, audioPath: string, tempDir:
 		process: child,
 		audioPath,
 		tempDir,
+		directory,
 		startedAt: Date.now(),
 		command,
 		audioLevel: () => audioLevel,
@@ -263,11 +267,24 @@ export async function stopRecorder(active: Recording) {
 	const exit = await stopProcess(active);
 	assertExpectedProcessExit(active, exit, "recorder");
 
-	const audioStats = await stat(active.audioPath).catch(() => undefined);
-	if (!audioStats || audioStats.size < MIN_AUDIO_BYTES) {
+	const audioSize = active.directory ? getOwnedRecordingSize(active.audioPath, active.directory) : (await stat(active.audioPath).catch(() => undefined))?.size ?? 0;
+	if (audioSize < MIN_AUDIO_BYTES) {
 		const stderr = formatProcessOutput(active.stderr());
 		const suffix = stderr ? `\nRecorder output:\n${stderr}` : "";
 		throw new Error(`Micme recorder did not produce usable audio.${suffix}`);
+	}
+}
+
+function getOwnedRecordingSize(path: string, directory: RecordingDirectory) {
+	try {
+		const fd = directory.openFile(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+		try {
+			return fstatSync(fd).size;
+		} finally {
+			closeSync(fd);
+		}
+	} catch {
+		return 0;
 	}
 }
 
@@ -334,6 +351,7 @@ function windowsDelayedExpansion(command: string) {
 
 export type RunProcessOptions = {
 	signal?: AbortSignal;
+	cwdFd?: number;
 };
 
 export function runProcess(command: string, args: string[], timeoutMs: number, options: RunProcessOptions = {}): Promise<RunResult> {
@@ -347,7 +365,7 @@ function cancelledRun(): RunResult {
 async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProcessOptions): Promise<RunResult> {
 	if (options.signal?.aborted) return cancelledRun();
 
-	const child = spawnOwnedProcess(spec);
+	const child = spawnOwnedProcess(spec, false, false, options.cwdFd);
 	const { exitPromise, getExit } = observeProcessClose(child);
 	let stdout = "";
 	let stdoutTruncated = false;
