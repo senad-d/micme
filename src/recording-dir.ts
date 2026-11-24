@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { openSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -38,6 +38,26 @@ export class RecordingDirectory {
 	openFile(path: string, flags: number) {
 		if (this.closed) throw new Error("Micme's recording directory has been closed.");
 		return this.access?.openFile ? this.access.openFile(basename(path), flags) : openSync(path, flags);
+	}
+
+	hasRegularFile(path: string) {
+		if (this.closed) throw new Error("Micme's recording directory has been closed.");
+		if (this.cwdFd === undefined) {
+			return lstatSync(join(this.filesPath, basename(path)), { throwIfNoEntry: false })?.isFile() ?? false;
+		}
+
+		// When there is no usable path to the held directory, check via openat.
+		try {
+			const fd = this.openFile(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+			try {
+				return fstatSync(fd).isFile();
+			} finally {
+				closeSync(fd);
+			}
+		} catch (error) {
+			if (hasCode(error, "ENOENT") || hasCode(error, "ELOOP")) return false;
+			throw error;
+		}
 	}
 
 	async remove() {

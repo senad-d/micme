@@ -237,7 +237,7 @@ const poll = setInterval(() => {
 	);
 }
 
-async function writeFfmpegProcess(path, { verifyInput = false } = {}) {
+async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024 } = {}) {
 	await writeExecutable(
 		path,
 		`#!/usr/bin/env node
@@ -257,7 +257,7 @@ if (output.endsWith("clip.wav")) {
   writeFileSync(output, Buffer.alloc(1024));
   process.exit(0);
 }
-writeFileSync(output, Buffer.alloc(1024));
+if (${rawBytes} > 0) writeFileSync(output, Buffer.alloc(${rawBytes}));
 appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`recorder \${process.pid}\\n\`);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -1712,7 +1712,7 @@ test("a late clip exit returns to idle even if stderr stays open", async (t) => 
 	});
 });
 
-test("a late stream exit stops automatically and shuts down its final-clip recorder", async (t) => {
+async function assertLateStreamFailure(t, rawBytes, { linkInsteadOfClip = false } = {}) {
 	if (process.platform === "win32") {
 		t.skip("POSIX executable fixtures are not portable to Windows");
 		return;
@@ -1726,7 +1726,8 @@ test("a late stream exit stops automatically and shuts down its final-clip recor
 	const processLog = join(root, "processes.log");
 	const exitFile = join(root, "exit");
 	const drainFile = join(root, "drain");
-	await Promise.all([writeFfmpegProcess(ffmpeg), writeLateFailingStreamingProcess(stream), writeTranscriberProcess(transcriber), writeFile(model, "model")]);
+	await Promise.all([writeFfmpegProcess(ffmpeg, { rawBytes }), writeLateFailingStreamingProcess(stream), writeTranscriberProcess(transcriber), writeFile(model, "model")]);
+	const audioDir = join(root, "micme-rec", "rec-001");
 
 	await withEnv(
 		{
@@ -1745,6 +1746,7 @@ test("a late stream exit stops automatically and shuts down its final-clip recor
 			MICME_TEST_PROCESS_LOG: processLog,
 			MICME_TEST_EXIT_FILE: exitFile,
 			MICME_TEST_DRAIN_FILE: drainFile,
+			MICME_RECORD_COMMAND: undefined,
 		},
 		async () => {
 			const harness = createExtensionHarness(root);
@@ -1757,6 +1759,13 @@ test("a late stream exit stops automatically and shuts down its final-clip recor
 					const rows = await readProcessRows(processLog);
 					return rows.some((row) => row.startsWith("recorder ")) && rows.some((row) => row.startsWith("stream "));
 				}, "stream and companion recorder PIDs were not logged");
+				const rawPath = join(audioDir, "raw.wav");
+				const outsideFile = join(root, "outside.wav");
+				assert.deepEqual(await readdir(audioDir), rawBytes ? ["raw.wav"] : []);
+				if (linkInsteadOfClip) {
+					await writeFile(outsideFile, "outside audio");
+					await symlink(outsideFile, rawPath);
+				}
 				const started = await readProcessRows(processLog);
 				assert.deepEqual(started.map((row) => row.split(" ")[0]).sort(), ["recorder", "stream"]);
 				assert.deepEqual(await Promise.all(processIds(started).map(processIsAlive)), [true, true]);
@@ -1770,12 +1779,36 @@ test("a late stream exit stops automatically and shuts down its final-clip recor
 				assert.equal(error.includes("\u001b"), false);
 				assert.deepEqual(await readProcessRows(processLog), started, "partial audio started transcription");
 				await assertProcessesStopped(started);
+				await command.handler("audio", harness.ctx);
+				const audioNotice = harness.uiCalls.at(-1)?.message;
+				if (rawBytes) {
+					assert.equal((await readFile(rawPath)).length, rawBytes);
+					assert.ok(error.includes(`Audio kept for debugging: ${audioDir}`), error);
+					assert.equal(audioNotice, `Last Micme audio directory: ${audioDir}`);
+				} else {
+					await assert.rejects(readdir(audioDir), { code: "ENOENT" });
+					assert.equal(error.includes("Audio kept for debugging:"), false);
+					assert.match(audioNotice ?? "", /^No kept Micme audio/);
+					if (linkInsteadOfClip) assert.equal(await readFile(outsideFile, "utf8"), "outside audio");
+				}
 			} finally {
 				await writeFile(drainFile, "");
 				await emit(harness, "session_shutdown");
 			}
 		},
 	);
+}
+
+test("a late stream exit stops the companion recorder and remembers its partial clip", async (t) => {
+	await assertLateStreamFailure(t, 16);
+});
+
+test("a late stream exit removes the attempt directory when the companion produced no clip", async (t) => {
+	await assertLateStreamFailure(t, 0);
+});
+
+test("a late stream exit ignores a raw.wav symlink without touching its target", async (t) => {
+	await assertLateStreamFailure(t, 0, { linkInsteadOfClip: true });
 });
 
 test("late optional final-clip failure keeps the live-stream fallback without transcribing partial audio", async (t) => {
