@@ -25,6 +25,36 @@ All notable changes to Micme will be documented in this file.
 - Align `micme-doctor` executable/model checks with runtime validation and translation-capable model fallback behavior.
 - Let `MICME_RECORD_COMMAND` use the same `{audio}`, `{tempDir}`, and `{transcript}` placeholders as custom transcription commands.
 
+## [0.3.10] - 2026-11-24
+
+- On Windows, batch shims no longer hide a later native Whisper executable or prevent automatic fallback to Python Whisper.
+- Windows recording now uses the microphone selected in settings after reload, while an unset selection keeps automatic discovery.
+- Recordings in directories with volume-like names are now validated using FFmpeg’s measured volume instead of a value from the directory name.
+- Stopping recording, cancelling transcription, or timing out now cleans up owned hook workers without hanging on inherited pipes, while preserving graceful recorder shutdown.
+- Micme now accepts a custom FFmpeg recorder’s exit code 255 after Micme sends SIGINT, while still rejecting a recorder that already exited with 255.
+- When the primary recorder exits unexpectedly, Micme now clears the recording widget, stops any companion recorder, and reports one error without transcribing partial audio.
+- Mac microphones listed with an FFmpeg context prefix now appear in Micme’s device inventory and picker with their original IDs.
+- Windows recording now preserves the exact spacing in a discovered DirectShow microphone name whether you select it or use automatic discovery.
+- Automatic Windows microphone discovery no longer blocks Pi’s UI or delays shutdown, and device-selection defaults are unchanged.
+- On Linux, the almost-silent audio diagnostic now directs users to MICME_PULSE_SOURCE to select their microphone.
+- Clip transcription now reports an error instead of hanging when a hook leaves a writerless FIFO as its transcript output.
+- Micme no longer pastes or auto-submits a truncated stdout transcript and still uses a complete transcript file when one is available.
+- Micme no longer drops the start of a completed transcript frame when the same output chunk also completes another frame.
+- Micme now strips C1 terminal sequences before pasting or sending transcripts to Pi.
+- New kept recordings on POSIX are private from creation, even under an existing public recordings root.
+- On POSIX, saving Micme configuration now creates missing directories with owner-only permissions, even under a group-friendly umask.
+- Micme now checks long streaming transcript frames for overlapping words in linear work without changing which words appear in the editor.
+- Windows recording and transcription hooks now preserve literal paths such as `%USERNAME%` without forcing a different expansion mode on Raw placeholders.
+- Saving a setting preserves the exact spelling of unrelated JSON numbers, or leaves the file unchanged if a number would be lost.
+- Changing Keep audio during recording no longer deletes a clip started as kept or retains one started as temporary.
+- Settings now skips discovery and refuses model downloads when the configuration is invalid, while still showing where to repair it.
+- Kept recordings now ignore files and out-of-range directory numbers when choosing the next recording directory.
+- A writerless config FIFO no longer blocks Pi startup or settings saves; Micme rejects it without replacing it.
+- Micme warns when recording cleanup fails and shows the surviving directory through `/micme audio` without losing or redelivering the transcript.
+- Stopping or shutting down one Pi session no longer freezes the recording clock in another.
+- Stopping after the recorder has already exited now reports an unexpected exit instead of transcribing partial audio, even if a helper keeps the output pipe open.
+- The npm-installed micme-doctor command now runs on Node 22.19 without TypeScript stripping.
+
 ## [0.3.9] - 2026-11-24
 
 - Windows recording and transcription hooks now launch the system command interpreter rather than a same-named executable in the project directory.
