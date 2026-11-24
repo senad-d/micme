@@ -78,6 +78,14 @@ test("pasteOrSubmitTranscript strips C1 CSI before pasting or sending", async ()
 	assert.deepEqual(harness.sent, [{ message: "left right", options: undefined }]);
 });
 
+test("pasteOrSubmitTranscript preserves the visible label between ST-terminated OSC 8 wrappers", async () => {
+	const transcript = "read \u001B]8;;https://example.com\u001B\\this\u001B]8;;\u001B\\ now";
+	const harness = createHarness();
+	await withEnv({ MICME_AUTO_SUBMIT: "0" }, () => pasteOrSubmitTranscript(harness.ctx, harness.pi, transcript));
+
+	assert.deepEqual(harness.pasted, ["read this now "]);
+});
+
 test("pasteOrSubmitTranscript queues follow-up when auto-submit runs during an active turn", async () => {
 	await withEnv({ MICME_AUTO_SUBMIT: "1" }, async () => {
 		const harness = createHarness({ idle: false });
