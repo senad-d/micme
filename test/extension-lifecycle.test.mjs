@@ -202,17 +202,23 @@ async function writeExecutable(path, source) {
 	await chmod(path, 0o755);
 }
 
-async function writeStreamingProcess(path, { stdout = "" } = {}) {
+async function writeStreamingProcess(path, { stdout = "", gatedStdout = null } = {}) {
 	await writeExecutable(
 		path,
 		`#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`stream \${process.pid}\\n\`);
 const stop = () => setTimeout(() => process.exit(0), Number(process.env.MICME_TEST_STOP_DELAY_MS || 0));
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 process.stdout.write(${JSON.stringify(stdout)});
-setInterval(() => {}, 1_000);
+const gatedStdout = ${JSON.stringify(gatedStdout)};
+let sent = false;
+setInterval(() => {
+  if (!gatedStdout || sent || !existsSync(gatedStdout.path)) return;
+  sent = true;
+  process.stdout.write(gatedStdout.text);
+}, gatedStdout ? 20 : 1_000);
 `,
 	);
 }
@@ -1661,6 +1667,62 @@ setInterval(() => {}, 1_000);
 		});
 	});
 }
+
+test("/micme last survives another committed frame and stopping a live stream", { skip: process.platform === "win32" && "uses a POSIX streaming fixture" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-stream-replay-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const stream = join(root, "whisper-stream");
+	const model = join(root, "ggml-small.en.bin");
+	const nextFrame = join(root, "continue-stream");
+	await Promise.all([
+		writeFile(model, "model"),
+		writeStreamingProcess(stream, { stdout: "previous transcript\nprevious transcript\n" }),
+	]);
+	await withEnv({
+		TMPDIR: root,
+		PI_CODING_AGENT_DIR: join(root, "agent"),
+		MICME_TRANSCRIPTION_MODE: "stream",
+		MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+		MICME_AUTO_SUBMIT: "0",
+		MICME_STREAM_FINALIZE_WITH_CLIP: "0",
+		MICME_WHISPER_STREAM_BIN: stream,
+		MICME_WHISPER_CPP_MODEL: model,
+		MICME_KEEP_AUDIO: "0",
+		MICME_TEST_PROCESS_LOG: join(root, "processes.log"),
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		const command = harness.commands.get("micme");
+		let editorText = "";
+		Object.assign(harness.ctx.ui, {
+			getEditorText: () => editorText,
+			setEditorText: (value) => { editorText = value; },
+			pasteToEditor: (value) => { editorText += value; },
+		});
+		try {
+			await command.handler("", harness.ctx);
+			await waitFor(() => editorText === "previous transcript", "previous transcript did not reach the editor");
+			await command.handler("", harness.ctx);
+
+			await writeStreamingProcess(stream, { stdout: "live\nlive\n", gatedStdout: { path: nextFrame, text: "live words\nlive words\n" } });
+			editorText = "";
+			await command.handler("", harness.ctx);
+			await waitFor(() => editorText === "live", "first live word did not reach the editor");
+
+			editorText = ""; // Pi clears the editor when submitting the slash command.
+			await command.handler("last", harness.ctx);
+			assert.equal(editorText, "previous transcript ");
+			await writeFile(nextFrame, "");
+			await waitFor(() => editorText.endsWith("words"), "the next committed word did not reach the editor");
+			assert.equal(editorText, "previous transcript words");
+
+			await command.handler("", harness.ctx);
+			assert.equal(editorText, "previous transcript words ");
+			assert.deepEqual(harness.sentMessages, []);
+		} finally {
+			await emit(harness, "session_shutdown");
+		}
+	});
+});
 
 for (const [reason, rawAudio, diagnostic] of [
 	["FFmpeg is missing", undefined, /needs ffmpeg for recording/],

@@ -253,7 +253,10 @@ export class MicmeSessionOwner {
 	}
 
 	async pasteLastTranscript(ctx: ExtensionContext) {
-		await pasteOrSubmitTranscript(ctx, this.pi, this.lastTranscript);
+		const active = this.current;
+		// RPC has a write-only editor. Route replay through the same context that tracks live writes.
+		const replayCtx = ctx.mode === "rpc" && active && firstMainRecording(active)?.streaming ? active.context : ctx;
+		await pasteOrSubmitTranscript(replayCtx, this.pi, this.lastTranscript);
 	}
 
 	notifyLastAudioDirectory(ctx: ExtensionContext) {
@@ -475,10 +478,9 @@ function spawnWhisperStreamingRecording(plan: StreamingTranscriptionPlan, tempDi
 }
 
 function initializeStreamingRecording(ctx: ExtensionContext, streamRecording: Recording) {
-	const baseText = ctx.ui.getEditorText();
 	streamRecording.streaming = {
-		baseText,
-		previewText: baseText,
+		baseText: ctx.ui.getEditorText(),
+		renderedWordCount: 0,
 		outputBuffer: "",
 		lastText: "",
 		emittedWords: [],
@@ -798,14 +800,19 @@ async function cleanupRecordingDirectory(owner: MicmeSessionOwner, operation: Mi
 }
 
 function createGuardedContext(ctx: ExtensionContext, isCurrent: () => boolean) {
+	let lastRpcEditorText: string | undefined;
 	const guardedUi = new Proxy(ctx.ui, {
 		get(target, property, receiver) {
 			const value = Reflect.get(target, property, receiver) as unknown;
 			if (typeof value !== "function") return value;
+			if (ctx.mode === "rpc" && property === "getEditorText") return () => lastRpcEditorText ?? ctx.ui.getEditorText();
 			if (!GUARDED_UI_METHODS.has(String(property))) return value.bind(target);
 			return (...args: unknown[]) => {
 				if (!isCurrent()) return undefined;
-				return Reflect.apply(value, target, args);
+				const result: unknown = Reflect.apply(value, target, args);
+				// Pi RPC implements both of these as set_editor_text; getEditorText() always returns "".
+				if (ctx.mode === "rpc" && (property === "setEditorText" || property === "pasteToEditor") && typeof args[0] === "string") lastRpcEditorText = args[0];
+				return result;
 			};
 		},
 	});
