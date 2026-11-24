@@ -688,6 +688,98 @@ test("shutdown while streaming is stopping prevents finalization work", async (t
 	);
 });
 
+async function withExitedClipRecorder(t, verifyStop) {
+	if (process.platform === "win32") {
+		t.skip("POSIX inherited pipe fixture is not portable to Windows");
+		return;
+	}
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-recorder-drain-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const recorder = join(root, "recorder.mjs");
+	const transcribed = join(root, "transcribed");
+	await writeFile(
+		recorder,
+		`import { spawn } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const [target, root] = process.argv.slice(2);
+const helper = target === "--hold-stderr";
+if (!helper) {
+  // Mono 16-bit PCM WAV header followed by 1024 bytes of samples.
+  const header = Buffer.from("524946462404000057415645666d74201000000001000100803e0000007d0000020010006461746100040000", "hex");
+  writeFileSync(target, Buffer.concat([header, Buffer.alloc(1024, 32)]));
+  spawn(process.execPath, [process.argv[1], "--hold-stderr", root], { stdio: ["ignore", "ignore", "inherit"] }).unref();
+  writeFileSync(join(root, "recorder.pid"), String(process.pid));
+}
+const gate = join(root, helper ? "drain" : "exit");
+const poll = setInterval(() => {
+  if (!existsSync(root)) process.exit(1);
+  if (!existsSync(gate)) return;
+  clearInterval(poll);
+  if (helper) process.stderr.write("delayed recorder diagnostic\\n");
+}, 10);
+`,
+	);
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: `exec '${process.execPath}' '${recorder}' {audio} '${root}'`,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			MICME_TRANSCRIBE_COMMAND: `printf 'partial transcript' > '${transcribed}'; printf 'partial transcript'`,
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "0",
+			MICME_KEEP_AUDIO: "1",
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			await command.handler("", harness.ctx);
+			assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+			const pidFile = join(root, "recorder.pid");
+			await waitFor(async () => (await readProcessRows(pidFile)).length > 0, "recorder PID was not logged");
+			const pid = Number(await readFile(pidFile, "utf8"));
+			assert.ok(Number.isInteger(pid) && pid > 0);
+			await writeFile(join(root, "exit"), "");
+			await waitFor(() => !processIsAlive(pid), "recorder did not exit before stop");
+
+			const stop = command.handler("", harness.ctx);
+			const drain = join(root, "drain");
+			try {
+				await verifyStop({ harness, stop, drain, transcribed });
+			} finally {
+				await writeFile(drain, "");
+				await stop;
+			}
+		},
+	);
+}
+
+test("stopping an exited clip recorder while stderr is open does not transcribe its audio", async (t) => {
+	await withExitedClipRecorder(t, async ({ harness, stop, drain, transcribed }) => {
+		await writeFile(drain, "");
+		await stop;
+		assert.equal(harness.owner.getPhase(), "idle");
+		await assert.rejects(readFile(transcribed), { code: "ENOENT" }, "partial audio was transcribed");
+		const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
+		assert.match(error?.message ?? "", /recorder exited unexpectedly \(code 0\)/);
+		assert.match(error?.message ?? "", /Recorder output:\ndelayed recorder diagnostic/);
+	});
+});
+
+test("stopping an exited clip recorder returns to idle even if stderr stays open", async (t) => {
+	await withExitedClipRecorder(t, async ({ harness, stop, transcribed }) => {
+		await waitFor(() => harness.owner.getPhase() === "idle", "Micme remained stuck stopping while the exited recorder's stderr was held open", 6_000);
+		await stop;
+		const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
+		assert.match(error?.message ?? "", /recorder exited unexpectedly \(code 0\)/);
+		await assert.rejects(readFile(transcribed), { code: "ENOENT" }, "partial audio was transcribed");
+	});
+});
+
 test("late stream exit is reported instead of completing as an empty dictation", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX executable fixtures are not portable to Windows");

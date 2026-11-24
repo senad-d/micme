@@ -180,7 +180,7 @@ test("configured Windows hooks pass the system interpreter and original shell ar
 
 function mockSignalChild(t, kill) {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
-	const child = Object.assign(new EventEmitter(), { pid: 123, kill });
+	const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null, kill });
 	const spawnMock = t.mock.method(childProcess, "spawn", () => child);
 	syncBuiltinESMExports();
 	t.after(() => {
@@ -366,6 +366,40 @@ test("recording process helpers collect output, meter levels, and stop safely", 
 
 	await writeFile(audioPath, Buffer.alloc(600));
 	await stopRecorder({ ...missingAudio, audioPath, stderr: () => "" });
+});
+
+test("recorder stop rejects a zero exit before stdio closes", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-recorder-exit-before-close-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const audioPath = join(root, "raw.wav");
+	await writeFile(audioPath, Buffer.alloc(600));
+
+	const kill = t.mock.fn(() => false);
+	const child = mockSignalChild(t, kill);
+	const recording = spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, audioPath, root);
+	child.exitCode = 0;
+	child.emit("exit", 0, null);
+	const stop = stopRecorder(recording);
+	child.emit("close", 0, null);
+
+	await assert.rejects(stop, /recorder exited unexpectedly \(code 0\)/);
+	assert.equal(kill.mock.callCount(), 0);
+});
+
+test("recorder stop reports the known exit when stdio does not close within the grace period", async (t) => {
+	const kill = t.mock.fn(() => false);
+	const child = mockSignalChild(t, kill);
+	const recording = spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, "raw.wav", ".");
+	child.signalCode = "SIGTERM";
+	child.emit("exit", null, "SIGTERM");
+	const stop = stopRecorder(recording).catch((error) => error);
+
+	t.mock.timers.tick(RECORDER_STOP_GRACE_MS);
+	const failure = await Promise.race([stop, setImmediate("pending")]);
+	assert.match(failure?.message ?? "", /recorder exited unexpectedly \(signal SIGTERM\)/);
+	assert.equal(recording.isSettled(), false);
+	assert.equal(kill.mock.callCount(), 0);
+	child.emit("close", null, "SIGTERM");
 });
 
 test("recorder stop rejects spontaneous failures and accepts owned stop paths", async (t) => {
