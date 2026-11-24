@@ -30,7 +30,7 @@ MicMe is a Pi extension for coding prompts. It records your microphone with `ffm
 </table>
 
 - **Local-first:** no telemetry and no cloud STT service by default.
-- **Review-first:** transcripts paste into the editor unless you enable auto-submit.
+- **Review-first:** review dictated text in the editor by default. Live dictation in a Pi RPC client requires [explicit replay](#live-dictation).
 - **Pi-native:** install globally, project-locally, from git, or from a source checkout.
 - **Configurable:** use `/micme conf`, `micme.json`, or shell variables.
 
@@ -43,6 +43,7 @@ MicMe is a Pi extension for coding prompts. It records your microphone with `ffm
 - [Pi Compatibility](#pi-compatibility)
 - [Backend Setup](#backend-setup)
 - [Configuration](#configuration)
+- [Live Dictation](#live-dictation)
 - [Commands](#commands)
 - [Models and Backends](#models-and-backends)
 - [Troubleshooting](#troubleshooting)
@@ -126,7 +127,7 @@ Before adopting another Pi release, review both published peer ranges and update
 
 ## Backend Setup
 
-Micme does not bundle recorder, transcriber, or model binaries.
+Micme does not bundle executable binaries or model weights. The setup below is for the default clip mode. For live dictation, use the same recorder setup and see [Live Dictation](#live-dictation) for the worker.
 
 | OS | Install | Device setting |
 | --- | --- | --- |
@@ -163,7 +164,7 @@ If this file is malformed or its top level is not an object, Micme refuses recor
 
 Config saves are serialized in-process and across Pi processes with `micme.json.lock`, then atomically replace the file with mode `0600`. Each save re-reads the latest file while holding the lock and changes only its requested `MICME_*` keys, preserving `$schema` and other metadata. Saves commit in lock-acquisition order, so the last successful save to the same key wins. Micme waits up to five seconds for the lock; on timeout it leaves the existing config and lock untouched because it cannot safely assume another writer's lock is stale. Remove a leftover lock directory manually only after verifying that no Pi process is saving Micme settings.
 
-Numeric runtime settings use bounded fallbacks after integer normalization. Invalid, non-finite, or out-of-range values never reach timers or command arguments: transcription timeouts allow `1000..3600000` ms; stream step/length/keep/flush values allow `100..60000`, `1000..120000`, `0..60000`, and `100..60000` ms; stream tokens allow `1..4096`; committed word chunks allow `1..10`; capture ids allow `-1..255`; VAD allows `0.01..0.99`; and audio sample rates allow `8000..384000` Hz. See the schema for each fallback default.
+Numeric settings such as the transcription timeout and clip sample rates use bounded integer values. The timeout accepts `1000..3600000` ms and also bounds live stages such as model readiness, PCM acknowledgments, and finalization. See [`micme.schema.json`](micme.schema.json) for ranges and defaults.
 
 The usual setup path is to run:
 
@@ -192,27 +193,60 @@ Common settings:
 
 | Variable | Meaning |
 | --- | --- |
-| `MICME_TRANSCRIBE_BACKEND=auto` | Backend selector. `auto` preserves priority: custom command, whisper.cpp, then Python Whisper. |
-| `MICME_TRANSCRIPTION_MODE=clip` | Stable default: transcribe after recording stops. |
-| `MICME_TRANSCRIPTION_MODE=stream` | Experimental append-only live dictation with `whisper-stream`; requires whisper.cpp. |
-| `MICME_LANGUAGE=en` | Transcription language when translation is off. Use `auto` for detection. |
+| `MICME_TRANSCRIBE_BACKEND=auto` | In clip mode, prefer a custom command, then whisper.cpp, then Python Whisper. In stream mode, use `micme-live`. |
+| `MICME_TRANSCRIPTION_MODE=clip` | Default: transcribe after recording stops. Set `stream` for [live dictation](#live-dictation). |
+| `MICME_LANGUAGE=en` | Transcription language when translation is off. Use `auto` for detection with multilingual weights. |
 | `MICME_TRANSLATE_TO_ENGLISH=off` | “Translate from” option. Leave `off`, or set the spoken source language code such as `hr`, `bs`, `de`, or `tr` to output English. |
-| `MICME_STREAM_KEEP_CONTEXT=0` | Stream default: avoid Whisper prompt carry-over so live chunks are less likely to rewrite each other. |
-| `MICME_STREAM_FLUSH_MS=700` | Runtime-default quiet interval before tentative words are committed append-only. Selecting the stream profile in `/micme conf` writes `650`. |
-| `MICME_STREAM_FINALIZE_WITH_CLIP=0` | Keep the append-only live transcript on stop. Set `1` to opt in to final clip replacement. |
-| `MICME_AUTO_SUBMIT=0` | Paste for review. Set `1` to send automatically. |
+| `MICME_AUTO_SUBMIT=0` | Review in the editor. Set `1` to send eligible results automatically. Live RPC results always require explicit replay. |
 | `MICME_SHORTCUT=alt+m` | Toggle shortcut. Use terminal syntax (`alt+m`, `ctrl+space`, `f8`) or a printable character such as `§`. Restart or `/reload` after changing. |
-| `MICME_VALIDATE_AUDIO=1` | Reject near-silent recordings and fail closed when ffmpeg omits or truncates the required `max_volume` metric. With a custom recorder and no ffmpeg, Micme warns and skips this guard; set `0` to disable it intentionally. |
-| `MICME_RECORD_SAMPLE_RATE=auto` | Raw recording sample-rate override. Leave `auto` so ffmpeg uses the selected input's native rate. |
-| `MICME_RECORD_SYNC=1` | Automatically preserve wall-clock recording duration from ffmpeg timestamps. |
-| `MICME_RECORD_METER=0` | Quality-safe default: meter from `raw.wav` instead of a second ffmpeg stdout branch. Set `1` to restore the legacy live meter pipe. |
+| `MICME_VALIDATE_AUDIO=1` | Clip transcription and optional refinement: reject near-silent audio and fail closed if ffmpeg omits or truncates `max_volume`. With a custom recorder and no ffmpeg, Micme warns and skips this guard. Set `0` to disable it. |
+| `MICME_RECORD_SAMPLE_RATE=auto` | Clip recording sample-rate override. Leave `auto` to use the input's native rate. Stream capture is fixed at 16 kHz. |
+| `MICME_RECORD_SYNC=1` | Preserve wall-clock recording duration from ffmpeg timestamps in the built-in recorder. |
+| `MICME_RECORD_METER=0` | Clip only: meter from `raw.wav` by default. Set `1` to meter from a second ffmpeg stdout branch. Stream mode meters the PCM it reads. |
 | `MICME_AVFOUNDATION_DROP_LATE_FRAMES=0` | macOS only: ask AVFoundation not to drop late frames when capture lags. |
 | `MICME_KEEP_AUDIO=0` | Delete successful recording audio. Set `1` to keep each recording under `./micme-rec/rec-###/` for debugging. |
 | `MICME_MODEL_DIR=~/.cache/whisper.cpp` | Model cache/discovery directory. |
 
 See [`micme.example.json`](micme.example.json) for the full JSON template.
 
-Streaming mode treats `whisper-stream` output as repeated, overlapping hypotheses rather than committed word deltas. Micme only appends committed words to the editor during live streaming; tentative words are held internally and committed after agreement, overlap, stop, or the quiet interval configured by `MICME_STREAM_FLUSH_MS`. If the editor already contains text, Micme separates the existing text from dictated words with a space when needed. If `MICME_STREAM_FINALIZE_WITH_CLIP=1`, the stop-time clip transcript can intentionally replace the live append-only text.
+---
+
+## Live Dictation
+
+### Set up or migrate
+
+1. [Build and install `micme-live`](native/live/README.md). Installing Micme does not build the worker. `whisper-stream` is not a substitute, and `whisper-cli` is not needed for live decoding itself.
+2. Use the same microphone settings as clip mode: `MICME_AVFOUNDATION_INPUT` (or `MICME_AUDIO_DEVICE`) on macOS, `MICME_PULSE_SOURCE` on Linux, and `MICME_DSHOW_AUDIO_DEVICE` on Windows. A legacy SDL capture ID does not select a device in the new worker.
+3. Select stream mode in `/micme conf` or set `MICME_TRANSCRIPTION_MODE=stream` in `micme.json`. Live decoding requires `MICME_TRANSCRIBE_BACKEND=auto` or `whisper.cpp`. Switching modes saves only the mode; it does not change your model, device, or refinement settings.
+4. Run [doctor](#diagnostics) to check the resolved worker, speech recognition (ASR) weights, speech detection (VAD) weights, and language. Before opening the microphone, Micme provisions missing supported weights if enabled and waits for the worker to load both models. If setup fails, fix the reported issue or choose clip mode; Micme does not silently fall back to another backend.
+
+Example `micme.json` when the worker is not on `PATH` and the VAD file is stored outside the model cache:
+
+```json
+{
+  "MICME_TRANSCRIPTION_MODE": "stream",
+  "MICME_TRANSCRIBE_BACKEND": "auto",
+  "MICME_LIVE_BIN": "/path/to/micme-live",
+  "MICME_VAD_MODEL": "/path/to/ggml-silero-v5.1.2.bin"
+}
+```
+
+Use existing paths, or omit `MICME_LIVE_BIN` to find `micme-live` (`micme-live.exe` on Windows) on `PATH` and omit `MICME_VAD_MODEL` to use the standard cached weight. The same keys can be set in the shell and take precedence over JSON. See [Models and Backends](#models-and-backends) for ASR selection and [Model downloads](SECURITY.md#model-downloads) for cache paths, provenance, and offline setup.
+
+**Migrating from `whisper-stream`:** `MICME_WHISPER_STREAM_BIN`, `MICME_STREAM_CAPTURE`, `MICME_STREAM_STEP_MS`, `MICME_STREAM_LENGTH_MS`, `MICME_STREAM_KEEP_MS`, `MICME_STREAM_MAX_TOKENS`, `MICME_STREAM_KEEP_CONTEXT`, `MICME_STREAM_WORDS_PER_CHUNK`, `MICME_STREAM_FLUSH_MS`, and `MICME_STREAM_VAD_THRESHOLD` are ignored. Stored values are left intact. Use `MICME_LIVE_BIN` and the OS microphone settings instead; old SDL indices and numeric tuning values do not map to the new worker. `MICME_STREAM_FINALIZE_WITH_CLIP` and `MICME_STREAM_DIAGNOSTICS` still apply.
+
+### Dictate and review
+
+Micme opens one recorder and feeds its PCM to a local Worker v1 process. The worker loads its models once per recording and gates recognition on detected speech. A `Live:` draft, when shown, can change while you speak; it is not editor text, cannot be replayed, and is never auto-submitted. If decoding falls behind, Micme can skip draft updates while still feeding the audio. Stopping drains the remaining samples before completing the transcript.
+
+- **TUI:** Only finalized words are appended to the editor. If Micme detects added editor text during dictation, it keeps that text and does not replace the dictated portion or auto-submit on stop. Simply clearing or trimming Micme's suffix does not count as an addition.
+- **RPC:** Micme cannot read the host's editor. It saves the completed transcript for the session and never writes or sends it automatically in stream mode. With auto-submit off, explicitly running `/micme last` **replaces** the RPC prompt, so save any existing text first. With auto-submit on, that command sends the transcript or queues it as a follow-up; turn auto-submit off first if you want to review it.
+
+### Capture and optional refinement
+
+Live capture is a growing 16 kHz mono signed 16-bit little-endian PCM WAV. The built-in recorder applies `MICME_AUDIO_FILTER` once during capture if `MICME_PROCESS_AUDIO` is enabled and the filter is nonempty. A custom `MICME_RECORD_COMMAND` takes precedence: it must write that WAV to `{audio}` while recording, append samples without rewriting them, and finalize the WAV lengths on stop. The hook owns any filtering; Micme does not filter its output.
+
+`MICME_STREAM_FINALIZE_WITH_CLIP=0` is the default. Set it to `1` to refine a successful live result with recognized words using the selected clip backend. Refinement needs that backend's normal setup. It uses a verified private copy of the exact PCM sent to the worker, not a second microphone recording or a reopened recorder pathname. It does not apply another filter pass. If verification or refinement fails, Micme warns and keeps the confirmed live text available via `/micme last` without replacing or auto-submitting it. With no recognized words, Micme skips refinement and does not send anything.
 
 ---
 
@@ -223,7 +257,7 @@ Streaming mode treats `whisper-stream` output as repeated, overlapping hypothese
 | `/micme` | Toggle recording. |
 | `/micme conf` | Open the TUI configuration screen. |
 | `/micme devices` | Show compact audio/video capture device inventory. |
-| `/micme last` | Paste the previous transcript again. |
+| `/micme last` | Replay the last saved transcript in this session. Pastes for review or sends/queues with auto-submit on. For live RPC, see [replay behavior](#dictate-and-review). |
 | `/micme audio` | Show the last kept audio directory. |
 | `/micme help` | Show short help. |
 
@@ -231,22 +265,13 @@ Streaming mode treats `whisper-stream` output as repeated, overlapping hypothese
 
 ## Models and Backends
 
-Micme supports these backend values in JSON/env config:
+In clip mode, `MICME_TRANSCRIBE_BACKEND` accepts `whisper.cpp`, `python`, `custom`, or `auto`. The whisper.cpp clip backend uses `whisper-cli` or `whisper-cpp`, Python Whisper uses the `whisper` CLI with `MICME_WHISPER_MODEL`, and the custom backend uses `MICME_TRANSCRIBE_COMMAND`.
 
-- `whisper.cpp`: uses `whisper-cli`/`whisper-cpp` and a ggml/gguf model path.
-- `python`: uses the OpenAI Whisper `whisper` CLI and a Python model name.
+For both the whisper.cpp clip backend and the live worker, `MICME_WHISPER_CPP_MODEL` selects a local model file. If it is unset, Micme resolves `ggml-<name>.bin` in `MICME_MODEL_DIR` using `MICME_DEFAULT_WHISPER_CPP_MODEL`. See [Model downloads](SECURITY.md#model-downloads) for weight sources and how to disable automatic downloads.
 
-`/micme conf` keeps the interactive backend picker focused on `whisper.cpp` and `Python Whisper`, then shows only the model/binary fields for the selected backend. For whisper.cpp, `MICME_WHISPER_CPP_MODEL` is the selected ggml/gguf model path; if it is unset, Micme falls back to `${MICME_MODEL_DIR}/ggml-${MICME_DEFAULT_WHISPER_CPP_MODEL}.bin`. For Python Whisper, `MICME_WHISPER_MODEL` is passed as the CLI model name.
+`small.en` is Micme's default whisper.cpp model. Translation uses Whisper's built-in translate task and requires compatible multilingual weights. When resolving by model name with translation enabled, Micme maps `.en` names to multilingual names (`small.en` → `small`, `base.en` → `base`) and maps `large-v3-turbo` to `large-v3`. Clip mode can resolve a corresponding sibling file for an explicit whisper.cpp path; stream mode keeps the explicit path and rejects known incompatible choices. In stream mode, known English-only weights use English for `MICME_LANGUAGE=auto` and reject other languages.
 
-See [Model downloads](SECURITY.md#model-downloads) for when Micme downloads missing standard whisper.cpp models and where it stores them. Existing model paths must point to regular files; directories are rejected before download or transcription. Header, body, and file-output inactivity is bounded to two minutes; timed-out or cancelled downloads remove their temporary file. Concurrent requests for the same model share one transfer: cancelling one caller leaves it running for other callers, while cancelling the final owner aborts it. Session shutdown and closing `/micme conf` cancel their ownership and suppress later process starts, saves, notifications, and renders. Disable downloads with:
-
-```env
-MICME_AUTO_DOWNLOAD_MODEL=0
-```
-
-Recommended model progression: `base.en` for speed, `small.en` for a stronger default, `medium.en` for accuracy. Translation uses Whisper's built-in translate task and needs translate-capable multilingual models; when `MICME_TRANSLATE_TO_ENGLISH` is enabled, Micme maps `.en` model names to multilingual defaults (`small.en` → `small`, `base.en` → `base`) and maps non-translation turbo models to the closest translate-capable model (`large-v3-turbo` → `large-v3`).
-
-Advanced users can replace the recorder or transcriber:
+Advanced users can replace the recorder or clip transcriber. These are clip-mode examples:
 
 ```env
 MICME_RECORD_COMMAND=ffmpeg -hide_banner -loglevel error -f avfoundation -i :0 -af aresample=async=1:first_pts=0 -ac 1 -y {audio}
@@ -257,7 +282,7 @@ MICME_TRANSCRIBE_COMMAND=whisper-cli -m /path/to/model.bin -f {audio} -otxt -of 
 
 Micme prefers a non-blank transcript file. If it falls back to stdout, it rejects output longer than 100,000 characters rather than inserting an incomplete transcript. For longer transcripts from a custom command, write to `{transcript}` instead of stdout.
 
-Recorder and streaming commands must remain alive until Micme stops them. A requested stop accepts exit code `0`, a signal Micme sent during escalation, its conventional shell exit code, or ffmpeg's signal-stop code `255`; spawn errors, spontaneous exits, unrelated signals, and other nonzero codes are reported as failures. Partial recorder audio is kept for debugging but is not transcribed. When final-clip streaming is enabled, Micme explicitly falls back to the append-only live transcript if that optional clip recorder fails.
+Recorder hooks must remain alive until Micme stops them. A requested recorder stop accepts exit code `0`, a signal Micme sent during escalation, its conventional shell exit code, or ffmpeg's signal-stop code `255`. Spawn errors, spontaneous exits, unrelated signals, and other nonzero codes are reported as failures. Micme may keep partial audio for debugging but does not treat a failed recording as a completed transcript. The recorder example above is for clip mode; a live hook must meet the [live capture format](#capture-and-optional-refinement).
 
 ---
 
@@ -265,13 +290,14 @@ Recorder and streaming commands must remain alive until Micme stops them. A requ
 
 | Problem | Try |
 | --- | --- |
-| No backend found | Use `/micme conf` to choose `whisper.cpp` or Python Whisper, install the selected backend, or configure a trusted custom command manually. |
-| Wrong microphone | Run `/micme devices`, then set the OS-specific device variable. |
-| Crackling or shortened audio | Keep `MICME_RECORD_SYNC=1` and `MICME_RECORD_METER=0`; on macOS keep `MICME_AVFOUNDATION_DROP_LATE_FRAMES=0`, and avoid Aggregate/BlackHole devices unless intentionally routing audio. |
-| Unrelated transcript | You probably recorded silence. Set `MICME_KEEP_AUDIO=1` and check `/micme audio`. |
-| Slow transcription | Use `whisper.cpp`, a smaller model, and shorter recordings. |
+| No clip backend found | Use `/micme conf` to choose `whisper.cpp` or Python Whisper, install the selected backend, or configure a trusted custom command manually. |
+| Stream won't start | Run [doctor](#diagnostics), check the [worker and weight setup](#set-up-or-migrate), or switch to clip mode. |
+| Wrong microphone | Run `/micme devices`, then set the OS-specific device variable. If using a custom recorder, check the input in that command. |
+| Crackling or shortened audio | Keep `MICME_RECORD_SYNC=1` (and `MICME_RECORD_METER=0` for clips). On macOS, keep `MICME_AVFOUNDATION_DROP_LATE_FRAMES=0` and avoid Aggregate/BlackHole devices unless intentionally routing audio. |
+| Unrelated transcript | Check the selected input and language. Set `MICME_KEEP_AUDIO=1` and use `/micme audio` to inspect what the recorder captured. |
+| Slow transcription | Try a smaller model. For live mode, [diagnostics](#diagnostics) can help distinguish model loading from decoding backlog. |
 | Option/Alt inserts `§` or `µ` | Set `MICME_PRINTABLE_SHORTCUTS=§` or change `MICME_SHORTCUT`, then `/reload`. |
-| Need automatic sending | Set `MICME_AUTO_SUBMIT=1`. |
+| Need automatic sending | Set `MICME_AUTO_SUBMIT=1`. Live dictation in RPC still requires `/micme last`. |
 
 ---
 
@@ -287,9 +313,9 @@ From a source checkout:
 npm run doctor
 ```
 
-The doctor checks Node, pi, `ffmpeg`, requested/effective backend, effective model, whisper.cpp, optional `whisper-stream`, model paths, and macOS devices when available. Custom command values are redacted.
+The doctor reports Node, Pi, recorder and clip backend availability, and the requested and effective transcription configuration. In stream mode it reports the worker, ASR and VAD paths, effective language, refinement flag, and ignored legacy settings if configured. It checks for the VAD file and runs the worker's version probe without capturing audio or downloading weights. A successful probe means Worker v1 is available, not that the models can load or that dictation works with your microphone. Custom command values are redacted.
 
-For stream state investigation, start pi with `MICME_STREAM_DIAGNOSTICS=1`. Diagnostics are opt-in and include sanitized frames, extraction mode, committed words, and tentative candidate words.
+For live timings and backlog, start Pi with `MICME_STREAM_DIAGNOSTICS=1`. The opt-in notifications show model load time and counts, time to the first draft (if any), captured samples, peak lag in samples, VAD frames, and ASR call count and time. These notifications do not include transcript text.
 
 ---
 
