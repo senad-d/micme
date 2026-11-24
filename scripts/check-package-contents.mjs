@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { posix } from "node:path";
 
 const hiddenEnvironmentFilePattern = new RegExp(`^\\.${"env"}(?:$|\\.)`);
 
@@ -39,7 +41,16 @@ function readPackFiles() {
   return pack.files.map((file) => file.path).sort((a, b) => a.localeCompare(b));
 }
 
+function readRequiredPaths() {
+  const { pi, bin } = JSON.parse(readFileSync("package.json", "utf8"));
+  const binTargets = typeof bin === "string" ? [bin] : Object.values(bin ?? {});
+  // npm's manifest uses slash-separated paths without the leading "./".
+  return new Set([...(pi?.extensions ?? []), ...binTargets].map((path) => posix.normalize(path)));
+}
+
 const files = readPackFiles();
+const packedPaths = new Set(files);
+const missing = [...readRequiredPaths()].filter((path) => !packedPaths.has(path));
 const violations = [];
 for (const file of files) {
   for (const check of forbiddenChecks) {
@@ -49,6 +60,12 @@ for (const file of files) {
 
 console.log(`Micme package dry-run contains ${files.length} file(s).`);
 for (const file of files) console.log(`- ${file}`);
+
+if (missing.length > 0) {
+  console.error("\nMissing required package entrypoints:");
+  for (const path of missing) console.error(`- ${path}`);
+  process.exitCode = 1;
+}
 
 if (violations.length > 0) {
   console.error("\nForbidden package contents detected:");
