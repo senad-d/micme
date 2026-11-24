@@ -68,6 +68,35 @@ test("same-process conflicting writes commit in call order with last successful 
 	assert.deepEqual(await readConfig(root), { $schema: "local-schema.json", owner: "keep-me", MICME_LANGUAGE: "second" });
 });
 
+test("saving a language preserves the exact numeric literals in nested metadata", async (t) => {
+	const root = await createConfigRoot(t, {});
+	const configPath = join(root, "micme.json");
+	const literals = ["9007199254740993", "0.1234567890123456789", "1E+400", "1e-400", "-0"];
+	const label = 'ID "9007199254740993"';
+	await writeFile(configPath, `\uFEFF{"metadata":{"numbers":[${literals.join(",")}],"label":${JSON.stringify(label)}},"MICME_LANGUAGE":"en"}\n`);
+
+	await writeMicmeConfigValue("MICME_LANGUAGE", "de");
+
+	const saved = await readFile(configPath, "utf8");
+	const numbers = saved.match(/"numbers"\s*:\s*\[([^\]]+)\]/)?.[1];
+	assert.deepEqual(numbers?.split(",").map((token) => token.trim()), literals);
+	const parsed = JSON.parse(saved);
+	assert.equal(parsed.MICME_LANGUAGE, "de");
+	assert.equal(parsed.metadata.label, label);
+});
+
+test("a save that would discard a shadowed numeric literal leaves the original config untouched", async (t) => {
+	const root = await createConfigRoot(t, {});
+	const configPath = join(root, "micme.json");
+	const original = '{"metadata":{"id":9007199254740993,"id":2},"MICME_LANGUAGE":"en"}\n';
+	await writeFile(configPath, original);
+
+	await assert.rejects(writeMicmeConfigValue("MICME_LANGUAGE", "de"), /numeric literals that cannot be preserved/);
+
+	assert.equal(await readFile(configPath, "utf8"), original);
+	assert.deepEqual(await listTemporaryFiles(root), []);
+});
+
 test("separate processes preserve every disjoint update and existing metadata", async (t) => {
 	const initial = { $schema: "local-schema.json", owner: "keep-me", MICME_EXISTING: "existing" };
 	const root = await createConfigRoot(t, initial);

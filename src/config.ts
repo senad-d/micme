@@ -545,14 +545,44 @@ function parseFiniteNumber(value: string | undefined) {
 function readMicmeJsonObjectForWrite(configPath: string): JsonObject {
 	if (!existsSync(configPath)) return { $schema: MICME_SCHEMA_URL };
 
+	let source: string;
+	let parsed: JsonObject;
+	const preserved = { count: 0 };
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(configPath, "utf8").replace(/^\uFEFF/, ""));
-		if (!isJsonObject(parsed)) throw new Error("top-level value must be a JSON object");
-		return parsed;
+		source = readFileSync(configPath, "utf8").replace(/^\uFEFF/, "");
+		const value: unknown = JSON.parse(source, preserveConfigNumber.bind(undefined, preserved));
+		// The reviver wraps numbers in objects, so check the original root token too.
+		if (!isJsonObject(value) || !source.trimStart().startsWith("{")) throw new Error("top-level value must be a JSON object");
+		parsed = value;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`Cannot save Micme config: ${configPath} is invalid JSON (${message}). Fix or remove it first.`, { cause: error });
 	}
+
+	// The reviver never sees values shadowed by duplicate keys. Count tokens in the
+	// validated source to catch those losses before the file can be replaced.
+	if (preserved.count !== countJsonNumberTokens(source)) {
+		throw new Error(`Cannot save Micme config: ${configPath} contains numeric literals that cannot be preserved. The file was not changed.`);
+	}
+	return parsed;
+}
+
+function preserveConfigNumber(preserved: { count: number }, _key: string, value: unknown, context?: { source?: string }): unknown {
+	if (typeof value !== "number" || context?.source === undefined) return value;
+	if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") return value;
+
+	// Serialize the original token rather than its potentially rounded JS value.
+	const rawNumber: unknown = JSON.rawJSON(context.source);
+	preserved.count += 1;
+	return rawNumber;
+}
+
+function countJsonNumberTokens(source: string) {
+	let count = 0;
+	for (const [token] of source.matchAll(/"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g)) {
+		if (!token.startsWith('"')) count += 1;
+	}
+	return count;
 }
 
 function extractMicmeValues(json: JsonObject) {
