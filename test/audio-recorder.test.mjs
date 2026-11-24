@@ -197,14 +197,12 @@ test("plain device panel renders source separators as ASCII", () => {
 	});
 });
 
-test("custom record commands receive the shared Micme placeholders", () => {
-	withEnv({ MICME_RECORD_COMMAND: "rec {audio} {tempDir} {transcript}" }, () => {
-		const command = buildRecorderCommand("/tmp/micme-record/raw.wav");
-		assert.equal(command.display.includes("{tempDir}"), false);
-		assert.equal(command.display.includes("{transcript}"), false);
-		assert.match(command.display, /raw\.wav/);
-		assert.match(command.display, /transcript\.txt/);
-	});
+test("custom record commands receive the shared Micme placeholders", async () => {
+	const command = await withEnv({ MICME_RECORD_COMMAND: "rec {audio} {tempDir} {transcript}" }, () => buildRecorderCommand("/tmp/micme-record/raw.wav"));
+	assert.equal(command.display.includes("{tempDir}"), false);
+	assert.equal(command.display.includes("{transcript}"), false);
+	assert.match(command.display, /raw\.wav/);
+	assert.match(command.display, /transcript\.txt/);
 });
 
 test("recording quality flags use safe defaults and explicit overrides", () => {

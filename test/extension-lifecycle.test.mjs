@@ -427,6 +427,129 @@ test("shutdown during model acquisition prevents stale UI and process startup", 
 	);
 });
 
+test("a pending default DirectShow scan yields to a UI timer and session shutdown", { skip: process.platform === "win32" && "requires POSIX fixtures" }, async (t) => {
+	const platform = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+	t.after(() => Object.defineProperty(process, "platform", platform));
+
+	for (const mode of ["clip", "stream"]) {
+		await t.test(mode, async (t) => {
+			const root = await mkdtemp(join(tmpdir(), "micme-extension-dshow-shutdown-"));
+			t.after(() => rm(root, { recursive: true, force: true }));
+			const processLog = join(root, "processes.log");
+			const stream = join(root, "whisper-stream");
+			const model = join(root, "ggml-tiny.bin");
+			await Promise.all([
+				writeStreamingProcess(stream),
+				writeFile(model, "model"),
+				writeExecutable(join(root, "ffmpeg.EXE"), `#!/usr/bin/env node
+const { appendFileSync } = require("node:fs");
+const log = process.env.MICME_TEST_PROCESS_LOG;
+if (process.argv.includes("-list_devices")) {
+  appendFileSync(log, \`scan \${process.pid}\\n\`);
+  process.stderr.write('"Studio Mic" (audio)\\n');
+  setTimeout(() => {
+    appendFileSync(log, "scan finished\\n");
+    process.exit(1);
+  }, 3_500);
+} else {
+  appendFileSync(log, \`capture \${process.pid}\\n\`);
+}
+`),
+			]);
+
+			await withEnv({
+				PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+				PATHEXT: ".EXE",
+				PI_CODING_AGENT_DIR: join(root, "agent"),
+				MICME_RECORD_COMMAND: undefined,
+				MICME_DSHOW_AUDIO_DEVICE: undefined,
+				MICME_KEEP_AUDIO: "1",
+				MICME_TRANSCRIPTION_MODE: mode,
+				MICME_WHISPER_STREAM_BIN: stream,
+				MICME_WHISPER_CPP_MODEL: model,
+				MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+				MICME_TEST_PROCESS_LOG: processLog,
+			}, async () => {
+				const harness = createExtensionHarness(root);
+				const start = harness.commands.get("micme").handler("", harness.ctx);
+				try {
+					await waitFor(async () => (await readProcessRows(processLog)).some((row) => row.startsWith("scan ")), "DirectShow fixture did not start");
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					const [scan, ...later] = await readProcessRows(processLog);
+					assert.match(scan, /^scan \d+$/);
+					assert.deepEqual(later, [], "UI timer must run before the scan finishes or capture starts");
+					assert.equal(harness.owner.getPhase(), "starting");
+
+					await emit(harness, "session_shutdown", { reason: "quit" });
+					const callsAfterShutdown = harness.uiCalls.length;
+					await start;
+					await assertProcessesStopped([scan]);
+					assert.deepEqual(await readProcessRows(processLog), [scan], "shutdown must cancel the scan without starting capture");
+					assert.equal(harness.owner.getPhase(), "shutting_down");
+					assert.equal(harness.uiCalls.length, callsAfterShutdown);
+					assert.deepEqual(await readdir(join(root, "micme-rec")), []);
+				} finally {
+					await emit(harness, "session_shutdown", { reason: "quit" });
+					await start;
+				}
+			});
+		});
+	}
+});
+
+test("a hung DirectShow scan is terminated before clip capture starts with the default input", { skip: process.platform === "win32" && "requires POSIX fixtures", timeout: 20_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-dshow-deadline-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const processLog = join(root, "processes.log");
+	await writeExecutable(join(root, "ffmpeg.EXE"), `#!/usr/bin/env node
+const { appendFileSync } = require("node:fs");
+const log = process.env.MICME_TEST_PROCESS_LOG;
+const args = process.argv.slice(2);
+if (args.includes("-list_devices")) {
+  process.on("SIGTERM", () => {});
+  appendFileSync(log, \`scan \${process.pid}\\n\`);
+  process.stderr.write('"Partial Mic" (audio)\\n');
+  // Let a regression fail without leaving the fixture running forever.
+  setTimeout(() => {
+    appendFileSync(log, "scan was not terminated\\n");
+    process.exit(1);
+  }, 12_000);
+} else {
+  appendFileSync(log, \`capture \${args[args.indexOf("-i") + 1]} \${process.pid}\\n\`);
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { if (chunk.includes("q")) process.exit(0); });
+}
+`);
+
+	const platform = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+	t.after(() => Object.defineProperty(process, "platform", platform));
+	await withEnv({
+		PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+		PATHEXT: ".EXE",
+		PI_CODING_AGENT_DIR: join(root, "agent"),
+		MICME_RECORD_COMMAND: undefined,
+		MICME_DSHOW_AUDIO_DEVICE: undefined,
+		MICME_KEEP_AUDIO: "1",
+		MICME_TRANSCRIPTION_MODE: "clip",
+		MICME_TEST_PROCESS_LOG: processLog,
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		try {
+			await harness.commands.get("micme").handler("", harness.ctx);
+			assert.equal(harness.owner.getPhase(), "recording");
+			await waitFor(async () => (await readProcessRows(processLog)).some((row) => row.startsWith("capture ")), "capture did not start after the scan timed out");
+			const rows = await readProcessRows(processLog);
+			assert.match(rows.join("\n"), /^scan \d+\ncapture audio=default \d+$/);
+			await assertProcessesStopped(rows.slice(0, 1));
+		} finally {
+			await emit(harness, "session_shutdown", { reason: "quit" });
+		}
+		await assertProcessesStopped(await readProcessRows(processLog));
+	});
+});
+
 test("malformed and non-object config refuse operational work before external side effects", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-invalid-config-"));
 	t.after(() => rm(root, { recursive: true, force: true }));

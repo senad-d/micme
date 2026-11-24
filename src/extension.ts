@@ -334,7 +334,9 @@ async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOper
 
 	try {
 		const audioPath = join(tempDir, "raw.wav");
-		const active = spawnRecording(buildRecorderCommand(audioPath), audioPath, tempDir);
+		const command = await buildRecorderCommand(audioPath, tempDir, operation.controller.signal);
+		if (!owner.isCurrent(operation)) return;
+		const active = spawnRecording(command, audioPath, tempDir);
 		owner.trackProcess(operation, active);
 		const earlyExit = await raceWithTimeout(active.exitPromise, RECORDER_STARTUP_GRACE_MS);
 		if (!owner.isCurrent(operation)) return;
@@ -366,11 +368,17 @@ async function startStreamingTranscription(owner: MicmeSessionOwner, operation: 
 	}
 
 	try {
+		const clipAudioPath = join(tempDir, "raw.wav");
+		const clipCommand = getStreamFinalizeWithClip() ? await buildRecorderCommand(clipAudioPath, tempDir, operation.controller.signal) : undefined;
+		if (!owner.isCurrent(operation)) return;
 		const streamRecording = spawnWhisperStreamingRecording(plan, tempDir);
 		owner.trackProcess(operation, streamRecording);
 		initializeStreamingRecording(ctx, streamRecording);
-		const clipRecording = startOptionalClipRecording(streamRecording, tempDir);
-		if (clipRecording) owner.trackProcess(operation, clipRecording);
+		if (clipCommand) {
+			const clipRecording = spawnRecording(clipCommand, clipAudioPath, tempDir);
+			streamRecording.clipRecording = clipRecording;
+			owner.trackProcess(operation, clipRecording);
+		}
 
 		await ensureStreamingRecorderStarted(streamRecording);
 		if (!owner.isCurrent(operation)) return;
@@ -412,14 +420,6 @@ function initializeStreamingRecording(ctx: ExtensionContext, streamRecording: Re
 		const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
 		handleStreamingOutput(ctx, streamRecording, text);
 	});
-}
-
-function startOptionalClipRecording(streamRecording: Recording, tempDir: string) {
-	const clipAudioPath = getStreamFinalizeWithClip() ? join(tempDir, "raw.wav") : undefined;
-	if (!clipAudioPath) return undefined;
-	const clipRecording = spawnRecording(buildRecorderCommand(clipAudioPath), clipAudioPath, tempDir);
-	streamRecording.clipRecording = clipRecording;
-	return clipRecording;
 }
 
 async function ensureStreamingRecorderStarted(streamRecording: Recording) {
