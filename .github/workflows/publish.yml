@@ -29,14 +29,15 @@ jobs:
 
     steps:
       - name: Verify default branch
-        if: github.ref_name != github.event.repository.default_branch
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          CURRENT_REF: ${{ github.ref_name }}
+          EXPECTED_REF: refs/heads/${{ github.event.repository.default_branch }}
+          CURRENT_REF: ${{ github.ref }}
         run: |
-          echo "Publish workflow must run from default branch '$DEFAULT_BRANCH'."
-          echo "Current ref is '$CURRENT_REF'."
-          exit 1
+          if [ "$CURRENT_REF" != "$EXPECTED_REF" ]; then
+            echo "Publish workflow must run from default branch ref '$EXPECTED_REF'."
+            echo "Current ref is '$CURRENT_REF'."
+            exit 1
+          fi
 
       - name: Check out repository
         uses: actions/checkout@v7.0.1
