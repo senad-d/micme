@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -910,6 +910,56 @@ test("a nonregular clip transcript reports an error instead of pasting hook stdo
 				assert.equal(harness.sentMessages.length, 0);
 				const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
 				assert.match(error?.message ?? "", /Transcript output is not a regular file/);
+			} finally {
+				await emit(harness, "session_shutdown", { reason: "quit" });
+			}
+		},
+	);
+});
+
+test("a kept clip records inside a private leaf under an existing public root", { skip: process.platform === "win32" && "requires POSIX directory modes" }, async (t) => {
+	const previousUmask = process.umask(0o022);
+	t.after(() => process.umask(previousUmask));
+	const project = await mkdtemp(join(tmpdir(), "micme-extension-private-clip-"));
+	t.after(() => rm(project, { recursive: true, force: true }));
+	await chmod(project, 0o755);
+	const recordingsRoot = join(project, "micme-rec");
+	await mkdir(recordingsRoot, { mode: 0o755 });
+	const leaf = join(recordingsRoot, "rec-001");
+	const rawAudio = join(leaf, "raw.wav");
+	const recorder = join(project, "ffmpeg");
+	const processLog = join(project, "processes.log");
+	await writeFfmpegProcess(recorder);
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(project, "agent"),
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: `exec ${shellQuote(recorder)} {audio}`,
+			MICME_TEST_PROCESS_LOG: processLog,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			MICME_TRANSCRIBE_COMMAND: "test -s {audio} && printf 'kept clip transcript'",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "0",
+			MICME_KEEP_AUDIO: "1",
+		},
+		async () => {
+			const harness = createExtensionHarness(project);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+				await waitFor(async () => (await readProcessRows(processLog)).length > 0, "recorder did not write audio");
+				assert.ok((await stat(rawAudio)).size > 0);
+				assert.equal((await stat(leaf)).mode & 0o777, 0o700, "the leaf must be private during recording");
+
+				await command.handler("", harness.ctx);
+				assert.ok(harness.uiCalls.some((entry) => entry.method === "pasteToEditor" && entry.value === "kept clip transcript "));
+				assert.ok((await stat(rawAudio)).size > 0);
+				assert.equal((await stat(leaf)).mode & 0o777, 0o700);
+				assert.equal((await stat(recordingsRoot)).mode & 0o777, 0o755);
 			} finally {
 				await emit(harness, "session_shutdown", { reason: "quit" });
 			}

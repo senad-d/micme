@@ -5,6 +5,7 @@ import { join } from "node:path";
 const PROJECT_RECORDINGS_DIR = "micme-rec";
 const RECORDING_DIR_PREFIX = "rec-";
 const MAX_SEQUENTIAL_RECORDING_DIRS = 999_999;
+const PRIVATE_DIRECTORY_MODE = 0o700;
 
 export async function createRecordingDirectory(cwd: string, keepAudio: boolean, tempPrefix = "micme-") {
 	if (!keepAudio) return mkdtemp(join(tmpdir(), tempPrefix));
@@ -13,7 +14,7 @@ export async function createRecordingDirectory(cwd: string, keepAudio: boolean, 
 
 export async function createProjectRecordingDirectory(cwd: string) {
 	const recordingsRoot = join(cwd, PROJECT_RECORDINGS_DIR);
-	await mkdir(recordingsRoot, { recursive: true });
+	await mkdir(recordingsRoot, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
 	await assertSafeRecordingsRoot(recordingsRoot);
 
 	const nextIndex = await getNextRecordingIndex(recordingsRoot);
@@ -21,7 +22,7 @@ export async function createProjectRecordingDirectory(cwd: string) {
 	for (let index = nextIndex; index <= MAX_SEQUENTIAL_RECORDING_DIRS; index += 1) {
 		const candidate = join(recordingsRoot, formatRecordingDirectoryName(index));
 		try {
-			await mkdir(candidate);
+			await mkdir(candidate, { mode: PRIVATE_DIRECTORY_MODE });
 			return candidate;
 		} catch (error) {
 			if (isAlreadyExistsError(error)) continue;
