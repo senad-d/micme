@@ -518,7 +518,19 @@ async function stopStreamingTranscription(
 	try {
 		assertExpectedProcessExit(active, exit, "stream");
 	} catch (error) {
-		if (clipStopPromise) await clipStopPromise;
+		await clipStopPromise;
+		if (!owner.isCurrent(operation)) return;
+		const clip = active.clipRecording;
+		if (clip?.directory) {
+			const note = describePartialClip(clip.directory, clip.audioPath);
+			if (note) {
+				const path = clip.directory.path;
+				owner.rememberAudioDirectory(operation, path);
+				const message = error instanceof Error ? error.message : String(error);
+				throw new Error(`${message}\n${note}: ${path}`, { cause: error });
+			}
+		}
+		await cleanupOwnedDirectories(owner, operation);
 		throw error;
 	}
 
@@ -526,6 +538,15 @@ async function stopStreamingTranscription(
 	ctx.ui.setStatus(STATUS_KEY, "finalizing stream…");
 	await completeStreamingStop(owner, operation, pi, active, state, clipStopPromise);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
+}
+
+function describePartialClip(directory: RecordingDirectory, audioPath: string) {
+	try {
+		return directory.hasRegularFile(audioPath) ? "Audio kept for debugging" : undefined;
+	} catch {
+		// Failed inspection is not proof that the directory is safe to delete.
+		return "Audio may remain in";
+	}
 }
 
 function stopClipRecording(active: Recording) {
