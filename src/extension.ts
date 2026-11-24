@@ -26,7 +26,7 @@ import {
 	stopProcess,
 	stopRecorder,
 } from "./processes.ts";
-import { clearRecordingWidget, startRecordingWidget } from "./recording-widget.ts";
+import { RecordingWidget } from "./recording-widget.ts";
 import { createRecordingDirectory } from "./recording-dir.ts";
 import { showConfiguration } from "./settings.ts";
 import {
@@ -92,6 +92,7 @@ export function registerMicmeExtension(pi: ExtensionAPI) {
 }
 
 export class MicmeSessionOwner {
+	private readonly recordingWidget = new RecordingWidget();
 	private current: MicmeOperation | undefined;
 	private closed = false;
 	private nextOperationId = 1;
@@ -139,7 +140,7 @@ export class MicmeSessionOwner {
 		const active = this.current;
 		this.current = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		clearRecordingWidget(ctx);
+		this.recordingWidget.clear(ctx);
 		if (!active) return;
 
 		const phaseAtShutdown = active.phase;
@@ -154,7 +155,7 @@ export class MicmeSessionOwner {
 		await stopOwnedProcesses(active);
 		await cleanupOwnedDirectories(this, active);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		clearRecordingWidget(ctx);
+		this.recordingWidget.clear(ctx);
 	}
 
 	isCurrent(operation: MicmeOperation) {
@@ -179,7 +180,14 @@ export class MicmeSessionOwner {
 		});
 		const ctx = operation.context;
 		ctx.ui.setStatus(STATUS_KEY, `● ${phase} (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
-		startRecordingWidget(ctx, primary);
+		this.recordingWidget.start(ctx, primary);
+	}
+
+	async cleanupFailedRecordingStart(operation: MicmeOperation) {
+		this.recordingWidget.clear(operation.context);
+		clearOperationTimers(operation);
+		await stopOwnedProcesses(operation);
+		await cleanupOwnedDirectories(this, operation);
 	}
 
 	trackProcess(operation: MicmeOperation, active: Recording) {
@@ -229,7 +237,7 @@ export class MicmeSessionOwner {
 	private async stop(operation: MicmeOperation) {
 		if (!this.transition(operation, "stopping")) return;
 		operation.context.ui.setStatus(STATUS_KEY, "stopping…");
-		clearRecordingWidget(operation.context);
+		this.recordingWidget.clear(operation.context);
 		const work = stopAndTranscribe(this, operation, this.pi);
 		operation.completion = work;
 		try {
@@ -261,7 +269,7 @@ export class MicmeSessionOwner {
 		if (!this.isCurrent(operation)) return;
 		this.current = undefined;
 		operation.context.ui.setStatus(STATUS_KEY, undefined);
-		clearRecordingWidget(operation.context);
+		this.recordingWidget.clear(operation.context);
 	}
 
 	private isShortcutAutoRepeat() {
@@ -368,7 +376,7 @@ async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOper
 
 		owner.activateRecording(operation, "recording", active, stopHint);
 	} catch (error) {
-		await cleanupFailedRecordingStart(owner, operation);
+		await owner.cleanupFailedRecordingStart(operation);
 		throw error;
 	}
 }
@@ -400,7 +408,7 @@ async function startStreamingTranscription(owner: MicmeSessionOwner, operation: 
 		await ensureStreamingRecorderStarted(streamRecording);
 		owner.activateRecording(operation, "streaming", streamRecording, stopHint);
 	} catch (error) {
-		await cleanupFailedRecordingStart(owner, operation);
+		await owner.cleanupFailedRecordingStart(operation);
 		throw error;
 	}
 }
@@ -450,13 +458,6 @@ async function ensureStreamingRecorderStarted(streamRecording: Recording) {
 	const stderr = failed ? formatProcessOutput(failed.stderr()) : "";
 	const suffix = stderr ? `\n${stderr}` : "";
 	throw new Error(`Micme streaming exited early (${formatExit(failedExit)}).${suffix}`);
-}
-
-async function cleanupFailedRecordingStart(owner: MicmeSessionOwner, operation: MicmeOperation) {
-	clearRecordingWidget(operation.context);
-	clearOperationTimers(operation);
-	await stopOwnedProcesses(operation);
-	await cleanupOwnedDirectories(owner, operation);
 }
 
 async function stopAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI) {
