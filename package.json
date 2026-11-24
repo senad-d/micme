@@ -65,6 +65,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "npm run lint:eslint && npm run typecheck && npm run check",
     "format:check": "node scripts/check-format.mjs",
+    "check:actions": "node scripts/ci/check-action-pins.mjs",
     "pack:dry-run": "npm pack --dry-run --json",
     "check:pack": "node scripts/check-package-contents.mjs",
     "validate": "npm run lint && npm run format:check && npm run test && npm run check:pack",
@@ -91,7 +92,8 @@
     "eslint": "^10.6.0",
     "globals": "^17.7.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "^8.62.1"
+    "typescript-eslint": "^8.62.1",
+    "yaml": "2.9.0"
   },
   "dependencies": {
     "koffi": "3.3.8"

@@ -23,12 +23,15 @@ Useful commands:
 ```bash
 npm run typecheck
 npm run check
+npm run check:actions
 npm run check:pack
 npm run pack:dry-run
 npm run doctor
 ```
 
 `npm pack` and `npm publish` build the `micme-doctor` executable and its shared helpers as JavaScript via the `prepack` hook. Edit the source files rather than the generated `dist/doctor/` output.
+
+CI checks that external action and reusable workflow references use full 40-character commit SHAs. When changing a pin, verify the SHA against the release tag in the upstream repository and keep the version in a comment. Workspace-relative references (`./` or `.\`) and self-repository references (`$/`) do not need a SHA.
 
 ## Pull requests
 
