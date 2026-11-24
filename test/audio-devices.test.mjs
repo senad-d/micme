@@ -6,6 +6,7 @@ import test from "node:test";
 
 const { reloadMicmeConfig } = await import("../src/config.ts");
 const { MAX_CAPTURED_OUTPUT_CHARS } = await import("../src/constants.ts");
+const { buildConfigurationItems } = await import("../src/settings.ts");
 const {
 	discoverAudioDevices,
 	listAudioDevices,
@@ -166,7 +167,7 @@ test("registered device renderer receives DirectShow panels", async (t) => {
 	assert.match(fallback.render(50).join("\n"), /Could not render Micme devices panel/);
 });
 
-test("macOS device listing detects microphone permission errors and AVF candidates", async (t) => {
+test("macOS device inventory and picker include FFmpeg-prefixed AVFoundation rows", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX shell shims are not portable to Windows");
 		return;
@@ -180,8 +181,9 @@ test("macOS device listing detects microphone permission errors and AVF candidat
 		join(bin, "ffmpeg"),
 		[
 			"#!/bin/sh",
-			"echo 'AVFoundation audio devices:' >&2",
-			"echo '[0] Studio Mic' >&2",
+			"echo '[AVFoundation indev @ 0x123] AVFoundation audio devices:' >&2",
+			"echo '[AVFoundation indev @ 0x123] [0] Studio Mic' >&2",
+			"echo '[debug] [3] Not a device' >&2",
 			"echo 'not authorized to capture microphone' >&2",
 			"exit 1",
 		].join("\n"),
@@ -189,14 +191,18 @@ test("macOS device listing detects microphone permission errors and AVF candidat
 	const harness = createWidgetCtx();
 
 	await withPlatform("darwin", async () => {
-		await withEnv({ PATH: bin }, async () => {
+		await withEnv({ PATH: bin, PI_CODING_AGENT_DIR: root, MICME_AUDIO_DEVICE: "0" }, async () => {
 			await listAudioDevices(harness.ctx);
-			assert.deepEqual(await discoverAudioDevices(), [{ label: "0: Studio Mic", value: "0", description: "Studio Mic" }]);
+			const candidates = await discoverAudioDevices();
+			assert.deepEqual(candidates, [{ label: "0: Studio Mic", value: "0", description: "Studio Mic" }]);
+			const picker = buildConfigurationItems([], candidates, {}).find((item) => item.id === "MICME_AUDIO_DEVICE");
+			assert.deepEqual(picker?.values, ["0"]);
+			assert.equal(picker?.valueLabels?.["0"], "0: Studio Mic");
 		});
 	});
 
-	assert.match(harness.widgets.at(-1)?.lines.join("\n") ?? "", /AVFoundation|Studio Mic/);
-	assert.deepEqual(parseAvfoundationAudioDevices("AVFoundation audio devices:\n[2] USB Mic"), [{ label: "2: USB Mic", value: "2", description: "USB Mic" }]);
+	assert.match(harness.widgets.at(-1)?.lines.join("\n") ?? "", /0 Studio Mic/);
+	assert.deepEqual(parseAvfoundationAudioDevices("AVFoundation audio devices:\n[2] [USB] Mic"), [{ label: "2: [USB] Mic", value: "2", description: "[USB] Mic" }]);
 });
 
 test("audio preprocessing and validation use ffmpeg output and skip flags", async (t) => {
