@@ -21,6 +21,33 @@ test("configuration display values strip terminal control sequences", () => {
 	assert.equal(displayConfigurationValue("MICME_WHISPER_CPP_MODEL", "/tmp/\x1b[31mggml-small.en.bin\x1b[0m"), "ggml-small.en.bin");
 });
 
+test("saving a missing model rechecks config and rejects malformed JSON before fetching", async (t) => {
+	const agentDir = await mkdtemp(join(tmpdir(), "micme-settings-test-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousAutoDownload = process.env.MICME_AUTO_DOWNLOAD_MODEL;
+	t.after(async () => {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		if (previousAutoDownload === undefined) delete process.env.MICME_AUTO_DOWNLOAD_MODEL;
+		else process.env.MICME_AUTO_DOWNLOAD_MODEL = previousAutoDownload;
+		reloadMicmeConfig();
+		await rm(agentDir, { recursive: true, force: true });
+	});
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	process.env.MICME_AUTO_DOWNLOAD_MODEL = "1";
+	const configPath = join(agentDir, "micme.json");
+	await writeFile(configPath, "{}");
+	reloadMicmeConfig();
+	const malformed = "{ invalid json";
+	await writeFile(configPath, malformed);
+	const fetch = t.mock.method(globalThis, "fetch", async () => new Response("mock model bytes"));
+
+	const save = saveConfigurationValue(createCtx(), "MICME_WHISPER_CPP_MODEL", join(agentDir, "models", "ggml-tiny.bin"));
+	await assert.rejects(save, (error) => error.message.includes(configPath) && /invalid.*JSON|not valid JSON/.test(error.message));
+	assert.equal(fetch.mock.callCount(), 0);
+	assert.equal(await readFile(configPath, "utf8"), malformed);
+});
+
 test("clearing the whisper.cpp model removes the explicit override from micme.json", async (t) => {
 	const agentDir = await mkdtemp(join(tmpdir(), "micme-settings-test-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
