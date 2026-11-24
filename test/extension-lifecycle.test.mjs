@@ -1178,6 +1178,74 @@ for (const mode of ["clip", "stream"]) {
 	});
 }
 
+for (const mode of ["clip", "stream"]) {
+	test(`${mode} removes temporary audio when editor delivery fails after transcription`, { skip: process.platform === "win32" && "requires POSIX executable fixtures" }, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "micme-extension-delivery-error-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const scratch = join(root, "scratch");
+		const processLog = join(root, "processes.log");
+		const stream = join(root, "whisper-stream");
+		const transcriber = join(root, "whisper-cli");
+		const model = join(root, "ggml-small.en.bin");
+		await Promise.all([
+			mkdir(scratch),
+			writeFfmpegProcess(join(root, "ffmpeg")),
+			writeStreamingProcess(stream),
+			writeExecutable(transcriber, "#!/bin/sh\nprintf 'successful transcript\\n'\n"),
+			writeFile(model, "model"),
+		]);
+
+		await withEnv(
+			{
+				TMPDIR: scratch,
+				PI_CODING_AGENT_DIR: join(root, "agent"),
+				PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+				MICME_RECORD_COMMAND: undefined,
+				MICME_TRANSCRIBE_COMMAND: undefined,
+				MICME_TEST_PROCESS_LOG: processLog,
+				MICME_TRANSCRIPTION_MODE: mode,
+				MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+				MICME_WHISPER_STREAM_BIN: stream,
+				MICME_WHISPER_CPP_BIN: transcriber,
+				MICME_WHISPER_CPP_MODEL: model,
+				MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+				MICME_PROCESS_AUDIO: "0",
+				MICME_VALIDATE_AUDIO: "0",
+				MICME_AUTO_SUBMIT: "0",
+				MICME_KEEP_AUDIO: "0",
+			},
+			async () => {
+				const harness = createExtensionHarness(root);
+				const command = harness.commands.get("micme");
+				try {
+					await command.handler("", harness.ctx);
+					const expectedProcesses = mode === "clip" ? 1 : 2;
+					await waitFor(async () => (await readProcessRows(processLog)).length === expectedProcesses, "recording fixtures did not start");
+					const [name] = await readdir(scratch);
+					assert.ok(name);
+					const audioDir = join(scratch, name);
+					assert.equal((await stat(join(audioDir, "raw.wav"))).size, 1024);
+					const delivery = t.mock.method(harness.ctx.ui, mode === "clip" ? "pasteToEditor" : "setEditorText", () => {
+						throw new Error("editor rejected transcript");
+					});
+					await command.handler("", harness.ctx);
+					delivery.mock.restore();
+
+					await assert.rejects(readdir(audioDir), { code: "ENOENT" });
+					const notices = harness.uiCalls.filter((entry) => entry.method === "notify");
+					assert.ok(notices.some((entry) => entry.level === "error" && /could not deliver the transcript: editor rejected transcript/.test(entry.message)), JSON.stringify(notices));
+					assert.ok(notices.every((entry) => !entry.message.includes("Audio kept for debugging")), JSON.stringify(notices));
+
+					await command.handler("last", harness.ctx);
+					assert.deepEqual(harness.uiCalls.at(-1), { method: "pasteToEditor", value: "successful transcript " });
+				} finally {
+					await emit(harness, "session_shutdown");
+				}
+			},
+		);
+	});
+}
+
 for (const { mode, autoSubmit } of [{ mode: "clip", autoSubmit: true }, { mode: "stream", autoSubmit: true }, { mode: "clip", autoSubmit: false }]) {
 	test(`${mode} ${autoSubmit ? "delivers" : "pastes"} one transcript and reports recoverable audio when cleanup fails`, { skip: process.platform === "win32" && "requires POSIX executable fixtures" }, async (t) => {
 		const root = await mkdtemp(join(tmpdir(), "micme-extension-cleanup-"));

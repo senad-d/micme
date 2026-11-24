@@ -470,7 +470,7 @@ async function stopAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOpera
 	const active = firstMainRecording(operation);
 	if (!active) throw new Error("Micme lost ownership of its recording process.");
 	if (active.streaming) {
-		await stopStreamingTranscription(owner, operation, pi, active);
+		await stopStreamingTranscription(owner, operation, pi, active, active.streaming);
 		return;
 	}
 	await stopClipAndTranscribe(owner, operation, pi, active);
@@ -482,35 +482,35 @@ function firstMainRecording(operation: MicmeOperation) {
 
 async function stopClipAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, active: Recording) {
 	const ctx = operation.context;
+	let transcript: string;
 	try {
 		await stopRecorder(active);
 		if (!owner.isCurrent(operation)) return;
 		owner.transition(operation, "transcribing");
 		ctx.ui.setStatus(STATUS_KEY, "transcribing…");
-		const transcript = await transcribeRecordingClip(owner, operation, active);
+		const rawTranscript = await transcribeRecordingClip(owner, operation, active);
 		if (!owner.isCurrent(operation)) return;
-		const normalized = normalizeTranscript(transcript);
-		if (!normalized) throw new Error("Micme did not receive any transcript text.");
-
-		owner.rememberTranscript(operation, normalized);
-		await pasteOrSubmitTranscript(ctx, pi, normalized);
+		transcript = normalizeTranscript(rawTranscript);
+		if (!transcript) throw new Error("Micme did not receive any transcript text.");
 	} catch (error) {
 		if (!owner.isCurrent(operation)) return;
-		ctx.ui.setStatus(STATUS_KEY, undefined);
 		owner.rememberAudioDirectory(operation, active.tempDir);
 		const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error));
 		throw new Error(`${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`, { cause: error });
 	}
 
-	if (!owner.isCurrent(operation)) return;
+	await deliverTranscribedClip(owner, operation, pi, active.tempDir, transcript);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
-	if (operation.keepAudio) owner.rememberAudioDirectory(operation, active.tempDir);
-	else await cleanupOwnedDirectories(owner, operation);
 }
 
-async function stopStreamingTranscription(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, active: Recording) {
+async function stopStreamingTranscription(
+	owner: MicmeSessionOwner,
+	operation: MicmeOperation,
+	pi: ExtensionAPI,
+	active: Recording,
+	state: NonNullable<Recording["streaming"]>,
+) {
 	const ctx = operation.context;
-	const state = active.streaming;
 	const clipStopPromise = stopClipRecording(active);
 	prepareStreamingStop(ctx, active, state);
 	const exit = await stopProcess(active);
@@ -524,9 +524,7 @@ async function stopStreamingTranscription(owner: MicmeSessionOwner, operation: M
 
 	owner.transition(operation, "finalizing");
 	ctx.ui.setStatus(STATUS_KEY, "finalizing stream…");
-	const keepTempDir = state ? await completeStreamingStop(owner, operation, pi, active, state, clipStopPromise) : false;
-	if (!owner.isCurrent(operation)) return;
-	if (!keepTempDir) await cleanupOwnedDirectories(owner, operation);
+	await completeStreamingStop(owner, operation, pi, active, state, clipStopPromise);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
@@ -540,8 +538,7 @@ async function validateAudioForTranscription(ctx: ExtensionContext, audioPath: s
 	ctx.ui.notify("Micme skipped silence validation because ffmpeg was not found. Install ffmpeg or set MICME_VALIDATE_AUDIO=0 to disable the silence guard.", "warning");
 }
 
-function prepareStreamingStop(ctx: ExtensionContext, active: Recording, state: Recording["streaming"]) {
-	if (!state) return;
+function prepareStreamingStop(ctx: ExtensionContext, active: Recording, state: NonNullable<Recording["streaming"]>) {
 	drainStreamingOutput(ctx, active, false);
 	renderStreamingPreview(ctx, state, false);
 	clearStreamingFlush(state);
@@ -562,12 +559,13 @@ async function completeStreamingStop(
 	if (!clipRecording) {
 		await useLiveStreamingTranscript(owner, operation, pi, state);
 		clearStreamingFlush(state);
-		return false;
+		if (owner.isCurrent(operation)) await cleanupOwnedDirectories(owner, operation);
+		return;
 	}
 
 	renderStreamingPreview(ctx, state, false);
 	clearStreamingFlush(state);
-	return finalizeStreamingClip(owner, operation, pi, active, clipRecording, state, clipStopPromise);
+	await finalizeStreamingClip(owner, operation, pi, active, clipRecording, state, clipStopPromise);
 }
 
 async function useLiveStreamingTranscript(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, state: NonNullable<Recording["streaming"]>) {
@@ -592,35 +590,21 @@ async function finalizeStreamingClip(
 	state: NonNullable<Recording["streaming"]>,
 	clipStopPromise: ReturnType<typeof stopClipRecording>,
 ) {
+	let transcript: string;
 	try {
-		await transcribeFinalStreamingClip(owner, operation, pi, clipRecording, state, clipStopPromise);
-		return keepCompletedStreamingClipAudio(owner, operation, active);
+		const clipStopError = await clipStopPromise;
+		if (!owner.isCurrent(operation)) return;
+		if (clipStopError) throw clipStopError;
+		const rawTranscript = await transcribeRecordingClip(owner, operation, clipRecording);
+		if (!owner.isCurrent(operation)) return;
+		transcript = normalizeTranscript(rawTranscript);
+		if (!transcript) throw new Error("Micme did not receive any final transcript text.");
 	} catch (error) {
-		if (!owner.isCurrent(operation)) return false;
-		handleFinalStreamingClipError(owner, operation, active, state, error);
-		return true;
+		if (owner.isCurrent(operation)) handleFinalStreamingClipError(owner, operation, active, state, error);
+		return;
 	}
-}
 
-async function transcribeFinalStreamingClip(
-	owner: MicmeSessionOwner,
-	operation: MicmeOperation,
-	pi: ExtensionAPI,
-	clipRecording: Recording,
-	state: NonNullable<Recording["streaming"]>,
-	clipStopPromise: ReturnType<typeof stopClipRecording>,
-) {
-	const ctx = operation.context;
-	const clipStopError = await clipStopPromise;
-	if (!owner.isCurrent(operation)) return;
-	if (clipStopError) throw clipStopError;
-	const transcript = await transcribeRecordingClip(owner, operation, clipRecording);
-	if (!owner.isCurrent(operation)) return;
-	const normalized = normalizeTranscript(transcript);
-	if (!normalized) throw new Error("Micme did not receive any final transcript text.");
-
-	owner.rememberTranscript(operation, normalized);
-	await pasteOrSubmitFinalStreamingTranscript(ctx, pi, state, normalized);
+	await deliverTranscribedClip(owner, operation, pi, active.tempDir, transcript, state);
 }
 
 async function transcribeRecordingClip(owner: MicmeSessionOwner, operation: MicmeOperation, recording: Recording) {
@@ -635,10 +619,28 @@ async function transcribeRecordingClip(owner: MicmeSessionOwner, operation: Micm
 	return transcribe(preparedAudioPath, filesPath, ctx, signal, directory);
 }
 
-function keepCompletedStreamingClipAudio(owner: MicmeSessionOwner, operation: MicmeOperation, active: Recording) {
-	if (!operation.keepAudio) return false;
-	owner.rememberAudioDirectory(operation, active.tempDir);
-	return true;
+async function deliverTranscribedClip(
+	owner: MicmeSessionOwner,
+	operation: MicmeOperation,
+	pi: ExtensionAPI,
+	tempDir: string,
+	transcript: string,
+	streaming?: NonNullable<Recording["streaming"]>,
+) {
+	const ctx = operation.context;
+	owner.rememberTranscript(operation, transcript);
+	try {
+		if (streaming) await pasteOrSubmitFinalStreamingTranscript(ctx, pi, streaming, transcript);
+		else await pasteOrSubmitTranscript(ctx, pi, transcript);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Micme could not deliver the transcript: ${message}`, { cause: error });
+	} finally {
+		if (owner.isCurrent(operation)) {
+			if (operation.keepAudio) owner.rememberAudioDirectory(operation, tempDir);
+			else await cleanupOwnedDirectories(owner, operation);
+		}
+	}
 }
 
 function handleFinalStreamingClipError(
