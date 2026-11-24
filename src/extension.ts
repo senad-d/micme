@@ -164,7 +164,7 @@ export class MicmeSessionOwner {
 		try {
 			await pending;
 		} catch (error) {
-			handleExtensionError(guardedContext, error);
+			notifyExtensionError(guardedContext, error);
 		} finally {
 			this.sessionWork.delete(pending);
 		}
@@ -275,7 +275,7 @@ export class MicmeSessionOwner {
 			operation.startupFailureCleanup = this.cleanupFailedRecordingStart(operation, error);
 			const reportedError = await operation.startupFailureCleanup;
 			if (!this.isCurrent(operation)) return;
-			handleExtensionError(operation.context, reportedError);
+			notifyExtensionError(operation.context, reportedError);
 			this.finish(operation);
 			closeOwnedDirectories(operation);
 		} finally {
@@ -304,7 +304,7 @@ export class MicmeSessionOwner {
 		try {
 			await work;
 		} catch (error) {
-			if (this.isCurrent(operation)) handleExtensionError(operation.context, error);
+			if (this.isCurrent(operation)) notifyExtensionError(operation.context, error);
 		} finally {
 			if (operation.completion === work) operation.completion = undefined;
 			if (this.isCurrent(operation)) {
@@ -331,9 +331,9 @@ export class MicmeSessionOwner {
 
 	private finish(operation: MicmeOperation) {
 		if (!this.isCurrent(operation)) return;
-		this.current = undefined;
+		// Clear status before releasing ownership, while the guarded UI still accepts writes.
 		operation.context.ui.setStatus(STATUS_KEY, undefined);
-		this.recordingWidget.clear(operation.context);
+		this.current = undefined;
 	}
 
 	private isShortcutAutoRepeat() {
@@ -378,7 +378,7 @@ async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, ar
 				ctx.ui.notify(`Unknown micme action: ${sanitizeTerminalOutput(action) || "(empty)"}. Try /micme help`, "warning");
 		}
 	} catch (error) {
-		handleExtensionError(ctx, error);
+		notifyExtensionError(ctx, error);
 	}
 }
 
@@ -386,18 +386,17 @@ async function handleMicmeTerminalShortcut(owner: MicmeSessionOwner, ctx: Extens
 	try {
 		await owner.handleTerminalShortcut(ctx);
 	} catch (error) {
-		handleExtensionError(ctx, error);
+		notifyExtensionError(ctx, error);
 	}
 }
 
 function createMicmeEditorHandlers(owner: MicmeSessionOwner, ctx: ExtensionContext): MicmeEditorInputHandlers {
 	return {
-		toggle: () => owner.toggle(ctx).catch((error) => handleExtensionError(ctx, error)),
+		toggle: () => owner.toggle(ctx).catch((error) => notifyExtensionError(ctx, error)),
 	};
 }
 
-function handleExtensionError(ctx: ExtensionContext, error: unknown) {
-	ctx.ui.setStatus(STATUS_KEY, undefined);
+function notifyExtensionError(ctx: ExtensionContext, error: unknown) {
 	ctx.ui.notify(sanitizeTerminalOutput(error instanceof Error ? error.message : String(error)) || "Micme failed with an empty error message.", "error");
 }
 
@@ -580,7 +579,6 @@ async function stopClipAndTranscribe(owner: MicmeSessionOwner, operation: MicmeO
 	}
 
 	await deliverTranscribedClip(owner, operation, pi, active.tempDir, transcript);
-	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
 async function stopStreamingTranscription(
@@ -609,7 +607,6 @@ async function stopStreamingTranscription(
 	owner.transition(operation, "finalizing");
 	ctx.ui.setStatus(STATUS_KEY, "finalizing stream…");
 	await completeStreamingStop(owner, operation, pi, active, state, clipStopPromise);
-	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
 function inspectStartupClip(operation: MicmeOperation) {

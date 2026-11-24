@@ -7,7 +7,7 @@ import test from "node:test";
 
 const { registerMicmeExtension } = await import("../src/extension.ts");
 const { reloadMicmeConfig } = await import("../src/config.ts");
-const { MAX_CAPTURED_OUTPUT_CHARS, RECORDING_WIDGET_KEY } = await import("../src/constants.ts");
+const { MAX_CAPTURED_OUTPUT_CHARS, RECORDING_WIDGET_KEY, STATUS_KEY } = await import("../src/constants.ts");
 const { shellQuote } = await import("../src/processes.ts");
 
 const theme = {
@@ -852,6 +852,46 @@ test("malformed and non-object config refuse operational work before external si
 	);
 });
 
+test("a failed /micme devices config check leaves the active recording status unchanged", { skip: process.platform === "win32" && "requires a POSIX executable fixture" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-devices-invalid-config-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const configPath = join(root, "micme.json");
+	const processLog = join(root, "processes.log");
+	await writeFfmpegProcess(join(root, "ffmpeg"));
+
+	await withEnv({
+		TMPDIR: root,
+		PI_CODING_AGENT_DIR: root,
+		PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+		MICME_TEST_PROCESS_LOG: processLog,
+		MICME_RECORD_COMMAND: undefined,
+		MICME_TRANSCRIPTION_MODE: "clip",
+		MICME_KEEP_AUDIO: "0",
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		const command = harness.commands.get("micme");
+		assert.ok(command);
+		try {
+			await command.handler("", harness.ctx);
+			await waitFor(async () => (await readProcessRows(processLog)).length > 0, "recorder did not start");
+			const status = harness.uiCalls.findLast((entry) => entry.method === "setStatus" && entry.key === STATUS_KEY);
+			assert.match(status?.value ?? "", /^● recording /);
+
+			await writeFile(configPath, "{ invalid");
+			const beforeDevices = harness.uiCalls.length;
+			await command.handler("devices", harness.ctx);
+
+			assert.equal(harness.owner.getPhase(), "recording");
+			const deviceCalls = harness.uiCalls.slice(beforeDevices);
+			const error = deviceCalls.find((entry) => entry.method === "notify" && entry.level === "error");
+			assert.match(error?.message ?? "", /file is not valid JSON/);
+			assert.deepEqual(deviceCalls.filter((entry) => entry.method === "setStatus" && entry.key === STATUS_KEY), []);
+		} finally {
+			await emit(harness, "session_shutdown");
+		}
+	});
+});
+
 for (const mode of ["clip", "stream"]) {
 	test(`${mode} stop retains raw audio and skips clip postprocessing when config becomes invalid ${mode === "clip" ? "before stop" : "during recorder shutdown"}`, { skip: process.platform === "win32" && "requires POSIX executable fixtures" }, async (t) => {
 		const root = await mkdtemp(join(tmpdir(), "micme-extension-stop-invalid-config-"));
@@ -1392,6 +1432,11 @@ for (const mode of ["clip", "stream"]) {
 							await command.handler("", harness.ctx);
 							assert.equal(harness.owner.getPhase(), "idle");
 							assert.deepEqual(harness.sentMessages, [{ message: "retention transcript", options: undefined }]);
+							assert.deepEqual(harness.uiCalls.findLast((entry) => entry.method === "setStatus" && entry.key === STATUS_KEY), {
+								method: "setStatus",
+								key: STATUS_KEY,
+								value: undefined,
+							});
 
 							await command.handler("audio", harness.ctx);
 							const audioNotice = harness.uiCalls.at(-1);
@@ -1869,6 +1914,11 @@ test("failed recorder startup reports rejected directory cleanup without masking
 			const [name] = await readdir(scratch);
 			assert.ok(name);
 			const audioDir = join(scratch, name);
+			assert.deepEqual(harness.uiCalls.findLast((entry) => entry.method === "setStatus" && entry.key === STATUS_KEY), {
+				method: "setStatus",
+				key: STATUS_KEY,
+				value: undefined,
+			});
 			const notices = harness.uiCalls.filter((entry) => entry.method === "notify");
 			assert.match(notices.find((entry) => entry.level === "error")?.message ?? "", /Micme needs ffmpeg for recording/);
 			const warning = notices.find((entry) => entry.level === "warning")?.message ?? "";
