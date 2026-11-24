@@ -857,7 +857,7 @@ test("custom recorder accepts exit 255 after Micme sends SIGINT", { skip: proces
 		setInterval(() => {}, 1000);
 	`;
 	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio}`;
-	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const command = await withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
 	const recording = spawnRecording(command, audioPath, root);
 	t.after(() => stopProcess(recording));
 
@@ -872,7 +872,7 @@ test("custom recorder rejects spontaneous exit 255 even with audio", { skip: pro
 	const audioPath = join(root, "raw.wav");
 	const script = `require("node:fs").writeFileSync(process.argv[1], Buffer.alloc(600)); process.exit(255);`;
 	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio}`;
-	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const command = await withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
 	const recording = spawnRecording(command, audioPath, root);
 
 	await recording.exitPromise;
@@ -893,7 +893,7 @@ test("custom recorder rejects a pre-stop exit 255 whose notification is still pe
 		process.exit(255);
 	`;
 	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio} ${shellQuote(pidPath)}`;
-	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const command = await withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
 	const recording = spawnRecording(command, audioPath, root);
 	t.after(() => stopProcess(recording));
 

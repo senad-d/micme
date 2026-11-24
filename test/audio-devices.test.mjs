@@ -354,7 +354,7 @@ test("Linux silence diagnostic names the setting used by the Pulse recorder", as
 			MICME_SKIP_AUDIO_VALIDATION: "0",
 		},
 		async () => {
-			const { args } = buildRecorderCommand(input);
+			const { args } = await buildRecorderCommand(input);
 			const formatIndex = args.indexOf("-f");
 			assert.deepEqual(args.slice(formatIndex, formatIndex + 4), ["-f", "pulse", "-i", "alsa_input.usb"]);
 			await assert.rejects(validateRecordedAudio(input), /almost-silent audio.*set MICME_PULSE_SOURCE to the real microphone/);
