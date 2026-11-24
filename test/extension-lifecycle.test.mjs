@@ -237,7 +237,7 @@ const poll = setInterval(() => {
 	);
 }
 
-async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024 } = {}) {
+async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024, logPostprocessing = false, corruptConfigOnStop } = {}) {
 	await writeExecutable(
 		path,
 		`#!/usr/bin/env node
@@ -249,11 +249,13 @@ if (${verifyInput} && (args.includes("volumedetect") || output.endsWith("clip.wa
   if (readFileSync(input).length !== 1024) throw new Error("unexpected audio input: " + input);
 }
 if (args.includes("volumedetect")) {
+  if (${logPostprocessing}) appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`validate \${process.pid}\\n\`);
   const validationOutput = process.env.MICME_TEST_VALIDATION_OUTPUT;
   process.stderr.write(validationOutput === undefined ? "[Parsed_volumedetect_0 @ 0x1234] mean_volume: -20 dB\\n[Parsed_volumedetect_0 @ 0x1234] max_volume: -5 dB\\n" : validationOutput);
   process.exit(Number(process.env.MICME_TEST_VALIDATION_EXIT_CODE || 0));
 }
 if (output.endsWith("clip.wav")) {
+  if (${logPostprocessing}) appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`preprocess \${process.pid}\\n\`);
   writeFileSync(output, Buffer.alloc(1024));
   process.exit(0);
 }
@@ -261,7 +263,12 @@ if (${rawBytes !== null}) writeFileSync(output, Buffer.alloc(${rawBytes ?? 0}));
 appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`recorder \${process.pid}\\n\`);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
-  if (chunk.includes("q")) setTimeout(() => process.exit(0), Number(process.env.MICME_TEST_STOP_DELAY_MS || 0));
+  if (!chunk.includes("q")) return;
+  setTimeout(() => {
+    const configPath = ${JSON.stringify(corruptConfigOnStop)};
+    if (configPath) writeFileSync(configPath, "{ invalid");
+    process.exit(0);
+  }, Number(process.env.MICME_TEST_STOP_DELAY_MS || 0));
 });
 process.on("SIGINT", () => process.exit(0));
 process.on("SIGTERM", () => process.exit(0));
@@ -700,6 +707,90 @@ test("malformed and non-object config refuse operational work before external si
 		},
 	);
 });
+
+for (const mode of ["clip", "stream"]) {
+	test(`${mode} stop retains raw audio and skips clip postprocessing when config becomes invalid ${mode === "clip" ? "before stop" : "during recorder shutdown"}`, { skip: process.platform === "win32" && "requires POSIX executable fixtures" }, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "micme-extension-stop-invalid-config-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const scratch = join(root, "scratch");
+		const configPath = join(root, "micme.json");
+		const processLog = join(root, "processes.log");
+		const model = join(root, "stream-model.bin");
+		const validConfig = { MICME_AUTO_DOWNLOAD_MODEL: "0", ...(mode === "stream" ? { MICME_WHISPER_CPP_MODEL: model } : {}) };
+		await Promise.all([
+			mkdir(scratch),
+			writeFile(configPath, JSON.stringify(validConfig)),
+			writeFile(model, "fixture model"),
+			writeFfmpegProcess(join(root, "ffmpeg"), { logPostprocessing: true, corruptConfigOnStop: mode === "stream" ? configPath : undefined }),
+			writeStreamingProcess(join(root, "whisper-stream")),
+			writeExecutable(join(root, "whisper-cli"), `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`transcriber \${process.pid}\\n\`);
+console.log("fixture transcript");
+`),
+		]);
+
+		const mockFetch = t.mock.method(globalThis, "fetch", async () => modelResponse());
+		await withEnv({
+			TMPDIR: scratch,
+			PI_CODING_AGENT_DIR: root,
+			PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+			MICME_TEST_PROCESS_LOG: processLog,
+			MICME_TRANSCRIPTION_MODE: mode,
+			MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+			MICME_RECORD_COMMAND: undefined,
+			MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+			MICME_WHISPER_STREAM_BIN: join(root, "whisper-stream"),
+			MICME_WHISPER_CPP_BIN: join(root, "whisper-cli"),
+			MICME_WHISPER_CPP_MODEL: undefined,
+			MICME_MODEL_DIR: join(root, "models"),
+			MICME_AUTO_DOWNLOAD_MODEL: undefined,
+			MICME_PROCESS_AUDIO: "1",
+			MICME_VALIDATE_AUDIO: "1",
+			MICME_KEEP_AUDIO: "0",
+		}, async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), mode === "clip" ? "recording" : "streaming");
+				const captureCount = mode === "clip" ? 1 : 2;
+				await waitFor(async () => (await readProcessRows(processLog)).length === captureCount, "recording fixtures did not start");
+				const captureRows = await readProcessRows(processLog);
+				const [name] = await readdir(scratch);
+				assert.ok(name);
+				const audioDir = join(scratch, name);
+
+				// Reproduce the failed device reload for clips. In stream mode, FFmpeg corrupts
+				// the file just before it exits, so a pre-stop config check cannot catch it.
+				if (mode === "clip") {
+					await writeFile(configPath, "{ invalid");
+					await command.handler("devices", harness.ctx);
+				}
+				const stopUiStart = harness.uiCalls.length;
+				await command.handler("", harness.ctx);
+
+				assert.equal(harness.owner.getPhase(), "idle");
+				await assertProcessesStopped(captureRows);
+				assert.deepEqual({ rows: await readProcessRows(processLog), fetchCalls: mockFetch.mock.callCount() }, { rows: captureRows, fetchCalls: 0 });
+				const stopUi = harness.uiCalls.slice(stopUiStart);
+				assert.equal(stopUi.filter((entry) => entry.method === "setStatus").at(-1)?.value, undefined);
+				const level = mode === "clip" ? "error" : "warning";
+				const notice = stopUi.find((entry) => entry.method === "notify" && entry.level === level);
+				assert.match(notice?.message ?? "", /file is not valid JSON/);
+				assert.ok(notice?.message.includes(`Audio kept for debugging: ${audioDir}`));
+				assert.equal((await stat(join(audioDir, "raw.wav"))).size, 1024);
+				assert.equal(stopUi.some((entry) => entry.method === "pasteToEditor"), false);
+				assert.deepEqual(harness.sentMessages, []);
+				await command.handler("audio", harness.ctx);
+				assert.equal(harness.uiCalls.at(-1)?.message, `Last Micme audio directory: ${audioDir}`);
+			} finally {
+				await emit(harness, "session_shutdown");
+			}
+		});
+	});
+}
 
 test("shutdown owns clip recording, stopping, and transcription processes", async (t) => {
 	if (process.platform === "win32") {
