@@ -165,6 +165,21 @@ export class MicmeSessionOwner {
 		return true;
 	}
 
+	activateRecording(operation: MicmeOperation, phase: "recording" | "streaming", primary: Recording, stopHint: string) {
+		if (!this.transition(operation, phase)) return;
+		// The primary can exit at the startup boundary, or before its stdio closes.
+		if (hasRecorderExited(primary)) {
+			void this.stop(operation);
+			return;
+		}
+		primary.process.once("exit", () => {
+			if (this.isCurrent(operation) && operation.phase === phase) void this.stop(operation);
+		});
+		const ctx = operation.context;
+		ctx.ui.setStatus(STATUS_KEY, `● ${phase} (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
+		startRecordingWidget(ctx, primary);
+	}
+
 	trackProcess(operation: MicmeOperation, active: Recording) {
 		operation.processes.add(active);
 	}
@@ -344,9 +359,7 @@ async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOper
 			throw new Error(`Micme recorder exited early (${formatExit(earlyExit)}).${suffix}`);
 		}
 
-		owner.transition(operation, "recording");
-		ctx.ui.setStatus(STATUS_KEY, `● recording (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
-		startRecordingWidget(ctx, active);
+		owner.activateRecording(operation, "recording", active, stopHint);
 	} catch (error) {
 		await cleanupFailedRecordingStart(ctx, operation);
 		throw error;
@@ -373,10 +386,7 @@ async function startStreamingTranscription(owner: MicmeSessionOwner, operation: 
 		if (clipRecording) owner.trackProcess(operation, clipRecording);
 
 		await ensureStreamingRecorderStarted(streamRecording);
-		if (!owner.isCurrent(operation)) return;
-		owner.transition(operation, "streaming");
-		ctx.ui.setStatus(STATUS_KEY, `● streaming (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
-		startRecordingWidget(ctx, streamRecording);
+		owner.activateRecording(operation, "streaming", streamRecording, stopHint);
 	} catch (error) {
 		await cleanupFailedRecordingStart(ctx, operation);
 		throw error;
@@ -409,9 +419,15 @@ function initializeStreamingRecording(ctx: ExtensionContext, streamRecording: Re
 		startedAt: Date.now(),
 	};
 	streamRecording.process.stdout?.on("data", (chunk: Buffer | string) => {
+		// Draining pipes after a spontaneous exit must not restart the live preview timer.
+		if (!streamRecording.stopRequested && hasRecorderExited(streamRecording)) return;
 		const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
 		handleStreamingOutput(ctx, streamRecording, text);
 	});
+}
+
+function hasRecorderExited(active: Recording) {
+	return active.isSettled() || active.process.exitCode != null || active.process.signalCode != null;
 }
 
 function startOptionalClipRecording(streamRecording: Recording, tempDir: string) {
