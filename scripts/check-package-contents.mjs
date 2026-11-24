@@ -21,8 +21,13 @@ const forbiddenChecks = [
 ];
 
 function readPackFiles() {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const output = execFileSync(npmCommand, ["pack", "--dry-run", "--json"], {
+  // npm run supplies the CLI path, so Windows does not need to launch npm.cmd.
+  const npmCli = process.env.npm_execpath;
+  if (!npmCli && process.platform === "win32") {
+    throw new Error("Run this check with npm run check:pack.");
+  }
+  const packArgs = ["pack", "--dry-run", "--json"];
+  const output = execFileSync(npmCli ? process.execPath : "npm", npmCli ? ["--", npmCli, ...packArgs] : packArgs, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
