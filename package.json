@@ -37,7 +37,7 @@
     "node": ">=22.19.0"
   },
   "bin": {
-    "micme-doctor": "./scripts/doctor.mjs"
+    "micme-doctor": "./dist/doctor/scripts/doctor.mjs"
   },
   "files": [
     "README.md",
@@ -51,11 +51,14 @@
     "img/micme_logo.svg",
     "src/**/*.ts",
     "scripts/*.mjs",
+    "dist/doctor",
     "docs/**/*.md",
     "tsconfig.json"
   ],
   "scripts": {
     "doctor": "node scripts/doctor.mjs",
+    "build:doctor": "tsc --project scripts/tsconfig.doctor.json",
+    "prepack": "npm run build:doctor",
     "check": "node --check scripts/doctor.mjs && node --check scripts/check-format.mjs && node --check scripts/check-package-contents.mjs && node --check scripts/publish-npm.mjs",
     "test": "node --test test/*.test.mjs",
     "test:pi-contract": "node --test test/pi-contract.test.mjs",
