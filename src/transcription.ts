@@ -4,8 +4,10 @@ import { open } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
 import { env, getTranscribeTimeoutMs, getTranslateToEnglishLanguage } from "./config.ts";
+import { MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import { ensureWhisperCppModel, getPythonWhisperModelName } from "./models.ts";
 import { formatProcessOutput, formatRunExit, runProcess, runShell } from "./processes.ts";
+import type { RunResult } from "./types.ts";
 
 export { getWhisperCppBinary, getWhisperStreamBinary, resolveExecutableConfig } from "./backends.ts";
 
@@ -39,7 +41,7 @@ export async function transcribeWithCustomCommand(template: string, audioPath: s
 		throw new Error(`MICME_TRANSCRIBE_COMMAND failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	return readTranscriptOutput(transcriptPath, result.stdout);
+	return readTranscriptOutput(transcriptPath, result);
 }
 
 export async function transcribeWithWhisperCpp(
@@ -66,7 +68,7 @@ export async function transcribeWithWhisperCpp(
 		throw new Error(`whisper.cpp failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	return readTranscriptOutput(`${outputBase}.txt`, result.stdout);
+	return readTranscriptOutput(`${outputBase}.txt`, result);
 }
 
 export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string, signal?: AbortSignal) {
@@ -106,23 +108,32 @@ export async function transcribeWithOpenAiWhisper(binary: string, audioPath: str
 	}
 
 	const txtName = basename(audioPath).replace(/\.[^.]+$/, ".txt");
-	return readTranscriptOutput(join(tempDir, txtName), result.stdout);
+	return readTranscriptOutput(join(tempDir, txtName), result);
 }
 
-async function readTranscriptOutput(path: string, stdout: string) {
+async function readTranscriptOutput(path: string, result: RunResult): Promise<string> {
+	const text = await readTranscriptFile(path);
+	if (text?.trim()) return text;
+
+	if (result.stdoutTruncated) {
+		throw new Error(`Transcriber stdout exceeded the ${MAX_CAPTURED_OUTPUT_CHARS}-character capture limit and was truncated. Write the transcript to the output file instead.`);
+	}
+	return result.stdout;
+}
+
+async function readTranscriptFile(path: string): Promise<string | undefined> {
 	let file;
 	try {
 		// A blocking open can hang on a FIFO before we can check its type.
 		file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
 	} catch (error) {
-		if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return stdout;
+		if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined;
 		throw error;
 	}
 
 	try {
 		if (!(await file.stat()).isFile()) throw new Error(`Transcript output is not a regular file: ${path}`);
-		const text = await file.readFile("utf8");
-		return text.trim() ? text : stdout;
+		return await file.readFile("utf8");
 	} finally {
 		await file.close();
 	}

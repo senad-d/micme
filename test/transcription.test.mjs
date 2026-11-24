@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+
+import { MAX_CAPTURED_OUTPUT_CHARS } from "../src/constants.ts";
+import { shellQuote } from "../src/processes.ts";
 import { transcribeWithCustomCommand } from "../src/transcription.ts";
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +27,12 @@ async function createTranscriptDir(t) {
 	const dir = await mkdtemp(join(tmpdir(), "micme-transcription-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	return dir;
+}
+
+function transcribeStdout(tempDir, length) {
+	// The unused placeholder selects verbatim shell quoting on Windows.
+	const command = `${shellQuote(process.execPath)} -e "process.stdout.write('a' + 'x'.repeat(${length - 1}))" {audio}`;
+	return transcribeWithCustomCommand(command, join(tempDir, "raw.wav"), tempDir);
 }
 
 test("a successful custom hook with a writerless FIFO rejects promptly", { skip: process.platform === "win32" && "requires a POSIX FIFO" }, async (t) => {
@@ -50,4 +59,27 @@ test("a blank regular transcript falls back to stdout", async (t) => {
 
 	const result = await transcribeWithCustomCommand("echo fallback", join(dir, "audio.wav"), dir);
 	assert.equal(result.trim(), "fallback");
+});
+
+test("a stdout transcript at the capture limit is returned in full", async (t) => {
+	const dir = await createTranscriptDir(t);
+	const transcript = await transcribeStdout(dir, MAX_CAPTURED_OUTPUT_CHARS);
+	assert.equal(transcript, "a" + "x".repeat(MAX_CAPTURED_OUTPUT_CHARS - 1));
+});
+
+test("a truncated stdout fallback rejects instead of returning transcript text", async (t) => {
+	const dir = await createTranscriptDir(t);
+	await assert.rejects(transcribeStdout(dir, MAX_CAPTURED_OUTPUT_CHARS + 1), /stdout.*capture limit.*truncated/i);
+});
+
+test("a blank regular transcript cannot fall back to truncated stdout", async (t) => {
+	const dir = await createTranscriptDir(t);
+	await writeFile(join(dir, "transcript.txt"), " \t\n");
+	await assert.rejects(transcribeStdout(dir, MAX_CAPTURED_OUTPUT_CHARS + 1), /stdout.*capture limit.*truncated/i);
+});
+
+test("an intact transcript file takes precedence over truncated stdout", async (t) => {
+	const dir = await createTranscriptDir(t);
+	await writeFile(join(dir, "transcript.txt"), "A complete transcript.\n");
+	assert.equal(await transcribeStdout(dir, MAX_CAPTURED_OUTPUT_CHARS + 1), "A complete transcript.\n");
 });

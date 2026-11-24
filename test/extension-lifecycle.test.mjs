@@ -6,6 +6,7 @@ import test from "node:test";
 
 const { registerMicmeExtension } = await import("../src/extension.ts");
 const { reloadMicmeConfig } = await import("../src/config.ts");
+const { MAX_CAPTURED_OUTPUT_CHARS } = await import("../src/constants.ts");
 const { shellQuote } = await import("../src/processes.ts");
 
 const theme = {
@@ -1008,6 +1009,50 @@ setInterval(() => {}, 1_000);
 		},
 	);
 });
+
+for (const autoSubmit of [false, true]) {
+	test(`truncated clip stdout is not delivered in ${autoSubmit ? "auto-submit" : "paste-for-review"} mode`, { skip: process.platform === "win32" && "requires POSIX executable fixtures" }, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "micme-extension-truncated-transcript-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const processLog = join(root, "processes.log");
+		await writeFfmpegProcess(join(root, "ffmpeg"));
+
+		await withEnv(
+			{
+				PI_CODING_AGENT_DIR: join(root, "agent"),
+				PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+				MICME_TEST_PROCESS_LOG: processLog,
+				MICME_RECORD_COMMAND: undefined,
+				MICME_TRANSCRIPTION_MODE: "clip",
+				MICME_TRANSCRIBE_BACKEND: "custom",
+				MICME_TRANSCRIBE_COMMAND: `${shellQuote(process.execPath)} -e "process.stdout.write('a' + 'x'.repeat(${MAX_CAPTURED_OUTPUT_CHARS}))"`,
+				MICME_PROCESS_AUDIO: "0",
+				MICME_VALIDATE_AUDIO: "0",
+				MICME_AUTO_SUBMIT: autoSubmit ? "1" : "0",
+				MICME_KEEP_AUDIO: "1",
+			},
+			async () => {
+				const harness = createExtensionHarness(root);
+				const command = harness.commands.get("micme");
+				assert.ok(command);
+				try {
+					await command.handler("", harness.ctx);
+					assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+					await waitFor(async () => (await readProcessRows(processLog)).some((row) => row.startsWith("recorder ")), "clip recorder did not start");
+					await command.handler("", harness.ctx);
+					assert.equal(harness.owner.getPhase(), "idle");
+
+					assert.equal(harness.uiCalls.some((entry) => entry.method === "pasteToEditor" || entry.method === "setEditorText"), false, "truncated transcript reached the editor");
+					assert.equal(harness.sentMessages.length, 0, "truncated transcript was submitted");
+					const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
+					assert.match(error?.message ?? "", /stdout.*capture limit.*truncated/i);
+				} finally {
+					await emit(harness, "session_shutdown", { reason: "quit" });
+				}
+			},
+		);
+	});
+}
 
 test("missing ffmpeg explicitly warns custom-recorder users when validation is skipped", async (t) => {
 	if (process.platform === "win32") {

@@ -341,7 +341,7 @@ export function runProcess(command: string, args: string[], timeoutMs: number, o
 }
 
 function cancelledRun(): RunResult {
-	return { code: null, signal: null, stdout: "", stderr: "", timedOut: false, cancelled: true };
+	return { code: null, signal: null, stdout: "", stdoutTruncated: false, stderr: "", timedOut: false, cancelled: true };
 }
 
 async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProcessOptions): Promise<RunResult> {
@@ -350,10 +350,12 @@ async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProces
 	const child = spawnOwnedProcess(spec);
 	const { exitPromise, getExit } = observeProcessClose(child);
 	let stdout = "";
+	let stdoutTruncated = false;
 	let stderr = "";
 	child.stdout?.setEncoding("utf8");
 	child.stderr?.setEncoding("utf8");
 	child.stdout?.on("data", (chunk: string) => {
+		stdoutTruncated ||= stdout.length + chunk.length > MAX_CAPTURED_OUTPUT_CHARS;
 		stdout = appendCapped(stdout, chunk);
 	});
 	child.stderr?.on("data", (chunk: string) => {
@@ -379,7 +381,7 @@ async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProces
 		: outcome;
 	if (typeof outcome !== "string") releaseOwnedTree(child);
 	if (exit.error) throw exit.error;
-	return { code: exit.code, signal: exit.signal, stdout, stderr, timedOut, ...(cancelled ? { cancelled: true } : {}) };
+	return { code: exit.code, signal: exit.signal, stdout, stdoutTruncated, stderr, timedOut, ...(cancelled ? { cancelled: true } : {}) };
 }
 
 async function stopInterruptedRun(child: ChildProcess, exitPromise: Promise<ExitResult>, getExit: () => ExitResult, cancelled: boolean) {
