@@ -257,7 +257,7 @@ if (output.endsWith("clip.wav")) {
   writeFileSync(output, Buffer.alloc(1024));
   process.exit(0);
 }
-if (${rawBytes} > 0) writeFileSync(output, Buffer.alloc(${rawBytes}));
+if (${rawBytes !== null}) writeFileSync(output, Buffer.alloc(${rawBytes ?? 0}));
 appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`recorder \${process.pid}\\n\`);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -1319,6 +1319,126 @@ for (const { mode, autoSubmit } of [{ mode: "clip", autoSubmit: true }, { mode: 
 	});
 }
 
+for (const [name, mode, keepAudio, rawAudio, { quitDuringCleanup = false, failPrimaryStream = false, holdStderrOpen = false } = {}] of [
+	["early clip recorder exit keeps partial audio even with Keep audio off", "clip", false, "partial audio"],
+	["early final-clip recorder exit keeps partial audio in streaming mode", "stream", true, "partial audio"],
+	["early clip recorder exit removes an attempt with no audio file", "clip", true, undefined],
+	["early final-clip recorder exit removes an attempt with a zero-byte clip", "stream", false, ""],
+	["early clip recorder exit removes a zero-byte attempt even when stderr stays open", "clip", false, "", { holdStderrOpen: true }],
+	["shutdown during early clip recorder failure cleanup does not delete partial audio", "clip", false, "partial audio", { quitDuringCleanup: true }],
+	["early primary stream exit keeps audio flushed by the companion recorder on stop", "stream", true, "flushed clip", { failPrimaryStream: true }],
+]) {
+	test(name, { skip: process.platform === "win32" && "uses POSIX recorder fixtures" }, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "micme-extension-start-failure-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const scratch = join(root, "scratch");
+		const stream = join(root, "whisper-stream");
+		const model = join(root, "ggml-small.en.bin");
+		const processLog = join(root, "processes.log");
+		const transcribed = join(root, "transcribed");
+		await mkdir(scratch);
+		const writeAudio = rawAudio === undefined ? "" : `printf '%s' ${shellQuote(rawAudio)} > {audio}; `;
+		// Let the hook exit before the worker writes its diagnostic, after startup grace.
+		const diagnostic = "printf 'startup diagnostic\\n' >&2";
+		const reportFailure = holdStderrOpen ? `(sleep 2; ${diagnostic}) & exit 7` : `${diagnostic}; exit 7`;
+		let recorderCommand = `${writeAudio}${reportFailure}`;
+		if (mode === "stream") {
+			await writeFile(model, "model");
+			if (failPrimaryStream) {
+				await writeExecutable(stream, `#!/bin/sh
+printf 'stream %s\\n' "$$" >> "$MICME_TEST_PROCESS_LOG"
+printf 'startup diagnostic\\n' >&2
+exit 7
+`);
+				const recorder = join(root, "flush-on-stop.mjs");
+				await writeFile(recorder, `import { appendFileSync, writeFileSync } from "node:fs";
+appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`recorder \${process.pid}\\n\`);
+const stop = () => {
+  writeFileSync(process.argv[2], ${JSON.stringify(rawAudio)});
+  process.exit(0);
+};
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+setInterval(() => {}, 1_000);
+`);
+				recorderCommand = `exec ${shellQuote(process.execPath)} ${shellQuote(recorder)} {audio}`;
+			} else {
+				await writeStreamingProcess(stream);
+			}
+		}
+
+		await withEnv({
+			TMPDIR: scratch,
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			MICME_TRANSCRIPTION_MODE: mode,
+			MICME_RECORD_COMMAND: recorderCommand,
+			MICME_TRANSCRIBE_BACKEND: "auto",
+			MICME_TRANSCRIBE_COMMAND: `: > ${shellQuote(transcribed)}`,
+			MICME_WHISPER_STREAM_BIN: stream,
+			MICME_WHISPER_CPP_MODEL: model,
+			MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_KEEP_AUDIO: keepAudio ? "1" : "0",
+			MICME_TEST_PROCESS_LOG: processLog,
+			MICME_TEST_STOP_DELAY_MS: "0",
+		}, async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			let shutdown;
+			if (quitDuringCleanup) {
+				// Failed startup clears the widget before awaiting recorder shutdown.
+				t.mock.method(harness.ctx.ui, "setWidget", () => {
+					shutdown = emit(harness, "session_shutdown", { reason: "quit" });
+				}, { times: 1 });
+			}
+			try {
+				await command.handler("", harness.ctx);
+				if (quitDuringCleanup) {
+					assert.ok(shutdown, "shutdown did not overlap the startup failure");
+					await shutdown;
+					const [attempt] = await readdir(scratch);
+					assert.ok(attempt, "shutdown deleted the partial recording");
+					assert.equal(await readFile(join(scratch, attempt, "raw.wav"), "utf8"), rawAudio);
+					assert.equal(harness.owner.getPhase(), "shutting_down");
+					return;
+				}
+				if (holdStderrOpen) await waitFor(() => harness.owner.getPhase() === "idle", "startup failure did not settle", 6_000);
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.equal(harness.uiCalls.findLast((entry) => entry.method === "setStatus")?.value, undefined);
+				const errors = harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "error");
+				assert.equal(errors.length, 1);
+				assert.match(errors[0].message, /startup diagnostic/);
+				await assert.rejects(stat(transcribed), { code: "ENOENT" });
+				if (mode === "stream") {
+					const rows = await readProcessRows(processLog);
+					assert.deepEqual(rows.map((row) => row.split(" ")[0]).sort(), failPrimaryStream ? ["recorder", "stream"] : ["stream"]);
+					await assertProcessesStopped(rows);
+				}
+
+				const attempts = keepAudio ? join(root, "micme-rec") : scratch;
+				const entries = await readdir(attempts);
+				await command.handler("audio", harness.ctx);
+				const audioNotice = harness.uiCalls.at(-1)?.message ?? "";
+				if (rawAudio) {
+					assert.equal(entries.length, 1);
+					const audioDir = join(attempts, entries[0]);
+					assert.equal(await readFile(join(audioDir, "raw.wav"), "utf8"), rawAudio);
+					assert.ok(errors[0].message.includes(`Audio kept for debugging: ${audioDir}`), errors[0].message);
+					assert.equal(audioNotice, `Last Micme audio directory: ${audioDir}`);
+				} else {
+					assert.deepEqual(entries, [], errors[0].message);
+					assert.doesNotMatch(errors[0].message, /Audio kept for debugging/);
+					assert.match(audioNotice, /^No kept Micme audio/);
+				}
+				assert.match(errors[0].message, /Micme (recorder|streaming) exited early \(code 7\)/);
+			} finally {
+				await emit(harness, "session_shutdown");
+			}
+		});
+	});
+}
+
 test("failed recorder startup reports rejected directory cleanup without masking the startup error", { skip: process.platform === "win32" && "uses POSIX temporary directory selection" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-start-cleanup-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -1761,7 +1881,9 @@ async function assertLateStreamFailure(t, rawBytes, { linkInsteadOfClip = false 
 				}, "stream and companion recorder PIDs were not logged");
 				const rawPath = join(audioDir, "raw.wav");
 				const outsideFile = join(root, "outside.wav");
-				assert.deepEqual(await readdir(audioDir), rawBytes ? ["raw.wav"] : []);
+				const sidecar = join(audioDir, "capture.log");
+				assert.deepEqual(await readdir(audioDir), rawBytes === null ? [] : ["raw.wav"]);
+				if (rawBytes === 0) await writeFile(sidecar, "capture details");
 				if (linkInsteadOfClip) {
 					await writeFile(outsideFile, "outside audio");
 					await symlink(outsideFile, rawPath);
@@ -1781,8 +1903,9 @@ async function assertLateStreamFailure(t, rawBytes, { linkInsteadOfClip = false 
 				await assertProcessesStopped(started);
 				await command.handler("audio", harness.ctx);
 				const audioNotice = harness.uiCalls.at(-1)?.message;
-				if (rawBytes) {
+				if (rawBytes !== null) {
 					assert.equal((await readFile(rawPath)).length, rawBytes);
+					if (rawBytes === 0) assert.equal(await readFile(sidecar, "utf8"), "capture details");
 					assert.ok(error.includes(`Audio kept for debugging: ${audioDir}`), error);
 					assert.equal(audioNotice, `Last Micme audio directory: ${audioDir}`);
 				} else {
@@ -1803,12 +1926,16 @@ test("a late stream exit stops the companion recorder and remembers its partial 
 	await assertLateStreamFailure(t, 16);
 });
 
-test("a late stream exit removes the attempt directory when the companion produced no clip", async (t) => {
+test("a late stream exit retains a zero-byte clip and its diagnostic sidecar", async (t) => {
 	await assertLateStreamFailure(t, 0);
 });
 
+test("a late stream exit removes the attempt directory when the companion produced no clip", async (t) => {
+	await assertLateStreamFailure(t, null);
+});
+
 test("a late stream exit ignores a raw.wav symlink without touching its target", async (t) => {
-	await assertLateStreamFailure(t, 0, { linkInsteadOfClip: true });
+	await assertLateStreamFailure(t, null, { linkInsteadOfClip: true });
 });
 
 test("late optional final-clip failure keeps the live-stream fallback without transcribing partial audio", async (t) => {
