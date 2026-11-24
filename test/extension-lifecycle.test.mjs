@@ -727,6 +727,47 @@ test("a nonregular clip transcript reports an error instead of pasting hook stdo
 	);
 });
 
+test("clip auto-submit strips a C1 terminal string from the transcriber's file", { skip: process.platform === "win32" && "requires POSIX recorder and transcriber fixtures" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-c1-transcript-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const processLog = join(root, "processes.log");
+	await writeFfmpegProcess(join(root, "ffmpeg"));
+	const transcript = "left\u009Dformatting\u009Cright";
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: undefined,
+			MICME_TEST_PROCESS_LOG: processLog,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			MICME_TRANSCRIBE_COMMAND: `printf '%s' ${shellQuote(transcript)} > {transcript}`,
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "1",
+			MICME_KEEP_AUDIO: "0",
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "recording");
+				await waitFor(async () => (await readProcessRows(processLog)).length > 0, "recorder did not start");
+				await command.handler("", harness.ctx);
+
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.deepEqual(harness.sentMessages, [{ message: "left right", options: undefined }]);
+				assert.equal(harness.uiCalls.some((entry) => entry.method === "pasteToEditor"), false);
+			} finally {
+				await emit(harness, "session_shutdown", { reason: "quit" });
+			}
+		},
+	);
+});
+
 test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
