@@ -28,6 +28,8 @@ npm run pack:dry-run
 npm run doctor
 ```
 
+`npm pack` and `npm publish` build the `micme-doctor` executable and its shared helpers as JavaScript via the `prepack` hook. Edit the source files rather than the generated `dist/doctor/` output.
+
 ## Pull requests
 
 - Keep changes focused and explain the user-visible behavior.
