@@ -1008,6 +1008,87 @@ test("clip auto-submit strips a C1 terminal string from the transcriber's file",
 	);
 });
 
+for (const mode of ["clip", "stream"]) {
+	test(`${mode} recording uses allocation-time audio retention after a successful stop`, { skip: process.platform === "win32" && "requires POSIX executable fixtures" }, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "micme-extension-retention-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const scratch = join(root, "scratch");
+		const processLog = join(root, "processes.log");
+		const stream = join(root, "whisper-stream");
+		const transcriber = join(root, "whisper-cli");
+		const model = join(root, "ggml-small.en.bin");
+		await mkdir(scratch);
+		await Promise.all([
+			writeFfmpegProcess(join(root, "ffmpeg")),
+			writeStreamingProcess(stream),
+			writeExecutable(transcriber, "#!/bin/sh\nprintf 'retention transcript\\n'\n"),
+			writeFile(model, "model"),
+		]);
+
+		await withEnv(
+			{
+				TMPDIR: scratch,
+				PI_CODING_AGENT_DIR: join(root, "agent"),
+				PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+				MICME_RECORD_COMMAND: undefined,
+				MICME_TEST_PROCESS_LOG: processLog,
+				MICME_TRANSCRIPTION_MODE: mode,
+				MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+				MICME_WHISPER_STREAM_BIN: stream,
+				MICME_WHISPER_CPP_BIN: transcriber,
+				MICME_WHISPER_CPP_MODEL: model,
+				MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+				MICME_PROCESS_AUDIO: "0",
+				MICME_VALIDATE_AUDIO: "0",
+				MICME_AUTO_SUBMIT: "1",
+				MICME_KEEP_AUDIO: "0",
+			},
+			async () => {
+				for (const keepAudio of [false, true]) {
+					await t.test(keepAudio ? "disabling Keep audio does not delete the project clip" : "enabling Keep audio does not retain the temp clip", async () => {
+						process.env.MICME_KEEP_AUDIO = keepAudio ? "1" : "0";
+						reloadMicmeConfig();
+						await writeFile(processLog, "");
+						const harness = createExtensionHarness(root);
+						const command = harness.commands.get("micme");
+						assert.ok(command);
+						try {
+							await command.handler("", harness.ctx);
+							assert.equal(harness.owner.getPhase(), mode === "clip" ? "recording" : "streaming");
+							const expectedProcesses = mode === "clip" ? 1 : 2;
+							await waitFor(async () => (await readProcessRows(processLog)).length === expectedProcesses, "recording fixtures did not start");
+
+							const dirRoot = keepAudio ? join(root, "micme-rec") : scratch;
+							const [name] = await readdir(dirRoot);
+							assert.ok(name);
+							const audioDir = join(dirRoot, name);
+
+							process.env.MICME_KEEP_AUDIO = keepAudio ? "0" : "1";
+							reloadMicmeConfig();
+							await command.handler("", harness.ctx);
+							assert.equal(harness.owner.getPhase(), "idle");
+							assert.deepEqual(harness.sentMessages, [{ message: "retention transcript", options: undefined }]);
+
+							await command.handler("audio", harness.ctx);
+							const audioNotice = harness.uiCalls.at(-1);
+							if (keepAudio) {
+								assert.equal(name, "rec-001");
+								assert.equal((await readFile(join(audioDir, "raw.wav"))).length, 1024);
+								assert.equal(audioNotice?.message, `Last Micme audio directory: ${audioDir}`);
+							} else {
+								await assert.rejects(readdir(audioDir), { code: "ENOENT" });
+								assert.match(audioNotice?.message ?? "", /^No kept Micme audio/);
+							}
+						} finally {
+							await emit(harness, "session_shutdown");
+						}
+					});
+				}
+			},
+		);
+	});
+}
+
 test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
 	t.after(() => rm(root, { recursive: true, force: true }));

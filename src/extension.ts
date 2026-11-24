@@ -59,6 +59,7 @@ type MicmeOperation = {
 	controller: AbortController;
 	processes: Set<Recording>;
 	tempDirs: Set<string>;
+	keepAudio?: boolean;
 	completion?: Promise<void>;
 };
 
@@ -185,8 +186,12 @@ export class MicmeSessionOwner {
 		operation.processes.add(active);
 	}
 
-	trackDirectory(operation: MicmeOperation, tempDir: string) {
+	async allocateRecordingDirectory(operation: MicmeOperation, tempPrefix: string) {
+		const keepAudio = envFlag("MICME_KEEP_AUDIO");
+		const tempDir = await createRecordingDirectory(operation.context.cwd, keepAudio, tempPrefix);
+		operation.keepAudio = keepAudio;
 		operation.tempDirs.add(tempDir);
+		return tempDir;
 	}
 
 	rememberTranscript(operation: MicmeOperation, transcript: string) {
@@ -341,8 +346,7 @@ async function startRecording(owner: MicmeSessionOwner, operation: MicmeOperatio
 }
 
 async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext, stopHint: string) {
-	const tempDir = await createRecordingDirectory(ctx.cwd, envFlag("MICME_KEEP_AUDIO"), "micme-");
-	owner.trackDirectory(operation, tempDir);
+	const tempDir = await owner.allocateRecordingDirectory(operation, "micme-");
 	if (!owner.isCurrent(operation)) {
 		await cleanup(tempDir).catch(() => undefined);
 		return;
@@ -374,8 +378,7 @@ async function startStreamingTranscription(owner: MicmeSessionOwner, operation: 
 	await ensureWhisperCppModel(plan.modelPath, ctx, { allowDownload: plan.modelDownloadable !== false, signal: operation.controller.signal });
 	if (!owner.isCurrent(operation)) return;
 
-	const tempDir = await createRecordingDirectory(ctx.cwd, envFlag("MICME_KEEP_AUDIO"), "micme-stream-");
-	owner.trackDirectory(operation, tempDir);
+	const tempDir = await owner.allocateRecordingDirectory(operation, "micme-stream-");
 	if (!owner.isCurrent(operation)) {
 		await cleanup(tempDir).catch(() => undefined);
 		return;
@@ -492,7 +495,7 @@ async function stopClipAndTranscribe(owner: MicmeSessionOwner, operation: MicmeO
 		if (!owner.isCurrent(operation)) return;
 		completed = true;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		if (envFlag("MICME_KEEP_AUDIO")) owner.rememberAudioDirectory(operation, active.tempDir);
+		if (operation.keepAudio) owner.rememberAudioDirectory(operation, active.tempDir);
 	} catch (error) {
 		if (!owner.isCurrent(operation)) return;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -500,7 +503,7 @@ async function stopClipAndTranscribe(owner: MicmeSessionOwner, operation: MicmeO
 		const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error));
 		throw new Error(`${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`, { cause: error });
 	} finally {
-		if (completed && !envFlag("MICME_KEEP_AUDIO")) await cleanup(active.tempDir).catch(() => undefined);
+		if (completed && !operation.keepAudio) await cleanup(active.tempDir).catch(() => undefined);
 	}
 }
 
@@ -625,7 +628,7 @@ async function transcribeFinalStreamingClip(
 }
 
 function keepCompletedStreamingClipAudio(owner: MicmeSessionOwner, operation: MicmeOperation, active: Recording) {
-	if (!envFlag("MICME_KEEP_AUDIO")) return false;
+	if (!operation.keepAudio) return false;
 	owner.rememberAudioDirectory(operation, active.tempDir);
 	return true;
 }
