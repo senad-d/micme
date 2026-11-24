@@ -25,6 +25,28 @@ All notable changes to Micme will be documented in this file.
 - Align `micme-doctor` executable/model checks with runtime validation and translation-capable model fallback behavior.
 - Let `MICME_RECORD_COMMAND` use the same `{audio}`, `{tempDir}`, and `{transcript}` placeholders as custom transcription commands.
 
+## [0.4.0] - 2026-11-24
+
+- Micme now keeps partial audio and reports its location when a recorder exits during startup, while still removing empty attempts.
+- Selected Python model names in settings no longer display terminal styling supplied by discovery.
+- Doctor no longer prints unsupported brace-wrapped hook values in diagnostics.
+- The shipped security guide now warns that failed custom hooks can expose credentials written to stdout or stderr.
+- The configuration guide now explains which micme.json Micme reads and writes, and why pointing Pi at a project means trusting that project’s command hooks.
+- Micme now rechecks configuration after capture stops and keeps the raw audio instead of processing it or downloading a model when the configuration is invalid.
+- The documentation clarifies when first use can contact Hugging Face and how an explicit model path changes the download destination.
+- Ending or replacing a session now cancels pending device scans and settings saves so they cannot show stale results or change the next session’s configuration.
+- The shipped security guide clarifies that the 100,000-character limit applies separately to captured stdout and stderr, not to transcript files.
+- Streaming now keeps delivering live words when FFmpeg is missing or the optional final-clip recorder fails to start.
+- Replaying /micme last during live streaming no longer loses the replayed text when the next word arrives.
+- Micme now warns when a live-only recording stops without recognizing any words, leaving your draft untouched.
+- A failed /micme devices command now shows its error without clearing the status of an ongoing recording.
+- Package validation now names declared Pi extensions and command files missing from the npm tarball.
+- Kept recordings are protected against root substitution; on macOS and Linux without usable procfs, custom hooks now run in the recording directory and must use absolute paths for project-relative tools or resources.
+- The package manifest check now launches npm through Node on Windows instead of trying to execute npm.cmd directly.
+- Micme now cleans up temporary audio after successful transcription even if it cannot paste or submit the transcript.
+- After a live stream fails, Micme reports and remembers a partial clip or removes the unused recording directory.
+- Settings save errors no longer expose excerpts from malformed config files and still show the file path and repair hint.
+
 ## [0.3.10] - 2026-11-24
 
 - On Windows, batch shims no longer hide a later native Whisper executable or prevent automatic fallback to Python Whisper.
