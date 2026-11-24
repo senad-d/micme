@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
 import { env, getTranscribeTimeoutMs, getTranslateToEnglishLanguage } from "./config.ts";
@@ -39,12 +39,7 @@ export async function transcribeWithCustomCommand(template: string, audioPath: s
 		throw new Error(`MICME_TRANSCRIBE_COMMAND failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	if (existsSync(transcriptPath)) {
-		const fromFile = await readFile(transcriptPath, "utf8");
-		if (fromFile.trim()) return fromFile;
-	}
-
-	return result.stdout;
+	return readTranscriptOutput(transcriptPath, result.stdout);
 }
 
 export async function transcribeWithWhisperCpp(
@@ -71,13 +66,7 @@ export async function transcribeWithWhisperCpp(
 		throw new Error(`whisper.cpp failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	const outputPath = `${outputBase}.txt`;
-	if (existsSync(outputPath)) {
-		const fromFile = await readFile(outputPath, "utf8");
-		if (fromFile.trim()) return fromFile;
-	}
-
-	return result.stdout;
+	return readTranscriptOutput(`${outputBase}.txt`, result.stdout);
 }
 
 export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string, signal?: AbortSignal) {
@@ -117,11 +106,24 @@ export async function transcribeWithOpenAiWhisper(binary: string, audioPath: str
 	}
 
 	const txtName = basename(audioPath).replace(/\.[^.]+$/, ".txt");
-	const outputPath = join(tempDir, txtName);
-	if (existsSync(outputPath)) {
-		const fromFile = await readFile(outputPath, "utf8");
-		if (fromFile.trim()) return fromFile;
+	return readTranscriptOutput(join(tempDir, txtName), result.stdout);
+}
+
+async function readTranscriptOutput(path: string, stdout: string) {
+	let file;
+	try {
+		// A blocking open can hang on a FIFO before we can check its type.
+		file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+	} catch (error) {
+		if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return stdout;
+		throw error;
 	}
 
-	return result.stdout;
+	try {
+		if (!(await file.stat()).isFile()) throw new Error(`Transcript output is not a regular file: ${path}`);
+		const text = await file.readFile("utf8");
+		return text.trim() ? text : stdout;
+	} finally {
+		await file.close();
+	}
 }

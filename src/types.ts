@@ -91,6 +91,7 @@ export type Recording = {
 	stopSignals?: Set<NodeJS.Signals>;
 	windowsTreeStopped?: boolean;
 	stopPromise?: Promise<ExitResult>;
+	exitObserved: Promise<ExitResult>;
 	exitPromise: Promise<ExitResult>;
 	getExit: () => ExitResult;
 	isSettled: () => boolean;

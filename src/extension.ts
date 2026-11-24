@@ -19,6 +19,7 @@ import {
 	cleanup,
 	formatExit,
 	formatProcessOutput,
+	hasRecorderExited,
 	normalizeTranscript,
 	raceWithTimeout,
 	spawnRecording,
@@ -163,6 +164,21 @@ export class MicmeSessionOwner {
 		if (!this.isCurrent(operation)) return false;
 		operation.phase = phase;
 		return true;
+	}
+
+	activateRecording(operation: MicmeOperation, phase: "recording" | "streaming", primary: Recording, stopHint: string) {
+		if (!this.transition(operation, phase)) return;
+		// Detect the hook's exit independently of the supervisor and stdio drain.
+		if (hasRecorderExited(primary)) {
+			void this.stop(operation);
+			return;
+		}
+		void primary.exitObserved.then(() => {
+			if (this.isCurrent(operation) && operation.phase === phase) void this.stop(operation);
+		});
+		const ctx = operation.context;
+		ctx.ui.setStatus(STATUS_KEY, `● ${phase} (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
+		startRecordingWidget(ctx, primary);
 	}
 
 	trackProcess(operation: MicmeOperation, active: Recording) {
@@ -346,9 +362,7 @@ async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOper
 			throw new Error(`Micme recorder exited early (${formatExit(earlyExit)}).${suffix}`);
 		}
 
-		owner.transition(operation, "recording");
-		ctx.ui.setStatus(STATUS_KEY, `● recording (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
-		startRecordingWidget(ctx, active);
+		owner.activateRecording(operation, "recording", active, stopHint);
 	} catch (error) {
 		await cleanupFailedRecordingStart(ctx, operation);
 		throw error;
@@ -381,10 +395,7 @@ async function startStreamingTranscription(owner: MicmeSessionOwner, operation: 
 		}
 
 		await ensureStreamingRecorderStarted(streamRecording);
-		if (!owner.isCurrent(operation)) return;
-		owner.transition(operation, "streaming");
-		ctx.ui.setStatus(STATUS_KEY, `● streaming (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
-		startRecordingWidget(ctx, streamRecording);
+		owner.activateRecording(operation, "streaming", streamRecording, stopHint);
 	} catch (error) {
 		await cleanupFailedRecordingStart(ctx, operation);
 		throw error;
@@ -417,6 +428,8 @@ function initializeStreamingRecording(ctx: ExtensionContext, streamRecording: Re
 		startedAt: Date.now(),
 	};
 	streamRecording.process.stdout?.on("data", (chunk: Buffer | string) => {
+		// Draining pipes after a spontaneous exit must not restart the live preview timer.
+		if (!streamRecording.stopRequested && hasRecorderExited(streamRecording)) return;
 		const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
 		handleStreamingOutput(ctx, streamRecording, text);
 	});

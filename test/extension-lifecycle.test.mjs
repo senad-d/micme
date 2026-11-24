@@ -6,6 +6,7 @@ import test from "node:test";
 
 const { registerMicmeExtension } = await import("../src/extension.ts");
 const { reloadMicmeConfig } = await import("../src/config.ts");
+const { shellQuote } = await import("../src/processes.ts");
 
 const theme = {
 	fg(_color, text) {
@@ -197,12 +198,24 @@ async function writeLateFailingStreamingProcess(path) {
 	await writeExecutable(
 		path,
 		`#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
-appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`stream \${process.pid}\\n\`);
-setTimeout(() => {
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
+const helper = process.argv[2] === "--hold-stdout";
+const gate = helper ? process.env.MICME_TEST_DRAIN_FILE : process.env.MICME_TEST_EXIT_FILE;
+if (!helper) appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`stream \${process.pid}\\n\`);
+const poll = setInterval(() => {
+  if (!existsSync(dirname(gate))) process.exit(1);
+  if (!existsSync(gate)) return;
+  clearInterval(poll);
+  if (helper) {
+    process.stdout.write("tentative partial words\\ntentative partial words\\n");
+    return;
+  }
+  spawn(process.execPath, [process.argv[1], "--hold-stdout"], { stdio: ["ignore", "inherit", "ignore"] }).unref();
   process.stderr.write("\\u001b[31mmicrophone disconnected\\u001b[0m\\n");
-  process.exit(7);
-}, 1_000);
+  process.exitCode = 7;
+}, 10);
 `,
 	);
 }
@@ -794,6 +807,101 @@ test("missing ffmpeg silence metrics surface a sanitized error before transcript
 	);
 });
 
+test("a nonregular clip transcript reports an error instead of pasting hook stdout", { skip: process.platform === "win32" && "requires POSIX device and recorder fixtures" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-nonregular-transcript-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const processLog = join(root, "processes.log");
+	await writeFfmpegProcess(join(root, "ffmpeg"));
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: undefined,
+			MICME_TEST_PROCESS_LOG: processLog,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			// A device gives immediate EOF even if the regular-file check is missing.
+			MICME_TRANSCRIBE_COMMAND: "ln -s /dev/null {transcript} && printf 'fallback transcript'",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "0",
+			MICME_KEEP_AUDIO: "1",
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "recording");
+				await waitFor(async () => (await readProcessRows(processLog)).length > 0, "recorder did not start");
+				await command.handler("", harness.ctx);
+
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "pasteToEditor" || entry.method === "setEditorText"), []);
+				assert.equal(harness.sentMessages.length, 0);
+				const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
+				assert.match(error?.message ?? "", /Transcript output is not a regular file/);
+			} finally {
+				await emit(harness, "session_shutdown", { reason: "quit" });
+			}
+		},
+	);
+});
+
+test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const recorder = join(root, "recorder.mjs");
+	const ready = join(root, "ready");
+	await writeFile(
+		recorder,
+		`import { writeFileSync } from "node:fs";
+const [audio, ready] = process.argv.slice(2);
+process.on("SIGINT", () => {
+  // Mono 16-bit PCM WAV header followed by 1024 bytes of samples.
+  const header = Buffer.from("524946462404000057415645666d74201000000001000100803e0000007d0000020010006461746100040000", "hex");
+  writeFileSync(audio, Buffer.concat([header, Buffer.alloc(1024, 32)]));
+  process.exit(255);
+});
+writeFileSync(ready, "ready");
+setInterval(() => {}, 1_000);
+`,
+	);
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: `exec ${shellQuote(process.execPath)} ${shellQuote(recorder)} {audio} ${shellQuote(ready)}`,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			MICME_TRANSCRIBE_COMMAND: "test -s {audio} && printf 'custom stop transcript'",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "0",
+			MICME_KEEP_AUDIO: "1",
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+				await waitFor(async () => (await readProcessRows(ready)).length > 0, "custom recorder did not install its SIGINT handler");
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "error"), []);
+				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "pasteToEditor"), [{ method: "pasteToEditor", value: "custom stop transcript " }]);
+				assert.equal(harness.sentMessages.length, 0);
+			} finally {
+				await emit(harness, "session_shutdown", { reason: "quit" });
+			}
+		},
+	);
+});
+
 test("missing ffmpeg explicitly warns custom-recorder users when validation is skipped", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX executable fixtures are not portable to Windows");
@@ -887,6 +995,21 @@ test("shutdown while streaming is stopping prevents finalization work", async (t
 	);
 });
 
+function assertAutomaticStopUi(harness) {
+	assert.equal(harness.owner.getPhase(), "idle");
+	const errors = harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "error");
+	assert.equal(errors.length, 1);
+	const widgetCalls = harness.uiCalls.filter((entry) => entry.method === "setWidget");
+	assert.ok(widgetCalls.some((entry) => Array.isArray(entry.value)), "recording widget was never shown");
+	assert.equal(widgetCalls.at(-1)?.value, undefined);
+	const statusCalls = harness.uiCalls.filter((entry) => entry.method === "setStatus");
+	assert.equal(statusCalls.filter((entry) => entry.value === "stopping…").length, 1);
+	assert.equal(statusCalls.at(-1)?.value, undefined);
+	assert.equal(harness.sentMessages.length, 0);
+	assert.equal(harness.uiCalls.some((entry) => entry.method === "pasteToEditor" || entry.method === "setEditorText"), false, "partial transcript reached the editor");
+	return errors[0].message;
+}
+
 async function withExitedClipRecorder(t, verifyStop) {
 	if (process.platform === "win32") {
 		t.skip("POSIX inherited pipe fixture is not portable to Windows");
@@ -936,88 +1059,108 @@ const poll = setInterval(() => {
 			const harness = createExtensionHarness(root);
 			const command = harness.commands.get("micme");
 			assert.ok(command);
-			await command.handler("", harness.ctx);
-			assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
-			const pidFile = join(root, "recorder.pid");
-			await waitFor(async () => (await readProcessRows(pidFile)).length > 0, "recorder PID was not logged");
-			const pid = Number(await readFile(pidFile, "utf8"));
-			assert.ok(Number.isInteger(pid) && pid > 0);
-			await writeFile(join(root, "exit"), "");
-			await waitFor(async () => !(await processIsAlive(pid)), "recorder did not exit before stop");
-
-			const stop = command.handler("", harness.ctx);
 			const drain = join(root, "drain");
 			try {
-				await verifyStop({ harness, stop, drain, transcribed });
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+				const pidFile = join(root, "recorder.pid");
+				await waitFor(async () => (await readProcessRows(pidFile)).length > 0, "recorder PID was not logged");
+				const pid = Number(await readFile(pidFile, "utf8"));
+				assert.ok(Number.isInteger(pid) && pid > 0);
+				await writeFile(join(root, "exit"), "");
+				await verifyStop({ harness, drain });
+				assert.equal(await processIsAlive(pid), false);
+				await assert.rejects(readFile(transcribed), { code: "ENOENT" }, "partial audio was transcribed");
 			} finally {
 				await writeFile(drain, "");
-				await stop;
+				await emit(harness, "session_shutdown");
 			}
 		},
 	);
 }
 
-test("stopping an exited clip recorder while stderr is open does not transcribe its audio", async (t) => {
-	await withExitedClipRecorder(t, async ({ harness, stop, drain, transcribed }) => {
+test("a late clip exit stops automatically before stderr drains, then reports its diagnostic", async (t) => {
+	await withExitedClipRecorder(t, async ({ harness, drain }) => {
+		await waitFor(() => harness.owner.getPhase() === "stopping", "late clip exit did not start stopping", 2_000);
+		const widget = harness.uiCalls.findLast((entry) => entry.method === "setWidget");
+		assert.equal(widget?.value, undefined);
 		await writeFile(drain, "");
-		await stop;
-		assert.equal(harness.owner.getPhase(), "idle");
-		await assert.rejects(readFile(transcribed), { code: "ENOENT" }, "partial audio was transcribed");
-		const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
-		assert.match(error?.message ?? "", /recorder exited unexpectedly \(code 0\)/);
-		assert.match(error?.message ?? "", /Recorder output:\ndelayed recorder diagnostic/);
+		await waitFor(() => harness.owner.getPhase() === "idle", "late clip exit did not return to idle");
+		const error = assertAutomaticStopUi(harness);
+		assert.match(error, /recorder exited unexpectedly \(code 0\)/);
+		assert.match(error, /Recorder output:\ndelayed recorder diagnostic/);
 	});
 });
 
-test("stopping an exited clip recorder returns to idle even if stderr stays open", async (t) => {
-	await withExitedClipRecorder(t, async ({ harness, stop, transcribed }) => {
-		await waitFor(() => harness.owner.getPhase() === "idle", "Micme remained stuck stopping while the exited recorder's stderr was held open", 6_000);
-		await stop;
-		const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
-		assert.match(error?.message ?? "", /recorder exited unexpectedly \(code 0\)/);
-		await assert.rejects(readFile(transcribed), { code: "ENOENT" }, "partial audio was transcribed");
+test("a late clip exit returns to idle even if stderr stays open", async (t) => {
+	await withExitedClipRecorder(t, async ({ harness }) => {
+		await waitFor(() => harness.owner.getPhase() === "idle", "Micme remained stuck while the exited recorder's stderr was held open", 6_000);
+		assert.match(assertAutomaticStopUi(harness), /recorder exited unexpectedly \(code 0\)/);
 	});
 });
 
-test("late stream exit is reported instead of completing as an empty dictation", async (t) => {
+test("a late stream exit stops automatically and shuts down its final-clip recorder", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX executable fixtures are not portable to Windows");
 		return;
 	}
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-stream-exit-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
+	const ffmpeg = join(root, "ffmpeg");
 	const stream = join(root, "whisper-stream");
+	const transcriber = join(root, "whisper-cli");
 	const model = join(root, "ggml-small.en.bin");
 	const processLog = join(root, "processes.log");
-	await Promise.all([writeLateFailingStreamingProcess(stream), writeFile(model, "model")]);
+	const exitFile = join(root, "exit");
+	const drainFile = join(root, "drain");
+	await Promise.all([writeFfmpegProcess(ffmpeg), writeLateFailingStreamingProcess(stream), writeTranscriberProcess(transcriber), writeFile(model, "model")]);
 
 	await withEnv(
 		{
 			PI_CODING_AGENT_DIR: join(root, "agent"),
+			PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
 			MICME_TRANSCRIPTION_MODE: "stream",
+			MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
 			MICME_WHISPER_STREAM_BIN: stream,
+			MICME_WHISPER_CPP_BIN: transcriber,
 			MICME_WHISPER_CPP_MODEL: model,
-			MICME_STREAM_FINALIZE_WITH_CLIP: "0",
+			MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "1",
+			MICME_KEEP_AUDIO: "1",
 			MICME_TEST_PROCESS_LOG: processLog,
+			MICME_TEST_EXIT_FILE: exitFile,
+			MICME_TEST_DRAIN_FILE: drainFile,
 		},
 		async () => {
 			const harness = createExtensionHarness(root);
 			const command = harness.commands.get("micme");
 			assert.ok(command);
-			await command.handler("", harness.ctx);
-			assert.equal(harness.owner.getPhase(), "streaming");
-			const rows = await readProcessRows(processLog);
-			const streamPid = Number(rows.find((row) => row.startsWith("stream "))?.split(" ").at(-1));
-			assert.equal(Number.isFinite(streamPid), true);
-			await waitFor(async () => !(await processIsAlive(streamPid)), "late-failing stream remained alive");
-
-			await command.handler("", harness.ctx);
-			assert.equal(harness.owner.getPhase(), "idle");
-			const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
-			assert.match(error?.message ?? "", /stream exited unexpectedly \(code 7\)/);
-			assert.match(error?.message ?? "", /Stream output:\nmicrophone disconnected/);
-			assert.equal((error?.message ?? "").includes("\u001b"), false);
-			assert.equal(harness.sentMessages.length, 0);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "streaming");
+				await waitFor(async () => {
+					const rows = await readProcessRows(processLog);
+					return rows.some((row) => row.startsWith("recorder ")) && rows.some((row) => row.startsWith("stream "));
+				}, "stream and companion recorder PIDs were not logged");
+				const started = await readProcessRows(processLog);
+				assert.deepEqual(started.map((row) => row.split(" ")[0]).sort(), ["recorder", "stream"]);
+				assert.deepEqual(await Promise.all(processIds(started).map(processIsAlive)), [true, true]);
+				await writeFile(exitFile, "");
+				await waitFor(() => harness.owner.getPhase() === "stopping", "late stream exit did not start stopping", 2_000);
+				await writeFile(drainFile, "");
+				await waitFor(() => harness.owner.getPhase() === "idle", "late stream exit did not return to idle");
+				const error = assertAutomaticStopUi(harness);
+				assert.match(error, /stream exited unexpectedly \(code 7\)/);
+				assert.match(error, /Stream output:\nmicrophone disconnected/);
+				assert.equal(error.includes("\u001b"), false);
+				assert.deepEqual(await readProcessRows(processLog), started, "partial audio started transcription");
+				await assertProcessesStopped(started);
+			} finally {
+				await writeFile(drainFile, "");
+				await emit(harness, "session_shutdown");
+			}
 		},
 	);
 });
@@ -1069,6 +1212,8 @@ test("late optional final-clip failure keeps the live-stream fallback without tr
 			);
 			assert.match(warning?.message ?? "", /recorder exited unexpectedly \(code 7\)/);
 			assert.match(warning?.message ?? "", /Recorder output:\ndevice failed/);
+			assert.equal(harness.uiCalls.filter((entry) => entry.method === "setStatus" && entry.value === "stopping…").length, 1);
+			assert.equal(harness.uiCalls.some((entry) => entry.method === "notify" && entry.level === "error"), false);
 			assert.equal(harness.sentMessages.length, 0);
 		},
 	);
