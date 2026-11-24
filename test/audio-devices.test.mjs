@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -169,6 +171,36 @@ test("DirectShow discovery keeps capture names separate from normalized panel an
 	assert.match(fallback.render(50).join("\n"), /Could not render Micme devices panel/);
 });
 
+test("a timed-out DirectShow scan cannot select a device from partial output", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-audio-dshow-timeout-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await writeFile(join(root, "ffmpeg.EXE"), "");
+
+	const scan = t.mock.method(childProcess, "execFile", (_file, _args, _options, callback) => {
+		// execFile can report exit code 0 even after its timeout interrupted the output.
+		queueMicrotask(() => callback(null, "", '"Incomplete Mic" (audio)\n'));
+		return { killed: true };
+	});
+	syncBuiltinESMExports();
+	try {
+		await withPlatform("win32", () => withEnv({
+			PATH: root,
+			PATHEXT: ".EXE",
+			PI_CODING_AGENT_DIR: root,
+			MICME_RECORD_COMMAND: undefined,
+			MICME_DSHOW_AUDIO_DEVICE: undefined,
+		}, async () => {
+			const { args } = await buildRecorderCommand(join(root, "raw.wav"));
+			assert.equal(args[args.indexOf("-i") + 1], "audio=default");
+		}));
+		assert.equal(scan.mock.callCount(), 1);
+		assert.equal(scan.mock.calls[0].arguments[2].timeout, 8_000);
+	} finally {
+		scan.mock.restore();
+		syncBuiltinESMExports();
+	}
+});
+
 test("macOS device inventory and picker include FFmpeg-prefixed AVFoundation rows", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX shell shims are not portable to Windows");
@@ -322,7 +354,7 @@ test("Linux silence diagnostic names the setting used by the Pulse recorder", as
 			MICME_SKIP_AUDIO_VALIDATION: "0",
 		},
 		async () => {
-			const { args } = buildRecorderCommand(input);
+			const { args } = await buildRecorderCommand(input);
 			const formatIndex = args.indexOf("-f");
 			assert.deepEqual(args.slice(formatIndex, formatIndex + 4), ["-f", "pulse", "-i", "alsa_input.usb"]);
 			await assert.rejects(validateRecordedAudio(input), /almost-silent audio.*set MICME_PULSE_SOURCE to the real microphone/);

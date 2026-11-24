@@ -126,7 +126,7 @@ export function drainStreamingOutput(ctx: ExtensionContext, active: Recording, f
 
 export function readStreamingOutputFrames(state: StreamingState, chunk: string, force: boolean) {
 	// whisper-stream rewrites one terminal line with \r; wait for delimiters so split stdout chunks do not become words.
-	state.outputBuffer = `${state.outputBuffer}${chunk}`.slice(-MAX_CAPTURED_OUTPUT_CHARS);
+	state.outputBuffer += chunk;
 	const frames: string[] = [];
 
 	while (true) {
@@ -135,6 +135,9 @@ export function readStreamingOutputFrames(state: StreamingState, chunk: string, 
 		frames.push(state.outputBuffer.slice(0, match.index));
 		state.outputBuffer = state.outputBuffer.slice(match.index + 1).replace(/^[\r\n]+/, "");
 	}
+
+	// Cap only the unfinished frame left after consuming complete ones.
+	state.outputBuffer = state.outputBuffer.slice(-MAX_CAPTURED_OUTPUT_CHARS);
 
 	if (force && state.outputBuffer.trim()) {
 		frames.push(state.outputBuffer);

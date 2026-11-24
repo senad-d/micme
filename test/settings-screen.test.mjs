@@ -235,7 +235,7 @@ test("the Windows microphone picker saves a discovered name with both spaces for
 		harness.component.handleInput("q");
 
 		reloadMicmeConfig();
-		const { args } = buildRecorderCommand(join(root, "raw.wav"));
+		const { args } = await buildRecorderCommand(join(root, "raw.wav"));
 		assert.equal(args[args.indexOf("-i") + 1], "audio=Studio  Mic");
 		assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
 			MICME_AUDIO_DEVICE: "Studio Mic",
@@ -273,9 +273,9 @@ test("the Windows microphone picker preserves automatic discovery when no microp
 		await waitFor(() => !harness.component.render(100).join("\n").includes("Saving "), "microphone setting did not finish saving");
 		harness.component.handleInput("q");
 
-		await writeFile(ffmpeg, "#!/bin/sh\necho '\" Reconnected  Mic \" (audio)' >&2\nexit 1\n");
+		await writeFile(ffmpeg, "#!/bin/sh\necho '\" Reconnected  Mic \" (audio)' >&2\necho '\"Other Mic\" (audio)' >&2\nexit 1\n");
 		reloadMicmeConfig();
-		const { args } = buildRecorderCommand(join(root, "raw.wav"));
+		const { args } = await buildRecorderCommand(join(root, "raw.wav"));
 		assert.equal(args[args.indexOf("-i") + 1], "audio= Reconnected  Mic ");
 	}));
 });

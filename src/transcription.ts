@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
 import { env, getTranscribeTimeoutMs, getTranslateToEnglishLanguage } from "./config.ts";
@@ -41,7 +41,7 @@ export async function transcribeWithCustomCommand(template: string, audioPath: s
 		throw new Error(`MICME_TRANSCRIBE_COMMAND failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	return readTranscript(transcriptPath, result);
+	return readTranscriptOutput(transcriptPath, result);
 }
 
 export async function transcribeWithWhisperCpp(
@@ -68,7 +68,7 @@ export async function transcribeWithWhisperCpp(
 		throw new Error(`whisper.cpp failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	return readTranscript(`${outputBase}.txt`, result);
+	return readTranscriptOutput(`${outputBase}.txt`, result);
 }
 
 export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string, signal?: AbortSignal) {
@@ -108,17 +108,33 @@ export async function transcribeWithOpenAiWhisper(binary: string, audioPath: str
 	}
 
 	const txtName = basename(audioPath).replace(/\.[^.]+$/, ".txt");
-	return readTranscript(join(tempDir, txtName), result);
+	return readTranscriptOutput(join(tempDir, txtName), result);
 }
 
-async function readTranscript(outputPath: string, result: RunResult): Promise<string> {
-	if (existsSync(outputPath)) {
-		const fromFile = await readFile(outputPath, "utf8");
-		if (fromFile.trim()) return fromFile;
-	}
+async function readTranscriptOutput(path: string, result: RunResult): Promise<string> {
+	const text = await readTranscriptFile(path);
+	if (text?.trim()) return text;
 
 	if (result.stdoutTruncated) {
 		throw new Error(`Transcriber stdout exceeded the ${MAX_CAPTURED_OUTPUT_CHARS}-character capture limit and was truncated. Write the transcript to the output file instead.`);
 	}
 	return result.stdout;
+}
+
+async function readTranscriptFile(path: string): Promise<string | undefined> {
+	let file;
+	try {
+		// A blocking open can hang on a FIFO before we can check its type.
+		file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+	} catch (error) {
+		if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined;
+		throw error;
+	}
+
+	try {
+		if (!(await file.stat()).isFile()) throw new Error(`Transcript output is not a regular file: ${path}`);
+		return await file.readFile("utf8");
+	} finally {
+		await file.close();
+	}
 }

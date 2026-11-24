@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
+import { addAbortSignal } from "node:stream";
 import { AUDIO_VALIDATION_TIMEOUT_MS, MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import { env, envFlag, getAudioFilter, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
 import { appendCapped, findExecutable, formatProcessOutput, formatRunExit, runProcess, shellCommand, shellQuote } from "./processes.ts";
@@ -58,6 +59,7 @@ type DevicePanelStyle = {
 };
 
 const DEVICE_SCAN_TIMEOUT_MS = 8_000;
+const DIRECT_SHOW_SCAN_ARGS = ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"];
 const DEVICE_PANEL_MESSAGE_TYPE = "micme-devices";
 const DEVICE_PANEL_DEFAULT_WIDTH = 92;
 const DEVICE_PANEL_MAX_WIDTH = 100;
@@ -160,7 +162,7 @@ function getCurrentDeviceBackend(): DeviceBackendInfo {
 		return {
 			backend: "dshow",
 			sourceLabel: "Windows · DShow",
-			args: ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+			args: DIRECT_SHOW_SCAN_ARGS,
 			includeVideo: true,
 		};
 	}
@@ -323,22 +325,25 @@ function parseDirectShowDevice(line: string, section: DeviceKind | undefined): (
 	return name ? { kind, name, captureName } : undefined;
 }
 
-function findDefaultDshowAudioDevice(): string | undefined {
-	if (process.platform !== "win32") return undefined;
-	const ffmpeg = findExecutable(["ffmpeg"]);
-	if (!ffmpeg) return undefined;
-	try {
-		const result = spawnSync(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], {
+function findDefaultDshowAudioDevice(ffmpeg: string, signal?: AbortSignal): Promise<string | undefined> {
+	return new Promise<string | undefined>((resolve) => {
+		const scan = execFile(ffmpeg, DIRECT_SHOW_SCAN_ARGS, {
 			encoding: "utf8",
 			timeout: DEVICE_SCAN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 			windowsHide: true,
+			signal,
+		}, (error, stdout, stderr) => {
+			// A timeout can cut off inherited output even after FFmpeg has exited, when scan.killed stays false.
+			if (scan.killed || scan.stdout?.readableAborted || scan.stderr?.readableAborted) return resolve(undefined);
+			// FFmpeg can exit nonzero after a complete listing.
+			if (error && (typeof error.code !== "number" || error.signal)) return resolve(undefined);
+			resolve(parseDirectShowDevices(`${stdout}\n${stderr}`).audio[0]?.captureName);
 		});
-		if (result.error || result.signal) return undefined;
-		const inventory = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
-		return inventory.audio[0]?.captureName;
-	} catch {
-		return undefined;
-	}
+		// Cancelling execFile signals FFmpeg; also release pipes that may outlive it.
+		if (signal && scan.stdout) addAbortSignal(signal, scan.stdout);
+		if (signal && scan.stderr) addAbortSignal(signal, scan.stderr);
+	}).catch(() => undefined);
 }
 
 function stripFfmpegLogPrefix(line: string) {
@@ -670,7 +675,7 @@ export async function discoverAudioDevices(): Promise<AudioDeviceCandidate[]> {
 	}
 
 	if (process.platform === "win32") {
-		const result = await runProcess(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], DEVICE_SCAN_TIMEOUT_MS);
+		const result = await runProcess(ffmpeg, DIRECT_SHOW_SCAN_ARGS, DEVICE_SCAN_TIMEOUT_MS);
 		const parsed = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
 		return parsed.audio.map((device) => ({ label: device.name, value: device.captureName, description: "DirectShow audio input" }));
 	}
@@ -785,7 +790,8 @@ export function parseVolumeDb(output: string, label: "mean_volume" | "max_volume
 	return match[1]?.toLowerCase() === "-inf" ? Number.NEGATIVE_INFINITY : Number(match[1]);
 }
 
-export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioPath)): CommandSpec {
+export async function buildRecorderCommand(audioPath: string, tempDir = dirname(audioPath), signal?: AbortSignal): Promise<CommandSpec> {
+	signal?.throwIfAborted();
 	const custom = env("MICME_RECORD_COMMAND");
 	if (custom?.trim()) {
 		return {
@@ -822,7 +828,8 @@ export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioP
 	}
 
 	if (process.platform === "win32") {
-		const deviceName = env("MICME_DSHOW_AUDIO_DEVICE") || findDefaultDshowAudioDevice() || "default";
+		const deviceName = env("MICME_DSHOW_AUDIO_DEVICE") || await findDefaultDshowAudioDevice(ffmpeg, signal) || "default";
+		signal?.throwIfAborted();
 		const input = `audio=${deviceName}`;
 		const args = buildFfmpegRecorderArgs("dshow", input, audioPath, recordSampleRate, { meter: recordMeter, audioFilters: timingFilters });
 		return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
