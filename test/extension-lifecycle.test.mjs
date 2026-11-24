@@ -511,6 +511,72 @@ if (process.argv.includes("-list_devices")) {
 	}
 });
 
+test("shutdown releases DirectShow scan output inherited after FFmpeg exits", { skip: process.platform === "win32" && "requires POSIX fixtures", timeout: 20_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-dshow-inherited-output-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const processLog = join(root, "processes.log");
+	const releaseFile = join(root, "release");
+	await writeExecutable(join(root, "ffmpeg.EXE"), `#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const { appendFileSync, existsSync } = require("node:fs");
+const log = process.env.MICME_TEST_PROCESS_LOG;
+if (process.argv.includes("--hold-stderr")) {
+  appendFileSync(log, \`holding stderr \${process.pid}\\n\`);
+  const deadline = Date.now() + 12_000;
+  const timer = setInterval(() => {
+    if (!existsSync(process.env.MICME_TEST_RELEASE_FILE) && Date.now() < deadline) return;
+    clearInterval(timer);
+    appendFileSync(log, "released stderr\\n");
+  }, 20);
+} else if (process.argv.includes("-list_devices")) {
+  appendFileSync(log, \`scan \${process.pid}\\n\`);
+  process.stderr.write('"Partial Mic" (audio)\\n');
+  spawn(process.execPath, [process.argv[1], "--hold-stderr"], { stdio: ["ignore", "ignore", "inherit"] }).unref();
+  process.exitCode = 1;
+} else {
+  appendFileSync(log, "capture started\\n");
+}
+`);
+
+	const platform = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+	t.after(() => Object.defineProperty(process, "platform", platform));
+	await withEnv({
+		PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+		PATHEXT: ".EXE",
+		PI_CODING_AGENT_DIR: join(root, "agent"),
+		MICME_RECORD_COMMAND: undefined,
+		MICME_DSHOW_AUDIO_DEVICE: undefined,
+		MICME_TRANSCRIPTION_MODE: "clip",
+		MICME_TEST_PROCESS_LOG: processLog,
+		MICME_TEST_RELEASE_FILE: releaseFile,
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		let startupSettled = false;
+		const start = harness.commands.get("micme").handler("", harness.ctx).finally(() => { startupSettled = true; });
+		try {
+			await waitFor(async () => (await readProcessRows(processLog)).some((row) => row.startsWith("holding stderr ")), "fixture did not inherit stderr");
+			const rows = await readProcessRows(processLog);
+			assert.match(rows.join("\n"), /^scan \d+\nholding stderr \d+$/);
+			await assertProcessesStopped(rows.slice(0, 1));
+			assert.equal(harness.owner.getPhase(), "starting");
+
+			await emit(harness, "session_shutdown", { reason: "quit" });
+			const callsAfterShutdown = harness.uiCalls.length;
+			await waitFor(() => startupSettled, "recorder startup stayed blocked after scan cancellation", 2_000);
+			assert.deepEqual(await readProcessRows(processLog), rows, "startup must settle without waiting for stderr to close or starting capture");
+			assert.equal(harness.uiCalls.length, callsAfterShutdown);
+		} finally {
+			await writeFile(releaseFile, "");
+			await emit(harness, "session_shutdown", { reason: "quit" });
+			await start;
+			if ((await readProcessRows(processLog)).some((row) => row.startsWith("holding stderr "))) {
+				await waitFor(async () => (await readProcessRows(processLog)).includes("released stderr"), "fixture did not release inherited stderr");
+			}
+		}
+	});
+});
+
 test("a hung DirectShow scan is terminated before clip capture starts with the default input", { skip: process.platform === "win32" && "requires POSIX fixtures", timeout: 20_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-dshow-deadline-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
