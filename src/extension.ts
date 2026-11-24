@@ -680,7 +680,11 @@ async function useLiveStreamingTranscript(owner: MicmeSessionOwner, operation: M
 	const ctx = operation.context;
 	flushPendingStreamingWords(ctx, state);
 	const liveTranscript = normalizeTranscript(getStreamingTranscript(state));
-	if (!liveTranscript || !owner.isCurrent(operation)) return;
+	if (!owner.isCurrent(operation)) return;
+	if (!liveTranscript) {
+		ctx.ui.notify("Micme did not recognize any words in the live stream.", "warning");
+		return;
+	}
 
 	owner.rememberTranscript(operation, liveTranscript);
 	if (!envFlag("MICME_AUTO_SUBMIT")) return;
