@@ -175,6 +175,100 @@ test("configured Windows hooks pass the system interpreter and original shell ar
 	}
 });
 
+for (const delayed of [false, true]) {
+	const mode = delayed ? "on" : "off";
+
+	test(`Windows hooks transport quoted placeholders separately with delayed expansion ${mode}`, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "micme-hook-args-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const tempDir = join(root, "%USERNAME%", "a & b!USERNAME!^");
+		const audioPath = join(tempDir, "raw.wav");
+		const template = 'tool {audio} {audio} {transcript} "{tempDirRaw}" {unknown}';
+		const spawn = childProcess.spawn;
+		const spawnMock = t.mock.method(childProcess, "spawn", () => spawn(process.execPath, ["-p", "'hook output'"]));
+		const probeMock = t.mock.method(childProcess, "spawnSync", () => ({ status: 0, stdout: delayed ? "micmeprobe\r\n" : "micme!probe\r\n" }));
+		syncBuiltinESMExports();
+		try {
+			const [recording, transcription] = withEnv({ SystemRoot: String.raw`D:\Windows`, MICME_RECORD_COMMAND: template, USERNAME: "expanded" }, () =>
+				withPlatform("win32", () => [
+					spawnRecording(buildRecorderCommand(audioPath, tempDir), audioPath, tempDir),
+					transcribeWithCustomCommand(template, audioPath, tempDir),
+				]),
+			);
+			const [exit, transcript] = await Promise.all([recording.exitPromise, transcription]);
+			assert.equal(exit.code, 0);
+			assert.equal(transcript.trim(), "hook output");
+			assert.equal(spawnMock.mock.calls.length, 2);
+			for (const { arguments: [, args, options] } of spawnMock.mock.calls) {
+				assert.deepEqual(args.slice(0, -1), ["/d", "/s", "/c"], "the hook must inherit the shell's expansion mode");
+				const delimiter = delayed ? "!" : "%";
+				const refs = new RegExp(String.raw`^"tool "${delimiter}(\w+)${delimiter}" "${delimiter}\1${delimiter}" "${delimiter}(\w+)${delimiter}" `).exec(args.at(-1));
+				assert.ok(refs, "non-Raw placeholders must use the shell mode's quoted environment references");
+				assert.ok(args.at(-1).endsWith(`"${tempDir}" {unknown}"`));
+				assert.equal(options.windowsVerbatimArguments, true);
+				assert.equal(options.env[refs[1]], audioPath);
+				assert.equal(options.env[refs[2]], join(tempDir, "transcript.txt"));
+				assert.equal(options.env.USERNAME, "expanded");
+				assert.equal(Object.hasOwn(process.env, refs[1]), false);
+				assert.equal(Object.hasOwn(process.env, refs[2]), false);
+			}
+		} finally {
+			spawnMock.mock.restore();
+			probeMock.mock.restore();
+			syncBuiltinESMExports();
+		}
+	});
+}
+
+test("a Windows hook fails instead of guessing when its shell mode cannot be detected", (t) => {
+	const probeMock = t.mock.method(childProcess, "spawnSync", () => ({ status: 1, stdout: "" }));
+	syncBuiltinESMExports();
+	try {
+		withEnv({ SystemRoot: String.raw`D:\Windows` }, () => withPlatform("win32", () => {
+			assert.throws(() => shellCommand("tool {audio}", { audio: String.raw`C:\!USERNAME!\raw.wav` }), /could not determine the Windows shell's delayed expansion mode/);
+		}));
+	} finally {
+		probeMock.mock.restore();
+		syncBuiltinESMExports();
+	}
+});
+
+test("an already cancelled Windows hook does not start a shell mode probe", async (t) => {
+	const probeMock = t.mock.method(childProcess, "spawnSync", () => assert.fail("cancelled hook started a cmd probe"));
+	syncBuiltinESMExports();
+	try {
+		const result = await withEnv({ SystemRoot: String.raw`D:\Windows` }, () => withPlatform("win32", () => runShell("tool {audio}", 2_000, {
+			signal: AbortSignal.abort(),
+			placeholders: { audio: String.raw`C:\!USERNAME!\raw.wav` },
+		})));
+		assert.equal(result.cancelled, true);
+	} finally {
+		probeMock.mock.restore();
+		syncBuiltinESMExports();
+	}
+});
+
+test("both Windows hooks preserve literal paths and the host's Raw expansion behavior", { skip: process.platform !== "win32" && "requires Windows cmd.exe" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-literal-hook-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const tempDir = join(root, "%USERNAME%", "a & b!USERNAME!");
+	await mkdir(tempDir, { recursive: true });
+	const audioPath = join(tempDir, "raw.wav");
+	const template = `"${process.execPath}" -e "process.stdout.write(JSON.stringify(process.argv.slice(1)))" {audio} {tempDir} {transcript} "{tempDirRaw}"`;
+	const [baseline, recording, transcription] = withEnv({ MICME_RECORD_COMMAND: template, USERNAME: "expanded" }, () => [
+		runShell("echo !USERNAME!", 2_000),
+		spawnRecording(buildRecorderCommand(audioPath, tempDir), audioPath, tempDir),
+		transcribeWithCustomCommand(template, audioPath, tempDir),
+	]);
+	const [raw, exit, transcript] = await Promise.all([baseline, recording.exitPromise, transcription]);
+	assert.equal(raw.code, 0);
+	assert.ok(["expanded", "!USERNAME!"].includes(raw.stdout.trim()));
+	const expected = [audioPath, tempDir, join(tempDir, "transcript.txt"), join(root, "expanded", `a & b${raw.stdout.trim()}`)];
+	assert.equal(exit.code, 0, recording.stderr());
+	assert.deepEqual(JSON.parse(recording.stdout()), expected);
+	assert.deepEqual(JSON.parse(transcript), expected);
+});
+
 test("process runners capture output, timeouts, and shell details", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-process-run-"));
 	t.after(() => rm(root, { recursive: true, force: true }));

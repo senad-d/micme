@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { AUDIO_VALIDATION_TIMEOUT_MS, MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import { env, envFlag, getAudioFilter, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
-import { appendCapped, findExecutable, formatProcessOutput, formatRunExit, replacePlaceholders, runProcess, shellCommand, shellQuote } from "./processes.ts";
+import { appendCapped, findExecutable, formatProcessOutput, formatRunExit, runProcess, shellCommand, shellQuote } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { AudioDeviceCandidate, AudioDiagnostics, AudioValidationOutcome, CommandSpec, RunResult } from "./types.ts";
 
@@ -773,8 +773,7 @@ export function parseVolumeDb(output: string, label: "mean_volume" | "max_volume
 export function buildRecorderCommand(audioPath: string, tempDir = dirname(audioPath)): CommandSpec {
 	const custom = env("MICME_RECORD_COMMAND");
 	if (custom?.trim()) {
-		const expanded = replacePlaceholders(custom, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") });
-		return shellCommand(expanded);
+		return shellCommand(custom, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") });
 	}
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
