@@ -226,7 +226,7 @@ test("normalized values are the only values emitted in recorder, preprocessing, 
 			MICME_STREAM_VAD_THRESHOLD: "2",
 		},
 		async () => {
-			const recorder = buildRecorderCommand(join(root, "raw.wav"));
+			const recorder = await buildRecorderCommand(join(root, "raw.wav"));
 			assert.equal(recorder.args.includes("-ar"), false);
 			const preprocess = buildAudioPreprocessingArgs(join(root, "raw.wav"), join(root, "clip.wav"), "");
 			assert.equal(getArgumentValue(preprocess, "-ar"), "16000");

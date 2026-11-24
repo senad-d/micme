@@ -34,7 +34,7 @@ const { buildRecorderCommand } = await import("../src/audio.ts");
 const { RECORDER_STOP_GRACE_MS } = await import("../src/constants.ts");
 const { transcribeWithCustomCommand } = await import("../src/transcription.ts");
 
-function withEnv(values, fn) {
+async function withEnv(values, fn) {
 	const previous = new Map();
 	for (const key of Object.keys(values)) {
 		previous.set(key, process.env[key]);
@@ -43,7 +43,7 @@ function withEnv(values, fn) {
 		else process.env[key] = value;
 	}
 	try {
-		return fn();
+		return await fn();
 	} finally {
 		for (const [key, value] of previous) {
 			if (value === undefined) delete process.env[key];
@@ -52,11 +52,11 @@ function withEnv(values, fn) {
 	}
 }
 
-function withPlatform(platform, fn) {
+async function withPlatform(platform, fn) {
 	const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
 	Object.defineProperty(process, "platform", { value: platform, configurable: true });
 	try {
-		return fn();
+		return await fn();
 	} finally {
 		Object.defineProperty(process, "platform", descriptor);
 	}
@@ -78,11 +78,11 @@ test("replacePlaceholders does not expand placeholders introduced by values", ()
 	assert.equal(output, `cmd ${shellQuote(audioPath)} ${audioPath} ${shellQuote(tempDir)} {missing}`);
 });
 
-test("shellQuote escapes platform quote characters byte-for-byte", () => {
-	withPlatform("win32", () => {
+test("shellQuote escapes platform quote characters byte-for-byte", async () => {
+	await withPlatform("win32", () => {
 		assert.equal(shellQuote('a"b'), String.raw`"a\"b"`);
 	});
-	withPlatform("linux", () => {
+	await withPlatform("linux", () => {
 		assert.equal(shellQuote("a'b"), String.raw`'a'\''b'`);
 	});
 });
@@ -114,7 +114,7 @@ test("findExecutable ignores non-executable PATH entries", async (t) => {
 	await writeFile(executable, "#!/bin/sh\nexit 0\n");
 	await chmod(executable, 0o755);
 
-	withEnv({ PATH: `${badDir}${delimiter}${goodDir}` }, () => {
+	await withEnv({ PATH: `${badDir}${delimiter}${goodDir}` }, () => {
 		assert.equal(findExecutable(["micme-tool"]), executable);
 	});
 });
@@ -131,11 +131,11 @@ test("Windows executable discovery skips batch shims earlier on PATH", async (t)
 	const native = join(binDir, "whisper-cli.exe");
 	await writeFile(native, "");
 
-	withEnv({ PATH: `${shimDir}${delimiter}${binDir}`, PATHEXT: ".CmD;.bAt;.exe" }, () => {
+	await withEnv({ PATH: `${shimDir}${delimiter}${binDir}`, PATHEXT: ".CmD;.bAt;.exe" }, () =>
 		withPlatform("win32", () => {
 			assert.equal(findExecutable(["whisper-cli"]), native);
-		});
-	});
+		}),
+	);
 });
 
 test("Windows executable validation rejects an explicit batch path", async (t) => {
@@ -144,7 +144,7 @@ test("Windows executable validation rejects an explicit batch path", async (t) =
 	const batch = join(root, "whisper-stream.CMD");
 	await writeFile(batch, "@exit /b 0\r\n");
 
-	withPlatform("win32", () => {
+	await withPlatform("win32", () => {
 		assert.equal(isExecutableFile(batch), false);
 	});
 });
@@ -155,11 +155,11 @@ test("Windows command reporting can explicitly include a shell shim", async (t) 
 	const shim = join(root, "pi.CMD");
 	await writeFile(shim, "@exit /b 0\r\n");
 
-	withEnv({ PATH: root, PATHEXT: ".EXE;.CMD" }, () => {
+	await withEnv({ PATH: root, PATHEXT: ".EXE;.CMD" }, () =>
 		withPlatform("win32", () => {
 			assert.equal(findExecutable(["pi"], { allowWindowsBatch: true }), shim);
-		});
-	});
+		}),
+	);
 });
 
 test("Windows shell selection stays on the system interpreter across project directories", async (t) => {
@@ -171,25 +171,25 @@ test("Windows shell selection stays on the system interpreter across project dir
 	const expected = { command: String.raw`D:\Windows\System32\cmd.exe`, args: ["/d", "/s", "/c", command], display: command };
 	const originalDirectory = process.cwd();
 	try {
-		withEnv({ SystemRoot: String.raw`D:\Windows`, PATH: project, ComSpec: String.raw`C:\Project\cmd.exe` }, () => {
+		await withEnv({ SystemRoot: String.raw`D:\Windows`, PATH: project, ComSpec: String.raw`C:\Project\cmd.exe` }, () =>
 			withPlatform("win32", () => {
 				assert.deepEqual(shellCommand(command), expected);
 				process.chdir(project);
 				assert.deepEqual(shellCommand(command), expected);
-			});
-		});
+			}),
+		);
 	} finally {
 		process.chdir(originalDirectory);
 	}
 });
 
-test("Windows shell selection fails closed without a drive-qualified system root", () => {
+test("Windows shell selection fails closed without a drive-qualified system root", async () => {
 	for (const SystemRoot of [undefined, "Windows", "C:Windows", String.raw`\Windows`, String.raw`\\server\share`]) {
-		withEnv({ SystemRoot }, () => {
+		await withEnv({ SystemRoot }, () =>
 			withPlatform("win32", () => {
 				assert.throws(() => shellCommand("echo hi"), /SystemRoot must be a drive-qualified absolute path/);
-			});
-		});
+			}),
+		);
 	}
 });
 
@@ -222,9 +222,9 @@ test("configured Windows hooks pass the system interpreter and original shell ar
 	const recordCommand = 'echo "recording hook"';
 	const transcribeCommand = 'echo "transcription hook"';
 	const requests = mockHookLaunch(t);
-	const [recording, transcription] = withEnv({ SystemRoot: String.raw`D:\Windows`, MICME_RECORD_COMMAND: recordCommand }, () =>
-		withPlatform("win32", () => [
-			spawnRecording(buildRecorderCommand(audioPath), audioPath, project),
+	const [recording, transcription] = await withEnv({ SystemRoot: String.raw`D:\Windows`, MICME_RECORD_COMMAND: recordCommand }, () =>
+		withPlatform("win32", async () => [
+			spawnRecording(await buildRecorderCommand(audioPath), audioPath, project),
 			transcribeWithCustomCommand(transcribeCommand, audioPath, project),
 		]),
 	);
@@ -252,9 +252,9 @@ for (const delayed of [false, true]) {
 		const probeMock = t.mock.method(childProcess, "spawnSync", () => ({ status: 0, stdout: delayed ? "micmeprobe\r\n" : "micme!probe\r\n" }));
 		syncBuiltinESMExports();
 		try {
-			const [recording, transcription] = withEnv({ SystemRoot: String.raw`D:\Windows`, MICME_RECORD_COMMAND: template, USERNAME: "expanded" }, () =>
-				withPlatform("win32", () => [
-					spawnRecording(buildRecorderCommand(audioPath, tempDir), audioPath, tempDir),
+			const [recording, transcription] = await withEnv({ SystemRoot: String.raw`D:\Windows`, MICME_RECORD_COMMAND: template, USERNAME: "expanded" }, () =>
+				withPlatform("win32", async () => [
+					spawnRecording(await buildRecorderCommand(audioPath, tempDir), audioPath, tempDir),
 					transcribeWithCustomCommand(template, audioPath, tempDir),
 				]),
 			);
@@ -283,11 +283,11 @@ for (const delayed of [false, true]) {
 	});
 }
 
-test("a Windows hook fails instead of guessing when its shell mode cannot be detected", (t) => {
+test("a Windows hook fails instead of guessing when its shell mode cannot be detected", async (t) => {
 	const probeMock = t.mock.method(childProcess, "spawnSync", () => ({ status: 1, stdout: "" }));
 	syncBuiltinESMExports();
 	try {
-		withEnv({ SystemRoot: String.raw`D:\Windows` }, () => withPlatform("win32", () => {
+		await withEnv({ SystemRoot: String.raw`D:\Windows` }, () => withPlatform("win32", () => {
 			assert.throws(() => shellCommand("tool {audio}", { audio: String.raw`C:\!USERNAME!\raw.wav` }), /could not determine the Windows shell's delayed expansion mode/);
 		}));
 	} finally {
@@ -318,9 +318,9 @@ test("both Windows hooks preserve literal paths and the host's Raw expansion beh
 	await mkdir(tempDir, { recursive: true });
 	const audioPath = join(tempDir, "raw.wav");
 	const template = `"${process.execPath}" -e "process.stdout.write(JSON.stringify(process.argv.slice(1)))" {audio} {tempDir} {transcript} "{tempDirRaw}"`;
-	const [baseline, recording, transcription] = withEnv({ MICME_RECORD_COMMAND: template, USERNAME: "expanded" }, () => [
+	const [baseline, recording, transcription] = await withEnv({ MICME_RECORD_COMMAND: template, USERNAME: "expanded" }, async () => [
 		runShell("echo !USERNAME!", 2_000),
-		spawnRecording(buildRecorderCommand(audioPath, tempDir), audioPath, tempDir),
+		spawnRecording(await buildRecorderCommand(audioPath, tempDir), audioPath, tempDir),
 		transcribeWithCustomCommand(template, audioPath, tempDir),
 	]);
 	const [raw, exit, transcript] = await Promise.all([baseline, recording.exitPromise, transcription]);
@@ -474,7 +474,7 @@ test("process runners capture output, timeouts, and shell details", async (t) =>
 
 	const shell = await runShell("echo shell", 2_000);
 	assert.equal(shell.stdout.trim(), "shell");
-	withPlatform("linux", () => {
+	await withPlatform("linux", () => {
 		assert.deepEqual(shellCommand("echo hi"), { command: "sh", args: ["-lc", "echo hi"], display: "echo hi" });
 	});
 
@@ -857,7 +857,7 @@ test("custom recorder accepts exit 255 after Micme sends SIGINT", { skip: proces
 		setInterval(() => {}, 1000);
 	`;
 	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio}`;
-	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const command = await withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
 	const recording = spawnRecording(command, audioPath, root);
 	t.after(() => stopProcess(recording));
 
@@ -872,7 +872,7 @@ test("custom recorder rejects spontaneous exit 255 even with audio", { skip: pro
 	const audioPath = join(root, "raw.wav");
 	const script = `require("node:fs").writeFileSync(process.argv[1], Buffer.alloc(600)); process.exit(255);`;
 	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio}`;
-	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const command = await withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
 	const recording = spawnRecording(command, audioPath, root);
 
 	await recording.exitPromise;
@@ -893,7 +893,7 @@ test("custom recorder rejects a pre-stop exit 255 whose notification is still pe
 		process.exit(255);
 	`;
 	const hook = `exec ${shellQuote(process.execPath)} -e ${shellQuote(script)} {audio} ${shellQuote(pidPath)}`;
-	const command = withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
+	const command = await withEnv({ MICME_RECORD_COMMAND: hook }, () => buildRecorderCommand(audioPath));
 	const recording = spawnRecording(command, audioPath, root);
 	t.after(() => stopProcess(recording));
 
