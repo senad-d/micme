@@ -9,7 +9,6 @@ import test from "node:test";
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 const packageRoot = dirname(packagePath);
 const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
-const doctorPath = join(packageRoot, packageJson.bin["micme-doctor"].replace(/^\.\//, ""));
 const runtimeProbe = `
 import { resolveTranscriptionPlan } from ${JSON.stringify(pathToFileURL(join(packageRoot, "src/backends.ts")).href)};
 import { getTranscriptionMode, reloadMicmeConfig } from ${JSON.stringify(pathToFileURL(join(packageRoot, "src/config.ts")).href)};
@@ -38,6 +37,16 @@ function runNode(args, environment) {
 	});
 	assert.equal(result.status, 0, result.stderr || result.stdout);
 	return result.stdout;
+}
+
+async function buildDoctorFixture(root) {
+	await writeFile(join(root, "package.json"), JSON.stringify({ type: packageJson.type }));
+	runNode([
+		join(packageRoot, "node_modules", "typescript", "bin", "tsc"),
+		"--project", "scripts/tsconfig.doctor.json",
+		"--outDir", join(root, "dist", "doctor"),
+	], process.env);
+	return join(root, packageJson.bin["micme-doctor"]);
 }
 
 function getDoctorField(output, label) {
@@ -71,9 +80,10 @@ function buildModelFixtures(modelDir) {
 	];
 }
 
-test("public doctor uses the runtime model and backend contract for isolated fixtures", async (t) => {
+test("JavaScript doctor starts without type stripping and matches the runtime model and backend contract", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-doctor-contract-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
+	const doctorPath = await buildDoctorFixture(root);
 	const binDir = join(root, "bin");
 	const modelDir = join(root, "models");
 	await createWhisperCppFixture(binDir);
@@ -95,8 +105,9 @@ test("public doctor uses the runtime model and backend contract for isolated fix
 		await writeFile(join(root, "micme.json"), `${JSON.stringify(config, null, 2)}\n`);
 		const environment = isolatedEnvironment(root, binDir);
 		const runtime = JSON.parse(runNode(["--input-type=module", "--eval", runtimeProbe], environment));
-		const doctor = runNode([doctorPath], environment);
+		const doctor = runNode(["--no-experimental-strip-types", doctorPath], environment);
 
+		assert.match(doctor, /^Micme doctor\r?$/m, fixture.id);
 		assert.equal(runtime.plan.effectiveBackend, "whisper.cpp", fixture.id);
 		assert.equal(getDoctorField(doctor, "effective model path"), runtime.plan.modelPath, fixture.id);
 		assert.equal(getDoctorField(doctor, "effective model name"), runtime.plan.modelName, fixture.id);
