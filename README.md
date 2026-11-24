@@ -32,9 +32,9 @@ MicMe is a Pi extension for coding prompts. It records your microphone with `ffm
 - **Local-first:** no telemetry and no cloud STT service by default.
 - **Review-first:** transcripts paste into the editor unless you enable auto-submit.
 - **Pi-native:** install globally, project-locally, from git, or from a source checkout.
-- **Configurable:** use `/micme conf`, `~/.pi/agent/micme.json`, or shell variables.
+- **Configurable:** use `/micme conf`, `micme.json`, or shell variables.
 
-> **Security:** pi packages run with your full system permissions. Micme can use your microphone, spawn local commands, write `MICME_*` settings to `~/.pi/agent/micme.json`, and optionally download Whisper model files. Read [`SECURITY.md`](SECURITY.md).
+> **Security:** pi packages run with your full system permissions. Micme can use your microphone, spawn local commands, write `MICME_*` settings, and optionally download Whisper model files. Read [`SECURITY.md`](SECURITY.md).
 
 ## Table of Contents
 
@@ -157,7 +157,9 @@ MICME_WHISPER_CPP_MODEL=/path/to/ggml-small.en.bin
 
 ## Configuration
 
-MicMe reads settings from shell environment variables and from the global Micme config file at `~/.pi/agent/micme.json`. Shell variables win. `/micme conf` writes only `MICME_*` keys to that JSON file, so settings follow you across pi projects on the same machine. If this file is malformed or its top level is not an object, Micme refuses recording, model download, device discovery, and transcription before starting external work; `/micme conf` remains available so you can locate the file. After fixing it, reopen settings to discover devices and models.
+Micme reads settings from shell environment variables and from `micme.json` in the selected agent directory (normally `~/.pi/agent`). Shell variables win. `/micme conf` writes only `MICME_*` keys to that same file. See [Micme config handling](SECURITY.md#micme-config-handling) for directory precedence and which files to trust.
+
+If this file is malformed or its top level is not an object, Micme refuses recording, model download, device discovery, and transcription before starting external work; `/micme conf` remains available so you can locate the file. After fixing it, reopen settings to discover devices and models.
 
 Config saves are serialized in-process and across Pi processes with `micme.json.lock`, then atomically replace the file with mode `0600`. Each save re-reads the latest file while holding the lock and changes only its requested `MICME_*` keys, preserving `$schema` and other metadata. Saves commit in lock-acquisition order, so the last successful save to the same key wins. Micme waits up to five seconds for the lock; on timeout it leaves the existing config and lock untouched because it cannot safely assume another writer's lock is stale. Remove a leftover lock directory manually only after verifying that no Pi process is saving Micme settings.
 
@@ -169,7 +171,7 @@ The usual setup path is to run:
 /micme conf
 ```
 
-You can also edit the JSON manually. Minimal `~/.pi/agent/micme.json`:
+You can also edit the JSON manually. Minimal `micme.json`:
 
 ```json
 {

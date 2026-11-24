@@ -70,11 +70,15 @@ You can also download models manually and set `MICME_WHISPER_CPP_MODEL=/path/to/
 
 ## Micme config handling
 
-Micme reads only `MICME_*` runtime keys from `~/.pi/agent/micme.json`. Shell environment variables override saved JSON values.
+Micme reads `micme.json` from one directory and `/micme conf` saves to the same file. Micme chooses the directory in this order:
 
-`/micme conf` writes only `MICME_*` values to `micme.json` and preserves other JSON metadata. Micme uses its own global config store to reduce accidental project influence over microphone and command-hook behavior.
+1. An explicit `PI_CODING_AGENT_DIR` override, if nonblank after trimming. Relative paths are resolved against the Pi process's current working directory.
+2. The agent directory returned by Pi's `getAgentDir()` helper, if available.
+3. `~/.pi/agent` as the home-directory fallback.
 
-Treat `micme.json` as trusted local user configuration. Command hooks stored there, especially `MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`, execute local shell commands with your user permissions. Avoid placing secrets in custom commands.
+If `micme.json` is missing in the selected directory, Micme does not look in the next directory. Micme reads only `MICME_*` runtime keys from JSON; shell environment variables override saved values. `/micme conf` writes only `MICME_*` values and preserves other JSON metadata.
+
+Micme does not discover project configs by default. But if you start Pi from a project directory with `PI_CODING_AGENT_DIR=.`, Micme reads and writes that project's `micme.json` as trusted user configuration. When used, [custom command hooks](#custom-command-risks) from that file (`MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`) run with your user permissions. Point the agent directory only at locations whose configuration you trust, and avoid placing secrets in custom commands.
 
 ## Telemetry and retention
 
