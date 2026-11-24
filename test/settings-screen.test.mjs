@@ -481,6 +481,40 @@ test("configuration items include discovered candidates and derived visibility",
 	});
 });
 
+test("configuration renders a selected Python discovery label without terminal styling", async (t) => {
+	if (process.platform === "win32") {
+		t.skip("POSIX shell shims are not portable to Windows");
+		return;
+	}
+
+	await withTempAgent(t, (root) => withEnv({
+		MICME_TRANSCRIPTION_MODE: undefined,
+		MICME_TRANSCRIBE_BACKEND: undefined,
+		MICME_WHISPER_MODEL: undefined,
+	}, async () => {
+		const bin = join(root, "bin");
+		await mkdir(bin);
+		await writeFile(join(bin, "python3"), "#!/bin/sh\nprintf '\\033[31mdiscovered-model\\033[0m\\n'\n", { mode: 0o755 });
+		const configPath = join(root, "micme.json");
+		await writeFile(configPath, JSON.stringify({ MICME_TRANSCRIPTION_MODE: "clip", MICME_TRANSCRIBE_BACKEND: "python", MICME_WHISPER_MODEL: "small" }));
+		const harness = createHarness(root);
+
+		await showConfiguration(harness.ctx);
+		await waitFor(() => !harness.component.render(100).join("\n").includes("Loading "), "configuration discovery did not finish");
+		harness.component.handleInput("/");
+		typeText(harness.component, "Model name passed to the OpenAI Whisper Python CLI");
+		harness.component.handleInput("\r");
+		await waitFor(async () => {
+			const config = JSON.parse(await readFile(configPath, "utf8"));
+			return config.MICME_WHISPER_MODEL === "\x1b[31mdiscovered-model\x1b[0m" && !harness.component.render(100).join("\n").includes("Saving ");
+		}, "discovered Python model was not selected");
+
+		const modelRow = harness.component.render(100).find((line) => line.includes("Model (Transcription)"));
+		assert.match(modelRow ?? "", /Model \(Transcription\) +discovered-model *│$/);
+		harness.component.handleInput("q");
+	}));
+});
+
 test("model selector sanitizes labels and returns selected or cancelled values", () => {
 	const selected = [];
 	const selector = createModelSelector(

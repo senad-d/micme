@@ -562,7 +562,7 @@ class ConfigurationScreen implements Component {
 
 		if (item.displayKind === "slider") return this.formatSlider(item, width);
 
-		const label = item.valueLabels?.[raw] ?? displayConfigurationValue(item.id, raw);
+		const label = displayConfigurationValue(item.id, item.valueLabels?.[raw] ?? raw);
 		if (item.displayKind === "path" || item.displayKind === "model") return fitPath(label, width);
 		return fitAnsi(label, width);
 	}
