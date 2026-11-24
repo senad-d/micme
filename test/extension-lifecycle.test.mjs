@@ -7,7 +7,7 @@ import test from "node:test";
 
 const { registerMicmeExtension } = await import("../src/extension.ts");
 const { reloadMicmeConfig } = await import("../src/config.ts");
-const { MAX_CAPTURED_OUTPUT_CHARS } = await import("../src/constants.ts");
+const { MAX_CAPTURED_OUTPUT_CHARS, RECORDING_WIDGET_KEY } = await import("../src/constants.ts");
 const { shellQuote } = await import("../src/processes.ts");
 
 const theme = {
@@ -1361,6 +1361,69 @@ while :; do /bin/sleep 1; done
 			const warning = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "warning");
 			assert.match(warning?.message ?? "", /skipped silence validation because ffmpeg was not found/);
 			assert.ok(harness.uiCalls.some((entry) => entry.method === "pasteToEditor" && entry.value === "custom transcript "));
+		},
+	);
+});
+
+function latestRecordingWidget(harness) {
+	return harness.uiCalls.findLast((call) => call.method === "setWidget" && call.key === RECORDING_WIDGET_KEY)?.value;
+}
+
+async function assertRecordingClockTicks(harness, session) {
+	const clock = () => latestRecordingWidget(harness)?.[0]?.match(/\b\d{2}:\d{2}:\d{2}\b/)?.[0];
+	const initial = clock();
+	assert.ok(initial, `${session} did not render a recording clock`);
+	await waitFor(() => {
+		const current = clock();
+		return current && current > initial;
+	}, `${session}'s recording clock froze at ${initial}`);
+}
+
+test("stopping or shutting down one Pi session leaves the other recording clock ticking", { skip: process.platform === "win32" && "requires POSIX recorder fixtures" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-widget-owners-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const recorder = join(root, "recorder");
+	const processLog = join(root, "processes.log");
+	await writeFfmpegProcess(recorder);
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: `exec ${shellQuote(recorder)} {audio}`,
+			MICME_TEST_PROCESS_LOG: processLog,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			MICME_TRANSCRIBE_COMMAND: "printf 'session transcript'",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "0",
+			MICME_KEEP_AUDIO: "0",
+		},
+		async () => {
+			const first = createExtensionHarness(root);
+			const second = createExtensionHarness(root);
+			const firstCommand = first.commands.get("micme");
+			const secondCommand = second.commands.get("micme");
+			assert.ok(firstCommand && secondCommand);
+			try {
+				// Command and shutdown callbacks need not receive the same context object.
+				await firstCommand.handler("", { ...first.ctx });
+				await secondCommand.handler("", { ...second.ctx });
+				await waitFor(async () => (await readProcessRows(processLog)).length === 2, "both recorders did not start");
+				await Promise.all([assertRecordingClockTicks(first, "first session after second started"), assertRecordingClockTicks(second, "second session")]);
+
+				await secondCommand.handler("", second.ctx);
+				await assertRecordingClockTicks(first, "first session after second stopped");
+				assert.equal(latestRecordingWidget(second), undefined);
+
+				await secondCommand.handler("", { ...second.ctx });
+				await waitFor(async () => (await readProcessRows(processLog)).length === 3, "second recorder did not restart");
+				await emit(first, "session_shutdown", { reason: "quit" });
+				await assertRecordingClockTicks(second, "second session after first shut down");
+				assert.equal(latestRecordingWidget(first), undefined);
+			} finally {
+				await Promise.all([emit(first, "session_shutdown", { reason: "quit" }), emit(second, "session_shutdown", { reason: "quit" })]);
+			}
 		},
 	);
 });

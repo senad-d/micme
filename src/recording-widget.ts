@@ -3,29 +3,29 @@ import { RECORDING_WIDGET_KEY } from "./constants.ts";
 import { readPcm16WaveLevel } from "./audio-level.ts";
 import type { Recording } from "./types.ts";
 
-let recordingWidgetTimer: ReturnType<typeof setInterval> | undefined;
+export class RecordingWidget {
+	private timer: ReturnType<typeof setInterval> | undefined;
 
-export function startRecordingWidget(ctx: ExtensionContext, active: Recording) {
-	clearRecordingWidget(ctx);
-	let displayLevel = 0;
-	const update = () => {
-		const elapsedSeconds = Math.max(0, Math.floor((Date.now() - active.startedAt) / 1000));
-		const liveLevel = active.audioLevel();
-		const measuredLevel = liveLevel > 0 ? liveLevel : readPcm16WaveLevel(active.audioPath);
-		displayLevel = displayLevel * 0.55 + measuredLevel * 0.45;
-		const line = formatRecordingWidgetLine(ctx, elapsedSeconds, displayLevel);
-		ctx.ui.setWidget(RECORDING_WIDGET_KEY, [line]);
-	};
-	update();
-	recordingWidgetTimer = setInterval(update, 120);
-}
-
-export function clearRecordingWidget(ctx?: ExtensionContext) {
-	if (recordingWidgetTimer) {
-		clearInterval(recordingWidgetTimer);
-		recordingWidgetTimer = undefined;
+	start(ctx: ExtensionContext, active: Recording) {
+		this.clear(ctx);
+		let displayLevel = 0;
+		const update = () => {
+			const elapsedSeconds = Math.max(0, Math.floor((Date.now() - active.startedAt) / 1000));
+			const liveLevel = active.audioLevel();
+			const measuredLevel = liveLevel > 0 ? liveLevel : readPcm16WaveLevel(active.audioPath);
+			displayLevel = displayLevel * 0.55 + measuredLevel * 0.45;
+			const line = formatRecordingWidgetLine(ctx, elapsedSeconds, displayLevel);
+			ctx.ui.setWidget(RECORDING_WIDGET_KEY, [line]);
+		};
+		update();
+		this.timer = setInterval(update, 120);
 	}
-	ctx?.ui.setWidget(RECORDING_WIDGET_KEY, undefined);
+
+	clear(ctx: ExtensionContext) {
+		clearInterval(this.timer);
+		this.timer = undefined;
+		ctx.ui.setWidget(RECORDING_WIDGET_KEY, undefined);
+	}
 }
 
 export function formatRecordingWidgetLine(ctx: ExtensionContext, elapsedSeconds: number, audioLevel: number) {
