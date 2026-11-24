@@ -9,7 +9,8 @@ import test from "node:test";
 const execFileAsync = promisify(execFile);
 const configModuleUrl = new URL("../src/config.ts", import.meta.url).href;
 const childWriter = `
-const [moduleUrl, key, value] = process.argv.slice(1);
+const [moduleUrl, key, value, mask] = process.argv.slice(1);
+if (mask) process.umask(mask);
 const { writeMicmeConfigValue } = await import(moduleUrl);
 await writeMicmeConfigValue(key, value);
 `;
@@ -38,8 +39,8 @@ async function listTemporaryFiles(root) {
 	return (await readdir(root)).filter((name) => name.startsWith(".micme.") && name.endsWith(".tmp"));
 }
 
-async function runChildWriter(root, key, value) {
-	await execFileAsync(process.execPath, ["--input-type=module", "--eval", childWriter, configModuleUrl, key, value], {
+async function runChildWriter(root, key, value, mask = "") {
+	await execFileAsync(process.execPath, ["--input-type=module", "--eval", childWriter, configModuleUrl, key, value, mask], {
 		env: { ...process.env, PI_CODING_AGENT_DIR: root },
 	});
 }
@@ -75,6 +76,25 @@ test("separate processes preserve every disjoint update and existing metadata", 
 	await Promise.all(entries.map(([key, value]) => runChildWriter(root, key, value)));
 
 	assert.deepEqual(await readConfig(root), { ...initial, ...Object.fromEntries(entries) });
+});
+
+test("first save under umask 002 creates missing config directories privately", async (t) => {
+	if (process.platform === "win32") {
+		t.skip("POSIX directory permissions are required");
+		return;
+	}
+	const root = await mkdtemp(join(tmpdir(), "micme-config-write-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await chmod(root, 0o755);
+	const parent = join(root, ".pi");
+	const agentDir = join(parent, "agent");
+
+	await runChildWriter(agentDir, "MICME_LANGUAGE", "en", "002");
+
+	assert.equal((await stat(agentDir)).mode & 0o777, 0o700, "agent directory");
+	assert.equal((await stat(parent)).mode & 0o777, 0o700, "new parent directory");
+	assert.equal((await stat(root)).mode & 0o777, 0o755, "existing ancestor");
+	assert.equal((await readConfig(agentDir)).MICME_LANGUAGE, "en");
 });
 
 test("successful atomic replacement keeps the config private", async (t) => {
