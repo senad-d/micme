@@ -62,6 +62,7 @@ const DEVICE_PANEL_MAX_WIDTH = 100;
 const DEVICE_PANEL_MIN_WIDTH = 36;
 const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
 const FFMPEG_SIGNAL_STOP_EXIT_CODE = 255;
+const FFMPEG_CONTEXT_PREFIX_PATTERN = /^\[[^[\]]+ @ 0x[\da-f]+\]\s*/i;
 const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
 const DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN = /^"(.+)"$/;
 const DIRECT_SHOW_DEVICE_NAME_PATTERN = /"([^"]+)"/;
@@ -220,7 +221,8 @@ export function parseAvfoundationDevices(output: string): ParsedDeviceInventory 
 	const inventory: ParsedDeviceInventory = { audio: [], video: [], sawDeviceSection: false };
 	let section: DeviceKind | undefined;
 
-	for (const line of output.split(/\r?\n/)) {
+	for (const rawLine of output.split(/\r?\n/)) {
+		const line = rawLine.replace(FFMPEG_CONTEXT_PREFIX_PATTERN, "");
 		if (line.includes("AVFoundation video devices:")) {
 			section = "video";
 			inventory.sawDeviceSection = true;
