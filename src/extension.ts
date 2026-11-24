@@ -152,7 +152,7 @@ export class MicmeSessionOwner {
 		}
 		clearOperationTimers(active);
 		await stopOwnedProcesses(active);
-		await cleanupOwnedDirectories(active);
+		await cleanupOwnedDirectories(this, active);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearRecordingWidget(ctx);
 	}
@@ -348,7 +348,7 @@ async function startRecording(owner: MicmeSessionOwner, operation: MicmeOperatio
 async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext, stopHint: string) {
 	const tempDir = await owner.allocateRecordingDirectory(operation, "micme-");
 	if (!owner.isCurrent(operation)) {
-		await cleanup(tempDir).catch(() => undefined);
+		await cleanupRecordingDirectory(owner, operation, tempDir);
 		return;
 	}
 
@@ -368,7 +368,7 @@ async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOper
 
 		owner.activateRecording(operation, "recording", active, stopHint);
 	} catch (error) {
-		await cleanupFailedRecordingStart(ctx, operation);
+		await cleanupFailedRecordingStart(owner, operation);
 		throw error;
 	}
 }
@@ -380,7 +380,7 @@ async function startStreamingTranscription(owner: MicmeSessionOwner, operation: 
 
 	const tempDir = await owner.allocateRecordingDirectory(operation, "micme-stream-");
 	if (!owner.isCurrent(operation)) {
-		await cleanup(tempDir).catch(() => undefined);
+		await cleanupRecordingDirectory(owner, operation, tempDir);
 		return;
 	}
 
@@ -400,7 +400,7 @@ async function startStreamingTranscription(owner: MicmeSessionOwner, operation: 
 		await ensureStreamingRecorderStarted(streamRecording);
 		owner.activateRecording(operation, "streaming", streamRecording, stopHint);
 	} catch (error) {
-		await cleanupFailedRecordingStart(ctx, operation);
+		await cleanupFailedRecordingStart(owner, operation);
 		throw error;
 	}
 }
@@ -452,11 +452,11 @@ async function ensureStreamingRecorderStarted(streamRecording: Recording) {
 	throw new Error(`Micme streaming exited early (${formatExit(failedExit)}).${suffix}`);
 }
 
-async function cleanupFailedRecordingStart(ctx: ExtensionContext, operation: MicmeOperation) {
-	clearRecordingWidget(ctx);
+async function cleanupFailedRecordingStart(owner: MicmeSessionOwner, operation: MicmeOperation) {
+	clearRecordingWidget(operation.context);
 	clearOperationTimers(operation);
 	await stopOwnedProcesses(operation);
-	await cleanupOwnedDirectories(operation);
+	await cleanupOwnedDirectories(owner, operation);
 }
 
 async function stopAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI) {
@@ -475,7 +475,6 @@ function firstMainRecording(operation: MicmeOperation) {
 
 async function stopClipAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, active: Recording) {
 	const ctx = operation.context;
-	let completed = false;
 	try {
 		await stopRecorder(active);
 		if (!owner.isCurrent(operation)) return;
@@ -492,19 +491,18 @@ async function stopClipAndTranscribe(owner: MicmeSessionOwner, operation: MicmeO
 
 		owner.rememberTranscript(operation, normalized);
 		await pasteOrSubmitTranscript(ctx, pi, normalized);
-		if (!owner.isCurrent(operation)) return;
-		completed = true;
-		ctx.ui.setStatus(STATUS_KEY, undefined);
-		if (operation.keepAudio) owner.rememberAudioDirectory(operation, active.tempDir);
 	} catch (error) {
 		if (!owner.isCurrent(operation)) return;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		owner.rememberAudioDirectory(operation, active.tempDir);
 		const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error));
 		throw new Error(`${message}\nAudio kept for debugging: ${sanitizeTerminalOutput(active.tempDir)}`, { cause: error });
-	} finally {
-		if (completed && !operation.keepAudio) await cleanup(active.tempDir).catch(() => undefined);
 	}
+
+	if (!owner.isCurrent(operation)) return;
+	ctx.ui.setStatus(STATUS_KEY, undefined);
+	if (operation.keepAudio) owner.rememberAudioDirectory(operation, active.tempDir);
+	else await cleanupRecordingDirectory(owner, operation, active.tempDir);
 }
 
 async function stopStreamingTranscription(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, active: Recording) {
@@ -525,7 +523,7 @@ async function stopStreamingTranscription(owner: MicmeSessionOwner, operation: M
 	ctx.ui.setStatus(STATUS_KEY, "finalizing stream…");
 	const keepTempDir = state ? await completeStreamingStop(owner, operation, pi, active, state, clipStopPromise) : false;
 	if (!owner.isCurrent(operation)) return;
-	if (!keepTempDir) await cleanup(active.tempDir).catch(() => undefined);
+	if (!keepTempDir) await cleanupRecordingDirectory(owner, operation, active.tempDir);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
@@ -659,8 +657,19 @@ async function stopOwnedProcesses(operation: MicmeOperation) {
 	await Promise.all([...operation.processes].map((active) => stopProcess(active).catch(() => undefined)));
 }
 
-async function cleanupOwnedDirectories(operation: MicmeOperation) {
-	await Promise.all([...operation.tempDirs].map((tempDir) => cleanup(tempDir).catch(() => undefined)));
+async function cleanupOwnedDirectories(owner: MicmeSessionOwner, operation: MicmeOperation) {
+	await Promise.all([...operation.tempDirs].map((tempDir) => cleanupRecordingDirectory(owner, operation, tempDir)));
+}
+
+async function cleanupRecordingDirectory(owner: MicmeSessionOwner, operation: MicmeOperation, tempDir: string) {
+	try {
+		await cleanup(tempDir);
+	} catch (error) {
+		if (!owner.isCurrent(operation)) return;
+		owner.rememberAudioDirectory(operation, tempDir);
+		const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error)) || "unknown error";
+		operation.context.ui.notify(`Micme could not clean up the recording directory: ${message}\nAudio may remain in: ${sanitizeTerminalOutput(tempDir)}`, "warning");
+	}
 }
 
 function createGuardedContext(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext) {
