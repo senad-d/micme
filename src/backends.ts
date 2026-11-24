@@ -3,6 +3,7 @@ import type { TranscribeBackend, TranscriptionMode, ResolvedTranscriptionPlan, R
 import { DEFAULT_TRANSCRIBE_BACKEND } from "./constants.ts";
 import { env, expandConfigPath, getTranscribeBackend, getTranslateToEnglishLanguage, isTranscribeBackend } from "./config.ts";
 import { getPythonWhisperModelName, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
+import { resolveLivePlan } from "./live-plan.ts";
 import { findExecutable, isExecutableFile } from "./processes.ts";
 
 export type RequestedTranscribeBackend = TranscribeBackend | (string & Record<never, never>);
@@ -13,32 +14,20 @@ export type ResolveTranscriptionPlanOptions = {
 	customCommand?: string | null;
 	whisperCppBinary?: string | null;
 	whisperCppBinaryError?: string;
-	whisperStreamBinary?: string | null;
-	whisperStreamBinaryError?: string;
 	pythonWhisperBinary?: string | null;
 	whisperCppModel?: ResolvedWhisperCppModel;
 	pythonModelName?: string;
 };
 
 export function resolveTranscriptionPlan(options: ResolveTranscriptionPlanOptions = {}): ResolvedTranscriptionPlan {
+	if (options.transcriptionMode === "stream") return projectLivePlan(options.requestedBackend);
 	const warnings: string[] = [];
 	const requestedBackend = parseRequestedBackend(options.requestedBackend, warnings);
-	const transcriptionMode = options.transcriptionMode ?? "clip";
+
 	const customCommand = getOptionValue(options, "customCommand", () => env("MICME_TRANSCRIBE_COMMAND")?.trim() || undefined);
 	const whisperCppModel = options.whisperCppModel ?? resolveWhisperCppModel();
 	const pythonModelName = options.pythonModelName ?? getPythonWhisperModelName();
-
-	if (transcriptionMode === "stream") {
-		return resolveStreamingPlan({
-			requestedBackend,
-			customCommand: customCommand ?? undefined,
-			whisperCppModel,
-			warnings,
-			whisperStreamBinary: getExecutableOption(options, "whisperStreamBinary", "whisperStreamBinaryError", getWhisperStreamBinary, warnings),
-		});
-	}
-
-	const whisperCppBinary = getExecutableOption(options, "whisperCppBinary", "whisperCppBinaryError", getWhisperCppBinary, warnings);
+	const whisperCppBinary = getWhisperCppBinaryOption(options, warnings);
 	const pythonWhisperBinary = getOptionValue(options, "pythonWhisperBinary", getPythonWhisperBinary);
 
 	if (requestedBackend === "custom") {
@@ -76,12 +65,6 @@ export function getWhisperCppBinary() {
 	return findExecutable(["whisper-cli", "whisper-cpp"]);
 }
 
-export function getWhisperStreamBinary() {
-	const configured = env("MICME_WHISPER_STREAM_BIN")?.trim();
-	if (configured) return resolveExecutableConfig(configured, "MICME_WHISPER_STREAM_BIN");
-	return findExecutable(["whisper-stream"]);
-}
-
 export function getPythonWhisperBinary() {
 	return findExecutable(["whisper"]);
 }
@@ -104,6 +87,10 @@ export function formatTranscriptionPlan(plan: ResolvedTranscriptionPlan) {
 	if (plan.modelPath) lines.push(`Model: ${plan.modelPath}`);
 	else if (plan.modelName) lines.push(`Model: ${plan.modelName}`);
 	if (plan.modelSource) lines.push(`Source: ${plan.modelSource}`);
+	if (plan.live) {
+		lines.push(`VAD model: ${plan.live.vadModelPath}`);
+		lines.push(`Language: ${plan.live.language}${plan.live.translate ? " (translate to English)" : ""}`);
+	}
 	for (const warning of plan.warnings) lines.push(`Warning: ${warning}`);
 	lines.push(`Reason: ${plan.reason}`);
 	return lines.join("\n");
@@ -135,27 +122,20 @@ export function formatEffectiveBackendLabel(backend: ResolvedTranscriptionPlan["
 	}
 }
 
-function resolveStreamingPlan(options: {
-	requestedBackend: TranscribeBackend;
-	customCommand?: string;
-	whisperCppModel: ResolvedWhisperCppModel;
-	warnings: string[];
-	whisperStreamBinary?: string;
-}): ResolvedTranscriptionPlan {
-	const { requestedBackend, whisperCppModel, warnings, whisperStreamBinary } = options;
-	if (requestedBackend === "python") {
-		return nonePlan(requestedBackend, "Streaming mode requires whisper.cpp; Python Whisper only supports clip transcription.", warnings);
+function projectLivePlan(override: RequestedTranscribeBackend | undefined): ResolvedTranscriptionPlan {
+	const warnings: string[] = [];
+	const requestedBackend = override === undefined ? getTranscribeBackend() : parseRequestedBackend(override, warnings);
+	if (override !== undefined && (requestedBackend === "python" || requestedBackend === "custom")) {
+		return nonePlan(requestedBackend, `Live streaming does not support the ${requestedBackend} backend. Choose clip mode to use it.`, warnings);
 	}
-	if (requestedBackend === "custom") {
-		return nonePlan(requestedBackend, "Streaming mode requires whisper.cpp; custom transcribe commands only support clip transcription.", warnings);
+	try {
+		const live = resolveLivePlan();
+		const model = resolveWhisperCppModel({ preserveExplicitPath: true });
+		const plan = whisperCppPlan(requestedBackend, live.binary, model, "selected micme-live for stream mode", warnings);
+		return { ...plan, modelPath: live.modelPath, live };
+	} catch (error) {
+		return nonePlan(requestedBackend, error instanceof Error ? error.message : String(error), warnings);
 	}
-	if (!whisperStreamBinary) {
-		const reason = requestedBackend === "auto"
-			? "MICME_TRANSCRIPTION_MODE=stream but whisper-stream was not found. Auto stream mode requires whisper.cpp/whisper-stream."
-			: "MICME_TRANSCRIBE_BACKEND=whisper.cpp and MICME_TRANSCRIPTION_MODE=stream but whisper-stream was not found.";
-		return nonePlan(requestedBackend, reason, warnings);
-	}
-	return whisperCppPlan(requestedBackend, whisperStreamBinary, whisperCppModel, "streaming selected whisper.cpp because whisper-stream is available", warnings);
 }
 
 function customPlan(requestedBackend: TranscribeBackend, command: string, reason: string, inheritedWarnings: string[] = []): ResolvedTranscriptionPlan {
@@ -243,24 +223,13 @@ function getOptionValue<K extends keyof ResolveTranscriptionPlanOptions>(
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function getExecutableOption(
-	options: ResolveTranscriptionPlanOptions,
-	key: "whisperCppBinary" | "whisperStreamBinary",
-	errorKey: "whisperCppBinaryError" | "whisperStreamBinaryError",
-	fallback: () => string | undefined,
-	warnings: string[] = [],
-) {
-	const error = options[errorKey];
-	if (error) {
-		warnings.push(error);
+function getWhisperCppBinaryOption(options: ResolveTranscriptionPlanOptions, warnings: string[]) {
+	if (options.whisperCppBinaryError) {
+		warnings.push(options.whisperCppBinaryError);
 		return undefined;
 	}
-	if (Object.hasOwn(options, key)) {
-		const value = options[key];
-		return typeof value === "string" && value.trim() ? value.trim() : undefined;
-	}
 	try {
-		return fallback();
+		return getOptionValue(options, "whisperCppBinary", getWhisperCppBinary);
 	} catch (error) {
 		warnings.push(error instanceof Error ? error.message : String(error));
 		return undefined;

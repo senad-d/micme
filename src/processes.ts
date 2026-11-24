@@ -9,7 +9,7 @@ import { pcm16BufferLevel } from "./audio-level.ts";
 import { observePosixGroupClose, posixGroupHasWorkers, posixRecorderState, releasePosixGroup, signalPosixGroup, spawnPosixGroupProcess } from "./posix-process-group.ts";
 import type { RecordingDirectory } from "./recording-dir.ts";
 import { sanitizeTerminalOutput, stripTerminalControlSequences } from "./terminal-text.ts";
-import type { CommandSpec, ExitResult, Recording, RunResult } from "./types.ts";
+import type { CommandSpec, ExitResult, OwnedProcess, Recording, RunResult } from "./types.ts";
 import { WINDOWS_JOB_STOP_EXIT_CODE, WindowsHookLaunchError, closeWindowsJob, spawnWindowsJobProcess, terminateWindowsJob, windowsJobHasProcesses } from "./windows-process-job.ts";
 
 const PROCESS_TERM_GRACE_MS = 1_000;
@@ -54,18 +54,32 @@ function observeProcessClose(child: ChildProcess, reportExit?: (exit: ExitResult
 	return { exitPromise, isSettled: () => settled !== undefined, getExit: () => settled ?? getExit() };
 }
 
-export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string, directory?: RecordingDirectory): Recording {
-	const child = spawnOwnedProcess(command, Boolean(command.stopInput), true, directory?.cwdFd);
+function spawnOwnedInteractive(command: CommandSpec, pipeInput: boolean, cwdFd?: number): OwnedProcess {
+	const child = spawnOwnedProcess(command, pipeInput, true, cwdFd);
 	// The hook can exit while the supervisor and inherited output pipes stay open.
-	let reportExit!: (exit: ExitResult) => void;
-	const exitObserved = new Promise<ExitResult>((resolve) => { reportExit = resolve; });
+	const { promise: exitObserved, resolve: reportExit } = deferred<ExitResult>();
 	const lifecycle = observeProcessClose(child, reportExit);
 	if (HOST_IS_WINDOWS) child.once("close", () => windowsJobHasProcesses(child));
-	let stdout = "";
-	let stderr = "";
-	let audioLevel = 0;
-
 	child.stdin?.on("error", () => undefined);
+	let stderr = "";
+	child.stderr?.setEncoding("utf8");
+	child.stderr?.on("data", (chunk: string) => {
+		stderr = appendCapped(stderr, chunk);
+	});
+	return { process: child, command, exitObserved, ...lifecycle, stderr: () => stderr };
+}
+
+export function spawnLiveWorker({ command, args, display, spawnOptions }: CommandSpec): OwnedProcess {
+	// Worker stdin is binary PCM; neither its stdout nor its stop semantics
+	// belong to the recorder's text and quit-string path.
+	return spawnOwnedInteractive({ command, args, display, spawnOptions }, true);
+}
+
+export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string, directory?: RecordingDirectory): Recording {
+	const owned = spawnOwnedInteractive(command, Boolean(command.stopInput), directory?.cwdFd);
+	const child = owned.process;
+	let stdout = "";
+	let audioLevel = 0;
 
 	if (command.meterFromStdout) {
 		child.stdout?.on("data", (chunk: Buffer) => {
@@ -77,33 +91,17 @@ export function spawnRecording(command: CommandSpec, audioPath: string, tempDir:
 			stdout = appendCapped(stdout, chunk);
 		});
 	}
-	child.stderr?.setEncoding("utf8");
-	child.stderr?.on("data", (chunk: string) => {
-		stderr = appendCapped(stderr, chunk);
-	});
 
-	return {
-		process: child,
-		audioPath,
-		tempDir,
-		directory,
-		startedAt: Date.now(),
-		command,
-		audioLevel: () => audioLevel,
-		exitObserved,
-		...lifecycle,
-		stdout: () => stdout,
-		stderr: () => stderr,
-	};
+	return { ...owned, audioPath, tempDir, directory, startedAt: Date.now(), audioLevel: () => audioLevel, stdout: () => stdout };
 }
 
-export function stopProcess(active: Recording) {
+export function stopProcess(active: OwnedProcess) {
 	if (active.stopPromise) return active.stopPromise;
 	active.stopPromise = stopProcessOnce(active).finally(() => releaseOwnedTree(active.process));
 	return active.stopPromise;
 }
 
-async function stopProcessOnce(active: Recording) {
+async function stopProcessOnce(active: OwnedProcess) {
 	const { process: child, exitPromise } = active;
 	if (!active.isSettled() && !hasExit(active.getExit())) {
 		// The launcher can have a hook PID or exit report queued. Leave a poll
@@ -142,7 +140,7 @@ function hasExit(exit: ExitResult) {
 	return exit.code != null || exit.signal != null || exit.error !== undefined;
 }
 
-async function stopRecorderTree(active: Recording, drainBeforeSignalling = false) {
+async function stopRecorderTree(active: OwnedProcess, drainBeforeSignalling = false) {
 	const { process: child, exitPromise } = active;
 	if (sendStopInput(active) || drainBeforeSignalling) {
 		const exit = await waitForTreeGrace(child, exitPromise, RECORDER_STOP_GRACE_MS);
@@ -166,7 +164,7 @@ async function stopRecorderTree(active: Recording, drainBeforeSignalling = false
 	return waitForFinalClose(child, exitPromise, active.getExit);
 }
 
-function rememberStopSignal(active: Recording, signal: NodeJS.Signals) {
+function rememberStopSignal(active: OwnedProcess, signal: NodeJS.Signals) {
 	active.stopSignals ??= new Set();
 	active.stopSignals.add(signal);
 }
@@ -254,7 +252,7 @@ function abandonProcessPipes(child: ChildProcess) {
 	child.unref();
 }
 
-export function sendStopInput(active: Recording) {
+export function sendStopInput(active: OwnedProcess) {
 	if (!active.command.stopInput || !active.process.stdin || active.process.stdin.destroyed || !active.process.stdin.writable) return false;
 	try {
 		active.process.stdin.write(active.command.stopInput);
@@ -505,6 +503,13 @@ export function formatProcessOutput(...outputs: string[]) {
 		if (sanitized) return sanitized;
 	}
 	return "";
+}
+
+export function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((success, failure) => { resolve = success; reject = failure; });
+	return { promise, resolve, reject };
 }
 
 export function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {

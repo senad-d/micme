@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { getPythonWhisperBinary, getWhisperCppBinary, getWhisperStreamBinary, resolveTranscriptionPlan } from "../src/backends.ts";
-import { env, getAutoDownloadModel, getTranscriptionMode, getTranslateToEnglishLanguage, reloadMicmeConfig } from "../src/config.ts";
+import { existsSync, statSync } from "node:fs";
+import { getPythonWhisperBinary, getWhisperCppBinary, resolveTranscriptionPlan } from "../src/backends.ts";
+import { env, getAutoDownloadModel, getLegacyStreamSettings, getTranscriptionMode, getTranslateToEnglishLanguage, reloadMicmeConfig } from "../src/config.ts";
 import { resolveWhisperCppModel } from "../src/models.ts";
 import { findExecutable } from "../src/processes.ts";
+import { probeLiveWorker } from "../src/streaming.ts";
 import { sanitizeTerminalOutput } from "../src/terminal-text.ts";
 
 const micmeConfig = reloadMicmeConfig();
@@ -50,6 +51,26 @@ function printWhisperCppModelDiagnostics(model) {
     warn("resolved whisper.cpp model is missing", detail);
   }
   if (model.translationFallbackFrom) info("translation model fallback", `${model.translationFallbackFrom} -> ${model.modelName}`);
+}
+
+async function printLiveDiagnostics(plan) {
+  const legacy = getLegacyStreamSettings();
+  if (legacy.length) info("ignored legacy stream settings", `${legacy.join(", ")}; stream uses micme-live and the Audio input`);
+  const live = plan.live;
+  if (!live) return;
+  info("live worker binary", live.binary);
+  info("live language", live.language);
+  info("live VAD model path", live.vadModelPath);
+  info("live final clip refinement", live.finalizeWithClip ? "on" : "off");
+  const vad = resolveDoctorBinary(() => statSync(live.vadModelPath, { throwIfNoEntry: false })?.isFile() ? live.vadModelPath : undefined);
+  if (!vad.path) warn("live VAD weights not present as a regular file", live.vadModelPath);
+  if (micmeConfig.error) return;
+  try {
+    await probeLiveWorker(live.binary);
+    ok("live worker protocol", "Worker v1 available; model readiness and capture not tested");
+  } catch (error) {
+    warn("live worker protocol unavailable", error instanceof Error ? error.message : String(error));
+  }
 }
 
 function printBackendPlanDiagnostics(plan) {
@@ -109,12 +130,9 @@ async function main() {
   else if (whisperCpp.error) warn("whisper.cpp binary", whisperCpp.error);
   else warn("whisper.cpp binary missing", "recommended backend for portable local transcription");
 
-  const whisperStream = resolveDoctorBinary(getWhisperStreamBinary);
-  if (whisperStream.path) ok("whisper-stream binary", whisperStream.path);
-  else if (whisperStream.error) warn("whisper-stream binary", whisperStream.error);
-  else info("whisper-stream binary", "not installed; only needed for MICME_TRANSCRIPTION_MODE=stream");
-
-  const whisperCppModel = resolveWhisperCppModel();
+  const transcriptionMode = getTranscriptionMode();
+  info("transcription mode", transcriptionMode);
+  const whisperCppModel = resolveWhisperCppModel({ preserveExplicitPath: transcriptionMode === "stream" });
   printWhisperCppModelDiagnostics(whisperCppModel);
 
   const whisper = getPythonWhisperBinary();
@@ -125,18 +143,16 @@ async function main() {
   if (transcribeCommand) ok("custom transcribe command", summarizeConfiguredCommand(transcribeCommand));
   else info("custom transcribe command", "not set");
 
-  printBackendPlanDiagnostics(
-    resolveTranscriptionPlan({
-      transcriptionMode: getTranscriptionMode(),
-      customCommand: transcribeCommand || null,
-      whisperCppBinary: whisperCpp.path || null,
-      whisperCppBinaryError: whisperCpp.error,
-      whisperStreamBinary: whisperStream.path || null,
-      whisperStreamBinaryError: whisperStream.error,
-      pythonWhisperBinary: whisper || null,
-      whisperCppModel,
-    }),
-  );
+  const plan = resolveTranscriptionPlan({
+    transcriptionMode,
+    customCommand: transcribeCommand || null,
+    whisperCppBinary: whisperCpp.path || null,
+    whisperCppBinaryError: whisperCpp.error,
+    pythonWhisperBinary: whisper || null,
+    whisperCppModel,
+  });
+  printBackendPlanDiagnostics(plan);
+  if (transcriptionMode === "stream") await printLiveDiagnostics(plan);
 
   const recordCommand = env("MICME_RECORD_COMMAND");
   if (recordCommand) ok("custom record command", summarizeConfiguredCommand(recordCommand));
@@ -146,7 +162,7 @@ async function main() {
   console.log("  brew install ffmpeg whisper-cpp");
   console.log("  # Then use /micme conf, or let Micme auto-download the default model on first use.");
 
-  if (process.platform === "darwin" && ffmpeg) {
+  if (transcriptionMode === "clip" && process.platform === "darwin" && ffmpeg) {
     console.log("\nmacOS microphone devices:");
     const listed = spawnSync(ffmpeg, ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], {
       encoding: "utf8",
