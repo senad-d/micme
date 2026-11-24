@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,6 +7,7 @@ import test from "node:test";
 const { reloadMicmeConfig, getTranscriptionModeProfile } = await import("../src/config.ts");
 const { buildConfigurationItems, createModelSelector, showConfiguration, uniqueStrings } = await import("../src/settings.ts");
 const { resolveTranscriptionPlan } = await import("../src/backends.ts");
+const { buildRecorderCommand } = await import("../src/audio.ts");
 
 const theme = {
 	fg(_color, text) {
@@ -70,6 +71,12 @@ async function withTempAgent(t, fn) {
 	const root = await mkdtemp(join(tmpdir(), "micme-settings-screen-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	return withEnv({ PI_CODING_AGENT_DIR: root, MICME_MODEL_DIR: join(root, "models"), PATH: join(root, "bin") }, () => fn(root));
+}
+
+function mockPlatform(t, platform) {
+	const original = Object.getOwnPropertyDescriptor(process, "platform");
+	t.after(() => Object.defineProperty(process, "platform", original));
+	Object.defineProperty(process, "platform", { value: platform, configurable: true });
 }
 
 function createHarness(cwd = process.cwd()) {
@@ -193,6 +200,86 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 	});
 });
 
+test("the Windows microphone picker saves the second device for the recorder after reload", async (t) => {
+	if (process.platform === "win32") {
+		t.skip("POSIX shell shims are not portable to Windows");
+		return;
+	}
+
+	mockPlatform(t, "win32");
+	await withTempAgent(t, (root) => withEnv({
+		PATHEXT: ".EXE",
+		MICME_AUDIO_DEVICE: undefined,
+		MICME_DSHOW_AUDIO_DEVICE: undefined,
+		MICME_RECORD_COMMAND: undefined,
+	}, async () => {
+		const bin = join(root, "bin");
+		await mkdir(bin);
+		await writeFile(join(bin, "ffmpeg.EXE"), [
+			"#!/bin/sh",
+			"echo 'DirectShow audio devices' >&2",
+			"echo '\"Studio Mic\"' >&2",
+			"echo '\"USB Conference Mic\"' >&2",
+			"exit 1",
+		].join("\n"), { mode: 0o755 });
+		const configPath = join(root, "micme.json");
+		await writeFile(configPath, JSON.stringify({ MICME_AUDIO_DEVICE: "Studio Mic", MICME_DSHOW_AUDIO_DEVICE: "Studio Mic" }));
+		const harness = createHarness(root);
+
+		await showConfiguration(harness.ctx);
+		await waitFor(() => !harness.component.render(100).join("\n").includes("Loading "), "configuration discovery did not finish");
+		harness.component.handleInput("/");
+		typeText(harness.component, "Microphone device");
+		harness.component.handleInput("\r");
+		await waitFor(() => !harness.component.render(100).join("\n").includes("Saving "), "microphone setting did not finish saving");
+		harness.component.handleInput("q");
+
+		reloadMicmeConfig();
+		const { args } = buildRecorderCommand(join(root, "raw.wav"));
+		assert.equal(args[args.indexOf("-i") + 1], "audio=USB Conference Mic");
+		assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
+			MICME_AUDIO_DEVICE: "Studio Mic",
+			MICME_DSHOW_AUDIO_DEVICE: "USB Conference Mic",
+		});
+		const microphone = buildConfigurationItems([], [], theme).find((item) => item.label === "Microphone device");
+		assert.equal(microphone?.rawValue, "USB Conference Mic");
+	}));
+});
+
+test("the Windows microphone picker preserves automatic discovery when no microphones are listed", async (t) => {
+	if (process.platform === "win32") {
+		t.skip("POSIX shell shims are not portable to Windows");
+		return;
+	}
+
+	mockPlatform(t, "win32");
+	await withTempAgent(t, (root) => withEnv({
+		PATHEXT: ".EXE",
+		MICME_AUDIO_DEVICE: undefined,
+		MICME_DSHOW_AUDIO_DEVICE: undefined,
+		MICME_RECORD_COMMAND: undefined,
+	}, async () => {
+		const bin = join(root, "bin");
+		const ffmpeg = join(bin, "ffmpeg.EXE");
+		await mkdir(bin);
+		await writeFile(ffmpeg, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+		const harness = createHarness(root);
+
+		await showConfiguration(harness.ctx);
+		await waitFor(() => !harness.component.render(100).join("\n").includes("Loading "), "configuration discovery did not finish");
+		harness.component.handleInput("/");
+		typeText(harness.component, "Microphone device");
+		harness.component.handleInput("\r");
+		await waitFor(() => !harness.component.render(100).join("\n").includes("Saving "), "microphone setting did not finish saving");
+		harness.component.handleInput("q");
+
+		await writeFile(ffmpeg, "#!/bin/sh\necho '\"Reconnected Mic\" (audio)' >&2\nexit 1\n");
+		reloadMicmeConfig();
+		const { args } = buildRecorderCommand(join(root, "raw.wav"));
+		assert.equal(args[args.indexOf("-i") + 1], "audio=Reconnected Mic");
+	}));
+});
+
 test("closing configuration during model acquisition cancels without stale saves or UI work", async (t) => {
 	await withTempAgent(t, async (root) => {
 		await writeFile(join(root, "micme.json"), JSON.stringify({ MICME_AUTO_DOWNLOAD_MODEL: "1" }, null, 2));
@@ -252,6 +339,7 @@ test("configuration screen reports invalid config safely", async (t) => {
 });
 
 test("configuration items include discovered candidates and derived visibility", async (t) => {
+	mockPlatform(t, "darwin");
 	await withTempAgent(t, async (root) => {
 		await writeFile(
 			join(root, "micme.json"),
@@ -288,6 +376,7 @@ test("configuration items include discovered candidates and derived visibility",
 		assert.equal(backend?.rawValue, "python");
 		assert.deepEqual(audio?.values, ["2"]);
 		assert.equal(audio?.valueLabels?.["2"], "2: Studio Mic");
+		assert.equal(audio?.description, "macOS avfoundation audio device id");
 		assert.equal(filter?.currentValue, "<empty>");
 		assert.equal(cppModel?.visibleWhen?.(pythonPlan), false);
 		assert.equal(cppModel?.visibleWhen?.(cppPlan), true);

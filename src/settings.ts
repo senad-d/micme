@@ -846,7 +846,9 @@ export function buildConfigurationItems(
 	const audioDevices = maybeTheme ? (audioDevicesOrTheme as AudioDeviceCandidate[]) : (pythonModelCandidatesOrAudioDevices as AudioDeviceCandidate[]);
 	const theme = maybeTheme ?? (audioDevicesOrTheme as MicmeTheme);
 	const currentModelPath = getCurrentWhisperCppModelValue();
-	const currentDevice = env("MICME_AUDIO_DEVICE") ?? "0";
+	const usesDirectShow = process.platform === "win32";
+	const audioDeviceKey = usesDirectShow ? "MICME_DSHOW_AUDIO_DEVICE" : "MICME_AUDIO_DEVICE";
+	const currentDevice = env(audioDeviceKey) ?? (usesDirectShow ? "" : "0");
 	const audioValues = audioDevices.length > 0 ? audioDevices.map((device) => device.value) : [currentDevice];
 	if (!audioValues.includes(currentDevice)) audioValues.unshift(currentDevice);
 	const audioLabels = Object.fromEntries(audioDevices.map((device) => [device.value, device.label]));
@@ -1029,14 +1031,17 @@ export function buildConfigurationItems(
 			displayKind: "number",
 		},
 		{
-			id: "MICME_AUDIO_DEVICE",
+			id: audioDeviceKey,
 			categoryId: "audio",
 			label: "Microphone device",
-			description: audioDevices.length > 0 ? "macOS avfoundation audio device id" : "Audio device id/source used by ffmpeg recorder.",
+			description: usesDirectShow
+				? "Windows DirectShow audio input name."
+				: audioDevices.length > 0 ? "macOS avfoundation audio device id" : "Audio device id/source used by ffmpeg recorder.",
 			rawValue: currentDevice,
 			currentValue: currentDevice,
 			values: audioValues,
 			displayKind: "text",
+			emptyLabel: usesDirectShow ? "Automatic" : undefined,
 			valueLabels: audioLabels,
 		},
 		{
