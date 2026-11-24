@@ -5,11 +5,14 @@ process.env.MICME_STREAM_DIAGNOSTICS = "0";
 process.env.MICME_STREAM_FLUSH_MS = "100";
 process.env.MICME_STREAM_WORDS_PER_CHUNK = "10";
 
+const { MAX_CAPTURED_OUTPUT_CHARS } = await import("../src/constants.ts");
 const {
 	buildWhisperStreamCommand,
 	drainStreamingOutput,
 	flushPendingStreamingWords,
 	getStreamingTranscript,
+	handleStreamingOutput,
+	readStreamingOutputFrames,
 	sanitizeStreamingText,
 	shouldResetStreamingPending,
 	clearStreamingFlush,
@@ -93,6 +96,43 @@ function assertAppendOnly(updates) {
 function assertTranscript(harness, expected) {
 	assert.equal(getStreamingTranscript(harness.state), expected);
 }
+
+test("stream frame parsing preserves both complete frames when the combined buffer exceeds the cap", () => {
+	const { state } = createHarness();
+	const first = "a".repeat(60_000);
+	const second = "b".repeat(50_000);
+
+	assert.deepEqual(readStreamingOutputFrames(state, first, false), []);
+	const frames = readStreamingOutputFrames(state, `\n${second}\n`, false);
+	assert.deepEqual(frames.map((frame) => frame.length), [first.length, second.length]);
+	assert.deepEqual(frames, [first, second]);
+});
+
+test("stream frame parsing retains only the capped suffix of an unfinished frame", () => {
+	const { state } = createHarness();
+	const suffix = "b".repeat(MAX_CAPTURED_OUTPUT_CHARS);
+
+	assert.deepEqual(readStreamingOutputFrames(state, `discard${suffix}`, false), []);
+	const frames = readStreamingOutputFrames(state, "\n", false);
+	assert.deepEqual(frames.map((frame) => frame.length), [suffix.length]);
+	assert.deepEqual(frames, [suffix]);
+});
+
+test("streaming editor keeps both complete frames and flushes the unfinished tail on stop", () => {
+	const harness = createHarness();
+	const first = "a".repeat(60_000);
+	const second = "b".repeat(50_000);
+	const tail = "last";
+
+	handleStreamingOutput(harness.ctx, harness.active, first);
+	handleStreamingOutput(harness.ctx, harness.active, `\r\n${second}\r\n${tail}`);
+	drainStreamingOutput(harness.ctx, harness.active, true);
+	finish(harness);
+
+	const text = harness.ctx.ui.getEditorText();
+	assert.deepEqual(text.trimEnd().split(" ").map((word) => word.length), [first.length, second.length, tail.length]);
+	assert.ok(text === `${first} ${second} ${tail} `, "editor text should contain both intact frames and the flushed tail");
+});
 
 test("cumulative stream frames append without visible rewrite", () => {
 	const harness = runFrames(["Cat", "Cat is", "Cat is white"]);
