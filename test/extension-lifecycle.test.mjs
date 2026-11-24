@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import fsPromises, { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import fsPromises, { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -237,13 +237,17 @@ const poll = setInterval(() => {
 	);
 }
 
-async function writeFfmpegProcess(path) {
+async function writeFfmpegProcess(path, { verifyInput = false } = {}) {
 	await writeExecutable(
 		path,
 		`#!/usr/bin/env node
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const output = args.at(-1);
+if (${verifyInput} && (args.includes("volumedetect") || output.endsWith("clip.wav"))) {
+  const input = args[args.indexOf("-i") + 1];
+  if (readFileSync(input).length !== 1024) throw new Error("unexpected audio input: " + input);
+}
 if (args.includes("volumedetect")) {
   const validationOutput = process.env.MICME_TEST_VALIDATION_OUTPUT;
   process.stderr.write(validationOutput === undefined ? "[Parsed_volumedetect_0 @ 0x1234] mean_volume: -20 dB\\n[Parsed_volumedetect_0 @ 0x1234] max_volume: -5 dB\\n" : validationOutput);
@@ -848,6 +852,75 @@ test("shutdown directly from recording stops the recorder and widget timer", asy
 		},
 	);
 });
+
+for (const [action, name] of [
+	["stop", "clip finalization uses the original recording after root substitution"],
+	["shutdown", "session shutdown removes the original recording after root substitution"],
+]) {
+	test(name, { skip: process.platform === "win32" && "requires POSIX directory rename and executable fixtures" }, async (t) => {
+		const base = await mkdtemp(join(tmpdir(), "micme-extension-root-substitution-"));
+		t.after(() => rm(base, { recursive: true, force: true }));
+		const project = join(base, "project");
+		const root = join(project, "micme-rec");
+		const moved = join(project, "original-root");
+		const outside = join(base, "outside");
+		const outsideLeaf = join(outside, "rec-001");
+		const sentinel = join(outsideLeaf, "raw.wav");
+		const outsideTranscript = join(outsideLeaf, "transcript.txt");
+		const processLog = join(base, "processes.log");
+		await mkdir(project);
+		await mkdir(outsideLeaf, { recursive: true });
+		await writeFile(sentinel, "outside audio");
+		await writeFile(outsideTranscript, "outside transcript");
+		await writeFfmpegProcess(join(base, "ffmpeg"), { verifyInput: true });
+
+		await withEnv(
+			{
+				PI_CODING_AGENT_DIR: join(base, "agent"),
+				PATH: `${base}${delimiter}${process.env.PATH ?? ""}`,
+				MICME_TRANSCRIPTION_MODE: "clip",
+				MICME_TEST_PROCESS_LOG: processLog,
+				MICME_RECORD_COMMAND: undefined,
+				MICME_TRANSCRIBE_BACKEND: "custom",
+				MICME_TRANSCRIBE_COMMAND: "test -s {audio} && printf 'owned transcript' > {transcript}",
+				MICME_PROCESS_AUDIO: "1",
+				MICME_VALIDATE_AUDIO: "1",
+				MICME_SKIP_AUDIO_VALIDATION: "0",
+				MICME_AUTO_SUBMIT: "0",
+				MICME_KEEP_AUDIO: "1",
+			},
+			async () => {
+				const harness = createExtensionHarness(project);
+				const command = harness.commands.get("micme");
+				assert.ok(command);
+				try {
+					await command.handler("", harness.ctx);
+					assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+					await waitFor(async () => (await readProcessRows(processLog)).length > 0, "recorder did not write audio");
+					await rename(root, moved);
+					await symlink(outside, root, "dir");
+
+					if (action === "stop") await command.handler("", harness.ctx);
+					else await emit(harness, "session_shutdown", { reason: "quit" });
+
+					assert.deepEqual((await readdir(outsideLeaf)).sort(), ["raw.wav", "transcript.txt"], "the outside recording must not be removed or extended");
+					assert.equal(await readFile(sentinel, "utf8"), "outside audio");
+					assert.equal(await readFile(outsideTranscript, "utf8"), "outside transcript");
+					if (action === "stop") {
+						assert.ok(harness.uiCalls.some((entry) => entry.method === "pasteToEditor" && entry.value === "owned transcript "), JSON.stringify(harness.uiCalls));
+						assert.equal((await stat(join(moved, "rec-001", "clip.wav"))).size, 1024);
+						assert.equal(await readFile(join(moved, "rec-001", "transcript.txt"), "utf8"), "owned transcript");
+					} else {
+						assert.deepEqual(await readdir(moved), [], "shutdown must clean the leaf from the original root");
+					}
+					await assertProcessesStopped(await readProcessRows(processLog));
+				} finally {
+					await emit(harness, "session_shutdown", { reason: "quit" });
+				}
+			},
+		);
+	});
+}
 
 test("missing ffmpeg silence metrics surface a sanitized error before transcription", async (t) => {
 	if (process.platform === "win32") {

@@ -9,10 +9,11 @@ export class RecordingWidget {
 	start(ctx: ExtensionContext, active: Recording) {
 		this.clear(ctx);
 		let displayLevel = 0;
+		const openFile = active.directory?.openFile.bind(active.directory);
 		const update = () => {
 			const elapsedSeconds = Math.max(0, Math.floor((Date.now() - active.startedAt) / 1000));
 			const liveLevel = active.audioLevel();
-			const measuredLevel = liveLevel > 0 ? liveLevel : readPcm16WaveLevel(active.audioPath);
+			const measuredLevel = liveLevel > 0 ? liveLevel : readPcm16WaveLevel(active.audioPath, openFile);
 			displayLevel = displayLevel * 0.55 + measuredLevel * 0.45;
 			const line = formatRecordingWidgetLine(ctx, elapsedSeconds, displayLevel);
 			ctx.ui.setWidget(RECORDING_WIDGET_KEY, [line]);
