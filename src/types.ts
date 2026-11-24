@@ -68,7 +68,7 @@ export type AudioValidationOutcome =
 
 export type StreamingState = {
 	baseText: string;
-	previewText: string;
+	renderedWordCount: number;
 	outputBuffer: string;
 	lastText: string;
 	emittedWords: string[];

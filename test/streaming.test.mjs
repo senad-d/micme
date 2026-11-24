@@ -18,6 +18,7 @@ const {
 	streamingWordOverlap,
 	clearStreamingFlush,
 } = await import("../src/streaming.ts");
+const { pasteOrSubmitTranscript } = await import("../src/transcript-delivery.ts");
 
 function withEnv(values, fn) {
 	const previous = new Map();
@@ -50,6 +51,9 @@ function createHarness(baseText = "") {
 			getEditorText() {
 				return editorText;
 			},
+			pasteToEditor(text) {
+				editorText += text;
+			},
 			notify(message, level) {
 				notifications.push({ message, level });
 			},
@@ -57,7 +61,7 @@ function createHarness(baseText = "") {
 	};
 	const state = {
 		baseText,
-		previewText: baseText,
+		renderedWordCount: 0,
 		outputBuffer: "",
 		lastText: "",
 		emittedWords: [],
@@ -161,6 +165,23 @@ test("streaming preview separates existing editor text from dictated words", () 
 	assertTranscript(harness, "write tests");
 	assert.deepEqual(harness.updates, ["Please write", "Please write tests "]);
 	assertAppendOnly(harness.updates);
+});
+
+test("the next committed stream frame preserves replayed transcript text", async () => {
+	const harness = createHarness("Draft:");
+	feedFrame(harness, "live");
+	feedFrame(harness, "live");
+	assert.equal(harness.ctx.ui.getEditorText(), "Draft: live");
+
+	harness.ctx.ui.setEditorText("Draft: live ");
+	await withEnv({ MICME_AUTO_SUBMIT: "0" }, () => pasteOrSubmitTranscript(harness.ctx, {}, "previous transcript"));
+	feedFrame(harness, "live words");
+	feedFrame(harness, "live words");
+	assert.equal(harness.ctx.ui.getEditorText(), "Draft: live previous transcript words");
+
+	finish(harness);
+	assert.equal(harness.ctx.ui.getEditorText(), "Draft: live previous transcript words ");
+	assertTranscript(harness, "live words");
 });
 
 test("streaming preview does not add a separator before leading punctuation", () => {

@@ -447,12 +447,19 @@ export function getStreamingTranscript(state: StreamingState) {
 }
 
 export function renderStreamingPreview(ctx: ExtensionContext, state: StreamingState, trailingSpace: boolean) {
-	const transcript = getStreamingTranscript(state);
-	const nextText = appendTranscriptToBaseText(state.baseText, transcript, trailingSpace);
-	if (nextText === state.previewText) return;
+	const { emittedWords, renderedWordCount } = state;
+	if (renderedWordCount === emittedWords.length && (!trailingSpace || renderedWordCount === 0)) return;
+
+	const delta = emittedWords.slice(renderedWordCount).join(" ");
+	const editorText = ctx.ui.getEditorText();
+	// Keep spacing between stream words even when punctuation arrives in a later delta.
+	const separator = needsStreamingSeparator(editorText, delta, renderedWordCount > 0) ? " " : "";
+	const appendedText = `${editorText}${separator}${delta}`;
+	const nextText = trailingSpace && appendedText && !isWhitespaceCharacter(appendedText.at(-1)) ? `${appendedText} ` : appendedText;
+	if (nextText === editorText) return;
 	ctx.ui.setEditorText(nextText);
-	state.previewText = nextText;
-	if (transcript && !state.firstPreviewAt) {
+	state.renderedWordCount = emittedWords.length;
+	if (delta && !state.firstPreviewAt) {
 		state.firstPreviewAt = Date.now();
 		if (envFlag("MICME_STREAM_DIAGNOSTICS")) {
 			ctx.ui.notify(`Micme stream first preview: ${state.firstPreviewAt - state.startedAt} ms`, "info");
@@ -476,7 +483,6 @@ export async function pasteOrSubmitFinalStreamingTranscript(ctx: ExtensionContex
 
 	const nextText = appendTranscriptToBaseText(state.baseText, transcript, true);
 	ctx.ui.setEditorText(nextText);
-	state.previewText = nextText;
 }
 
 export function clearStreamingFlush(state: StreamingState) {
@@ -492,9 +498,9 @@ function appendTranscriptToBaseText(baseText: string, transcript: string, traili
 	return `${baseText}${separator}${suffix}`;
 }
 
-function needsStreamingSeparator(baseText: string, transcript: string) {
+function needsStreamingSeparator(baseText: string, transcript: string, betweenStreamWords = false) {
 	if (!baseText || !transcript) return false;
-	return !isWhitespaceCharacter(baseText.at(-1)) && !isStreamingLeadingSeparator(transcript.at(0));
+	return !isWhitespaceCharacter(baseText.at(-1)) && (betweenStreamWords || !isStreamingLeadingSeparator(transcript.at(0)));
 }
 
 function isStreamingLeadingSeparator(character: string | undefined) {
