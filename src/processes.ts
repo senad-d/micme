@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { delimiter, join, win32 } from "node:path";
@@ -6,6 +6,9 @@ import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } fr
 import { pcm16BufferLevel } from "./audio-level.ts";
 import { sanitizeTerminalOutput, stripTerminalControlSequences } from "./terminal-text.ts";
 import type { CommandSpec, ExitResult, Recording, RunResult } from "./types.ts";
+
+const TERMINATE_GRACE_MS = 1_000;
+const FAILED_KILL_CLOSE_GRACE_MS = 1_000;
 
 export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string): Recording {
 	const child = spawn(command.command, command.args, {
@@ -36,13 +39,9 @@ export function spawnRecording(command: CommandSpec, audioPath: string, tempDir:
 	});
 
 	const exitPromise = new Promise<ExitResult>((resolve) => {
-		child.once("error", (error) => {
+		observeProcessExit(child, (exit) => {
 			settled = true;
-			resolve({ code: null, signal: null, error });
-		});
-		child.once("close", (code, signal) => {
-			settled = true;
-			resolve({ code, signal });
+			resolve(exit);
 		});
 	});
 
@@ -80,23 +79,56 @@ async function stopProcessOnce(active: Recording) {
 	}
 	if (!exit) {
 		sendStopSignal(active, "SIGTERM");
-		exit = await raceWithTimeout(active.exitPromise, 1_000);
+		exit = await raceWithTimeout(active.exitPromise, TERMINATE_GRACE_MS);
 	}
-	if (!exit) {
-		sendStopSignal(active, "SIGKILL");
-		exit = await active.exitPromise;
-	}
-	return exit;
+	if (exit) return exit;
+
+	const failure = sendStopSignal(active, "SIGKILL");
+	if (!failure) return active.exitPromise;
+	// A failed kill can race with a real exit. Bound the stop attempt, not the exit promise.
+	exit = await raceWithTimeout(active.exitPromise, FAILED_KILL_CLOSE_GRACE_MS);
+	if (exit) return exit;
+	throw failure;
 }
 
 function sendStopSignal(active: Recording, signal: NodeJS.Signals) {
+	const failure = sendProcessSignal(active.process, signal);
+	if (failure) return failure;
+	active.stopSignals ??= new Set();
+	active.stopSignals.add(signal);
+}
+
+function observeProcessExit(child: ChildProcess, settle: (exit: ExitResult) => void) {
+	let launchFailed = false;
+	const onError = (error: Error) => {
+		// Node assigns the PID before emitting 'spawn', so even an immediate signal can fail after launch.
+		if (child.pid !== undefined || launchFailed) return;
+		launchFailed = true;
+		settle({ code: null, signal: null, error });
+	};
+	child.on("error", onError);
+	child.once("close", (code, signal) => {
+		child.off("error", onError);
+		if (!launchFailed) settle({ code, signal });
+	});
+}
+
+function sendProcessSignal(child: ChildProcess, signal: NodeJS.Signals) {
+	let cause: unknown;
+	const captureError = (error: Error) => {
+		cause = error;
+	};
+	// ChildProcess.kill() can emit an error synchronously or throw instead.
+	child.on("error", captureError);
 	try {
-		if (!active.process.kill(signal)) return;
-		active.stopSignals ??= new Set();
-		active.stopSignals.add(signal);
-	} catch {
-		// The exit promise remains authoritative when the process settles during escalation.
+		if (child.kill(signal) && cause === undefined) return;
+	} catch (error) {
+		cause = error;
+	} finally {
+		child.off("error", captureError);
 	}
+	const reason = cause instanceof Error ? formatProcessOutput(appendCapped("", cause.message)) : "";
+	return new Error(`Micme could not send ${signal}${reason ? ` (${reason})` : ""}; the child process may still be running.`, { cause });
 }
 
 export function sendStopInput(active: Recording) {
@@ -155,23 +187,39 @@ export function runProcess(command: string, args: string[], timeoutMs: number, o
 		let stderr = "";
 		let timedOut = false;
 		let cancelled = false;
-		let settled = false;
+		let finished = false;
+		let killAttempted = false;
 		let abortTimer: ReturnType<typeof setTimeout> | undefined;
+		let failedKillTimer: ReturnType<typeof setTimeout> | undefined;
 
 		const timer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGKILL");
+			forceStop();
 		}, timeoutMs);
 		const abort = () => {
-			if (settled) return;
+			if (finished || cancelled) return;
 			cancelled = true;
-			child.kill("SIGTERM");
-			abortTimer = setTimeout(() => child.kill("SIGKILL"), 1_000);
+			if (killAttempted) return;
+			abortTimer = setTimeout(forceStop, TERMINATE_GRACE_MS);
+			sendProcessSignal(child, "SIGTERM");
 		};
 		const finish = () => {
+			finished = true;
 			clearTimeout(timer);
-			if (abortTimer) clearTimeout(abortTimer);
+			clearTimeout(abortTimer);
+			clearTimeout(failedKillTimer);
 			options.signal?.removeEventListener("abort", abort);
+		};
+		const forceStop = () => {
+			if (finished || killAttempted) return;
+			killAttempted = true;
+			clearTimeout(abortTimer);
+			const failure = sendProcessSignal(child, "SIGKILL");
+			if (!failure || finished) return;
+			failedKillTimer = setTimeout(() => {
+				finish();
+				reject(failure);
+			}, FAILED_KILL_CLOSE_GRACE_MS);
 		};
 		options.signal?.addEventListener("abort", abort, { once: true });
 
@@ -183,17 +231,11 @@ export function runProcess(command: string, args: string[], timeoutMs: number, o
 		child.stderr?.on("data", (chunk: string) => {
 			stderr = appendCapped(stderr, chunk);
 		});
-		child.once("error", (error) => {
-			if (settled) return;
-			settled = true;
+		observeProcessExit(child, ({ code, signal, error }) => {
+			if (finished) return;
 			finish();
-			reject(error);
-		});
-		child.once("close", (code, signal) => {
-			if (settled) return;
-			settled = true;
-			finish();
-			resolve({ code, signal, stdout, stderr, timedOut, ...(cancelled ? { cancelled: true } : {}) });
+			if (error) reject(error);
+			else resolve({ code, signal, stdout, stderr, timedOut, ...(cancelled ? { cancelled: true } : {}) });
 		});
 		if (options.signal?.aborted) abort();
 	});

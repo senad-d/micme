@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { setImmediate } from "node:timers/promises";
 
 const {
 	appendCapped,
@@ -26,6 +28,7 @@ const {
 	stopRecorder,
 } = await import("../src/processes.ts");
 const { buildRecorderCommand } = await import("../src/audio.ts");
+const { RECORDER_STOP_GRACE_MS } = await import("../src/constants.ts");
 const { transcribeWithCustomCommand } = await import("../src/transcription.ts");
 
 function withEnv(values, fn) {
@@ -175,6 +178,86 @@ test("configured Windows hooks pass the system interpreter and original shell ar
 	}
 });
 
+function mockSignalChild(t, kill) {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const child = Object.assign(new EventEmitter(), { pid: 123, kill });
+	const spawnMock = t.mock.method(childProcess, "spawn", () => child);
+	syncBuiltinESMExports();
+	t.after(() => {
+		spawnMock.mock.restore();
+		syncBuiltinESMExports();
+	});
+	return child;
+}
+
+function signalPermissionError() {
+	return Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" });
+}
+
+test("process abort reports failed escalation and handles child errors until close", async (t) => {
+	const signals = [];
+	const child = mockSignalChild(t, function (signal) {
+		signals.push(signal);
+		this.emit("error", signalPermissionError());
+		return false;
+	});
+	const controller = new AbortController();
+	const run = runProcess("mock-process", [], 10_000, { signal: controller.signal }).catch((error) => error);
+	controller.abort();
+	t.mock.timers.tick(1_000);
+	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+
+	t.mock.timers.tick(1_000);
+	const failure = await Promise.race([run, setImmediate("pending")]);
+	assert.match(failure?.message ?? "", /SIGKILL.*EPERM.*may still be running/);
+	child.emit("error", signalPermissionError());
+	t.mock.timers.tick(10_000);
+	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+	child.emit("close", 0, null);
+	assert.equal(child.listenerCount("error"), 0);
+});
+
+test("recorder stop failure does not settle a live child", async (t) => {
+	const signals = [];
+	const child = mockSignalChild(t, function (signal) {
+		signals.push(signal);
+		if (signal === "SIGINT") return true;
+		this.emit("error", signalPermissionError());
+		return false;
+	});
+	const recording = spawnRecording({ command: "mock-recorder", args: [], display: "mock recorder" }, "raw.wav", ".");
+	const stop = stopProcess(recording).catch((error) => error);
+	t.mock.timers.tick(RECORDER_STOP_GRACE_MS);
+	await Promise.resolve();
+	assert.equal(recording.isSettled(), false);
+	t.mock.timers.tick(1_000);
+	await Promise.resolve();
+	assert.deepEqual(signals, ["SIGINT", "SIGTERM", "SIGKILL"]);
+
+	t.mock.timers.tick(1_000);
+	const failure = await Promise.race([stop, setImmediate("pending")]);
+	assert.match(failure?.message ?? "", /SIGKILL.*EPERM.*may still be running/);
+	assert.equal(recording.isSettled(), false);
+	assert.equal(await Promise.race([recording.exitPromise, "pending"]), "pending");
+	child.emit("error", signalPermissionError());
+	child.emit("close", 0, null);
+	assert.deepEqual(await recording.exitPromise, { code: 0, signal: null });
+	assert.equal(recording.isSettled(), true);
+	assert.equal(child.listenerCount("error"), 0);
+});
+
+test("a real close wins over a failed SIGKILL on timeout", async (t) => {
+	const child = mockSignalChild(t, () => {
+		throw signalPermissionError();
+	});
+	const run = runProcess("mock-process", [], 25);
+	t.mock.timers.tick(25);
+	child.emit("close", 0, null);
+	const result = await run;
+	assert.equal(result.code, 0);
+	assert.equal(result.timedOut, true);
+});
+
 test("process runners capture output, timeouts, and shell details", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-process-run-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -184,6 +267,7 @@ test("process runners capture output, timeouts, and shell details", async (t) =>
 	assert.equal(result.stdout, "out");
 	assert.equal(result.stderr, "err");
 	assert.equal(formatRunExit(result), "code 0");
+	await assert.rejects(runProcess(join(root, "missing-command"), [], 2_000), { code: "ENOENT" });
 
 	const timedOut = await runProcess(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], 25);
 	assert.equal(timedOut.timedOut, true);
