@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
+import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 
 const { resolveTranscriptionPlan } = await import("../src/backends.ts");
 const { expandEnvReferences, getPrintableShortcuts, getShortcutSettingValue, getTerminalShortcut, getTranscribeBackend, getTranslateToEnglishLanguage } = await import("../src/config.ts");
 const { getPythonWhisperModelName, getPythonWhisperModelQueryArgs, resolveWhisperCppModel } = await import("../src/models.ts");
+const { runProcess } = await import("../src/processes.ts");
 
 const fakeWhisperCppModel = {
 	path: "/models/ggml-small.en.bin",
@@ -41,11 +43,59 @@ function withEnv(values, fn) {
 	}
 }
 
+function withWindowsDiscovery(fn) {
+	// Emulate Windows only during lookup; the child process runs on the real host.
+	if (process.platform === "win32") return fn();
+	const platform = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+	try {
+		return fn();
+	} finally {
+		Object.defineProperty(process, "platform", platform);
+	}
+}
+
+function resolveWithWindowsPath(path) {
+	return withEnv({ PATH: path, PATHEXT: ".CMD;.EXE", MICME_WHISPER_CPP_BIN: "" }, () =>
+		withWindowsDiscovery(() => resolveWith({ requestedBackend: "auto", customCommand: null })),
+	);
+}
+
 test("auto resolves custom, then whisper.cpp, then Python, then none", () => {
 	assert.equal(resolveWith({ requestedBackend: "auto", customCommand: "echo ok", whisperCppBinary: "/bin/whisper-cli", pythonWhisperBinary: "/bin/whisper" }).effectiveBackend, "custom");
 	assert.equal(resolveWith({ requestedBackend: "auto", customCommand: null, whisperCppBinary: "/bin/whisper-cli", pythonWhisperBinary: "/bin/whisper" }).effectiveBackend, "whisper.cpp");
 	assert.equal(resolveWith({ requestedBackend: "auto", customCommand: null, whisperCppBinary: null, pythonWhisperBinary: "/bin/whisper" }).effectiveBackend, "python");
 	assert.equal(resolveWith({ requestedBackend: "auto", customCommand: null, whisperCppBinary: null, pythonWhisperBinary: null }).effectiveBackend, "none");
+});
+
+test("Windows auto selects Python Whisper when whisper.cpp has only a batch shim", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-windows-backend-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await writeFile(join(root, "whisper-cli.CMD"), "@exit /b 0\r\n");
+	const python = join(root, "whisper.EXE");
+	await writeFile(python, "");
+
+	const plan = resolveWithWindowsPath(root);
+	assert.equal(plan.effectiveBackend, "python");
+	assert.equal(plan.binary, python);
+});
+
+test("whisper.cpp starts the native executable behind a Windows batch shim on PATH", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-windows-launch-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const binDir = join(root, "native backend");
+	await mkdir(binDir);
+	await writeFile(join(root, "whisper-cli.CMD"), "@exit /b 73\r\n");
+	const native = join(binDir, "whisper-cli.EXE");
+	await copyFile(process.execPath, native);
+	if (process.platform !== "win32") await chmod(native, 0o755);
+
+	const plan = resolveWithWindowsPath(`${root}${delimiter}${binDir}`);
+	assert.equal(plan.effectiveBackend, "whisper.cpp");
+	assert.equal(plan.binary, native);
+	const result = await runProcess(plan.binary, ["--version"], 10_000);
+	assert.equal(result.code, 0, result.stderr);
+	assert.equal(result.stdout.trim(), process.version);
 });
 
 test("explicit Python does not silently fall back to whisper.cpp", () => {

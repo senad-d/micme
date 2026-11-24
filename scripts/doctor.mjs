@@ -95,7 +95,8 @@ async function main() {
   info("node", process.version);
   printConfigDiagnostics();
 
-  const pi = findExecutable(["pi"]);
+  // Doctor reports Pi's shell command; it never spawns it.
+  const pi = findExecutable(["pi"], { allowWindowsBatch: true });
   if (pi) ok("pi CLI", pi);
   else warn("pi CLI not found", "install @earendil-works/pi-coding-agent or use this as a package from pi");
 

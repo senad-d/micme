@@ -266,12 +266,13 @@ export function replacePlaceholders(template: string, values: Record<string, str
 	});
 }
 
-export function findExecutable(names: string[]) {
+export function findExecutable(names: string[], { allowWindowsBatch = false }: { allowWindowsBatch?: boolean } = {}) {
 	const dirs = getPathDirectories();
 	const extensions = getExecutableExtensions();
+	const isCandidate = allowWindowsBatch ? isFileWithExecuteAccess : isExecutableFile;
 
 	for (const name of names) {
-		const executable = findExecutableByName(name, dirs, extensions);
+		const executable = findExecutableByName(name, dirs, extensions, isCandidate);
 		if (executable) return executable;
 	}
 	return undefined;
@@ -285,18 +286,18 @@ function getExecutableExtensions() {
 	return process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";") : [""];
 }
 
-function findExecutableByName(name: string, dirs: string[], extensions: string[]) {
+function findExecutableByName(name: string, dirs: string[], extensions: string[], isCandidate: typeof isExecutableFile) {
 	for (const dir of dirs) {
-		const executable = findExecutableInDirectory(name, dir, extensions);
+		const executable = findExecutableInDirectory(name, dir, extensions, isCandidate);
 		if (executable) return executable;
 	}
 	return undefined;
 }
 
-function findExecutableInDirectory(name: string, dir: string, extensions: string[]) {
+function findExecutableInDirectory(name: string, dir: string, extensions: string[], isCandidate: typeof isExecutableFile) {
 	for (const extension of extensions) {
 		const candidate = join(dir, getExecutableFileName(name, extension));
-		if (isExecutableFile(candidate)) return candidate;
+		if (isCandidate(candidate)) return candidate;
 	}
 	return undefined;
 }
@@ -306,6 +307,12 @@ function getExecutableFileName(name: string, extension: string) {
 }
 
 export function isExecutableFile(path: string) {
+	// Batch files need a command interpreter, even when listed in PATHEXT.
+	if (process.platform === "win32" && /\.(?:bat|cmd)[. ]*$/i.test(path)) return false;
+	return isFileWithExecuteAccess(path);
+}
+
+function isFileWithExecuteAccess(path: string) {
 	try {
 		const stats = statSync(path);
 		if (!stats.isFile()) return false;
