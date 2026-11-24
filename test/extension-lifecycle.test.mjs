@@ -6,6 +6,7 @@ import test from "node:test";
 
 const { registerMicmeExtension } = await import("../src/extension.ts");
 const { reloadMicmeConfig } = await import("../src/config.ts");
+const { shellQuote } = await import("../src/processes.ts");
 
 const theme = {
 	fg(_color, text) {
@@ -667,6 +668,58 @@ test("missing ffmpeg silence metrics surface a sanitized error before transcript
 			assert.equal((error?.message ?? "").includes("\u001b"), false);
 			assert.equal(harness.uiCalls.some((entry) => entry.method === "pasteToEditor"), false);
 			assert.equal(harness.sentMessages.length, 0);
+		},
+	);
+});
+
+test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const recorder = join(root, "recorder.mjs");
+	const ready = join(root, "ready");
+	await writeFile(
+		recorder,
+		`import { writeFileSync } from "node:fs";
+const [audio, ready] = process.argv.slice(2);
+process.on("SIGINT", () => {
+  // Mono 16-bit PCM WAV header followed by 1024 bytes of samples.
+  const header = Buffer.from("524946462404000057415645666d74201000000001000100803e0000007d0000020010006461746100040000", "hex");
+  writeFileSync(audio, Buffer.concat([header, Buffer.alloc(1024, 32)]));
+  process.exit(255);
+});
+writeFileSync(ready, "ready");
+setInterval(() => {}, 1_000);
+`,
+	);
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: `exec ${shellQuote(process.execPath)} ${shellQuote(recorder)} {audio} ${shellQuote(ready)}`,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			MICME_TRANSCRIBE_COMMAND: "test -s {audio} && printf 'custom stop transcript'",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "0",
+			MICME_KEEP_AUDIO: "1",
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+				await waitFor(async () => (await readProcessRows(ready)).length > 0, "custom recorder did not install its SIGINT handler");
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "error"), []);
+				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "pasteToEditor"), [{ method: "pasteToEditor", value: "custom stop transcript " }]);
+				assert.equal(harness.sentMessages.length, 0);
+			} finally {
+				await emit(harness, "session_shutdown", { reason: "quit" });
+			}
 		},
 	);
 });
