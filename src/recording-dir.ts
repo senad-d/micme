@@ -47,10 +47,11 @@ async function getNextRecordingIndex(recordingsRoot: string) {
 	const entries = await readdir(recordingsRoot, { withFileTypes: true });
 	let maxIndex = 0;
 	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
 		const match = /^rec-(\d+)$/.exec(entry.name);
 		if (!match) continue;
 		const index = Number(match[1]);
-		if (Number.isInteger(index) && index > maxIndex) maxIndex = index;
+		if (Number.isInteger(index) && index <= MAX_SEQUENTIAL_RECORDING_DIRS && index > maxIndex) maxIndex = index;
 	}
 	return Math.max(1, maxIndex + 1);
 }

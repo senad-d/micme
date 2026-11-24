@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, stat, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,38 @@ test("kept audio uses the next sequential project recording directory", async (t
 	await mkdir(join(cwd, "micme-rec", "rec-003"));
 	const fourth = await createProjectRecordingDirectory(cwd);
 	assert.equal(fourth, join(cwd, "micme-rec", "rec-004"));
+});
+
+test("kept audio starts at rec-001 with a rec-1000000 file in the recordings root", async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "micme-rec-test-"));
+	t.after(() => rm(cwd, { recursive: true, force: true }));
+	const root = join(cwd, "micme-rec");
+	await mkdir(root);
+	await writeFile(join(root, "rec-1000000"), "");
+
+	assert.equal(await createProjectRecordingDirectory(cwd), join(root, "rec-001"));
+});
+
+test("kept audio ignores directories above the sequence limit", async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "micme-rec-test-"));
+	t.after(() => rm(cwd, { recursive: true, force: true }));
+	const root = join(cwd, "micme-rec");
+	await mkdir(root);
+	await mkdir(join(root, "rec-999998"));
+	await mkdir(join(root, "rec-1000000"));
+
+	assert.equal(await createProjectRecordingDirectory(cwd), join(root, "rec-999999"));
+});
+
+test("kept audio ignores in-range files when numbering but skips a file at the candidate path", async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "micme-rec-test-"));
+	t.after(() => rm(cwd, { recursive: true, force: true }));
+	const root = join(cwd, "micme-rec");
+	await mkdir(root);
+	await writeFile(join(root, "rec-001"), "");
+	await writeFile(join(root, "rec-010"), "");
+
+	assert.equal(await createProjectRecordingDirectory(cwd), join(root, "rec-002"));
 });
 
 test("kept audio creates a private root and leaf under umask 022", { skip: process.platform === "win32" }, async (t) => {
