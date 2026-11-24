@@ -52,6 +52,8 @@ Micme replaces these placeholders in custom commands:
 
 Placeholders without `Raw` are shell-quoted. `*Raw` placeholders bypass shell quoting and can break command safety if a path contains shell syntax. Use raw placeholders only where the target CLI requires an unquoted path fragment and you understand the risk.
 
+Doctor reports the hook's length and any of the supported placeholders above, but redacts the rest of the command, including other brace-wrapped text.
+
 ## Model downloads
 
 When `MICME_AUTO_DOWNLOAD_MODEL=1` (default), Micme can download missing standard whisper.cpp model files from the whisper.cpp Hugging Face repository on first use or model selection. Downloads are stored in `MICME_MODEL_DIR`, defaulting to `~/.cache/whisper.cpp`.
