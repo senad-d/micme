@@ -103,12 +103,12 @@ test("DirectShow device parsing handles whole-line and fallback quoted names", (
 		"DirectShow video devices",
 		'"Integrated Camera"',
 		"DirectShow audio devices",
-		'    Some prefix "Studio Mic" extra text',
+		'    Some prefix "Studio  Mic" extra text',
 		'Alternative name "@device_pnp_ignored"',
 	].join("\n"));
 
-	assert.deepEqual(parsed.video, [{ name: "Integrated Camera" }]);
-	assert.deepEqual(parsed.audio, [{ name: "Studio Mic" }]);
+	assert.deepEqual(parsed.video, [{ name: "Integrated Camera", captureName: "Integrated Camera" }]);
+	assert.deepEqual(parsed.audio, [{ name: "Studio Mic", captureName: "Studio  Mic" }]);
 });
 
 test("DirectShow device parsing handles ffmpeg >=7 headerless listing with (audio)/(video) suffixes", () => {
@@ -119,7 +119,7 @@ test("DirectShow device parsing handles ffmpeg >=7 headerless listing with (audi
 		'Error opening input file dummy.',
 	].join("\n"));
 
-	assert.deepEqual(parsed.audio, [{ name: "Remote Audio" }]);
+	assert.deepEqual(parsed.audio, [{ name: "Remote Audio", captureName: "Remote Audio" }]);
 	assert.deepEqual(parsed.video, []);
 	assert.equal(parsed.sawDeviceSection, false);
 });
@@ -131,8 +131,8 @@ test("DirectShow device parsing keys kind off the (audio)/(video) suffix even wi
 		'"Integrated Camera" (video)',
 	].join("\n"));
 
-	assert.deepEqual(parsed.audio, [{ name: "Microphone (Realtek Audio)" }]);
-	assert.deepEqual(parsed.video, [{ name: "Integrated Camera" }]);
+	assert.deepEqual(parsed.audio, [{ name: "Microphone (Realtek Audio)", captureName: "Microphone (Realtek Audio)" }]);
+	assert.deepEqual(parsed.video, [{ name: "Integrated Camera", captureName: "Integrated Camera" }]);
 });
 
 test("volume parsing handles finite and negative-infinite ffmpeg volumes", () => {

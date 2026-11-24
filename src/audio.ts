@@ -16,9 +16,11 @@ type ListedDevice = {
 	name: string;
 };
 
-type ParsedDeviceInventory = {
-	audio: ListedDevice[];
-	video: ListedDevice[];
+type DirectShowDevice = ListedDevice & { captureName: string };
+
+type ParsedDeviceInventory<Device extends ListedDevice = ListedDevice> = {
+	audio: Device[];
+	video: Device[];
 	sawDeviceSection: boolean;
 };
 
@@ -213,7 +215,13 @@ function combineRunOutput(result: RunResult) {
 function parseDeviceInventory(backend: Exclude<DeviceBackend, "unsupported">, output: string): ParsedDeviceInventory {
 	if (backend === "avfoundation") return parseAvfoundationDevices(output);
 	if (backend === "pulse") return parsePulseAudioDevices(output);
-	return parseDirectShowDevices(output);
+
+	const { audio, video, sawDeviceSection } = parseDirectShowDevices(output);
+	return {
+		audio: audio.map(({ name }) => ({ name })),
+		video: video.map(({ name }) => ({ name })),
+		sawDeviceSection,
+	};
 }
 
 export function parseAvfoundationDevices(output: string): ParsedDeviceInventory {
@@ -271,8 +279,8 @@ function parsePulseAudioDevices(output: string): ParsedDeviceInventory {
 	return inventory;
 }
 
-export function parseDirectShowDevices(output: string): ParsedDeviceInventory {
-	const inventory: ParsedDeviceInventory = { audio: [], video: [], sawDeviceSection: false };
+export function parseDirectShowDevices(output: string): ParsedDeviceInventory<DirectShowDevice> {
+	const inventory: ParsedDeviceInventory<DirectShowDevice> = { audio: [], video: [], sawDeviceSection: false };
 	let section: DeviceKind | undefined;
 
 	for (const rawLine of output.split(/\r?\n/)) {
@@ -284,8 +292,10 @@ export function parseDirectShowDevices(output: string): ParsedDeviceInventory {
 			continue;
 		}
 
-		const device = parseDirectShowDevice(line, section);
-		if (device) inventory[device.kind].push({ name: device.name });
+		const parsed = parseDirectShowDevice(line, section);
+		if (!parsed) continue;
+		const { kind, ...device } = parsed;
+		inventory[kind].push(device);
 	}
 
 	return inventory;
@@ -297,20 +307,18 @@ function parseDirectShowSection(line: string): DeviceKind | undefined {
 	return undefined;
 }
 
-function parseDirectShowDevice(line: string, section: DeviceKind | undefined): { kind: DeviceKind; name: string } | undefined {
+function parseDirectShowDevice(line: string, section: DeviceKind | undefined): (DirectShowDevice & { kind: DeviceKind }) | undefined {
 	if (/Alternative name/i.test(line)) return undefined;
 
 	const kindMatch = DIRECT_SHOW_DEVICE_KIND_PATTERN.exec(line);
-	if (kindMatch) {
-		const name = sanitizeDeviceField(kindMatch[1] ?? "");
-		const kind = (kindMatch[2] ?? "").toLowerCase() === "video" ? "video" : "audio";
-		return name ? { kind, name } : undefined;
-	}
+	const kind = kindMatch ? (kindMatch[2]?.toLowerCase() === "video" ? "video" : "audio") : section;
+	if (!kind) return undefined;
 
-	if (!section) return undefined;
-	const match = DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
-	const name = sanitizeDeviceField(match?.[1] ?? "");
-	return name ? { kind: section, name } : undefined;
+	const match = kindMatch ?? DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
+	const captureName = match?.[1];
+	if (!captureName) return undefined;
+	const name = sanitizeDeviceField(captureName);
+	return name ? { kind, name, captureName } : undefined;
 }
 
 function findDefaultDshowAudioDevice(): string | undefined {
@@ -325,7 +333,7 @@ function findDefaultDshowAudioDevice(): string | undefined {
 		});
 		if (result.error || result.signal) return undefined;
 		const inventory = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
-		return inventory.audio[0]?.name;
+		return inventory.audio[0]?.captureName;
 	} catch {
 		return undefined;
 	}
@@ -662,7 +670,7 @@ export async function discoverAudioDevices(): Promise<AudioDeviceCandidate[]> {
 	if (process.platform === "win32") {
 		const result = await runProcess(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], DEVICE_SCAN_TIMEOUT_MS);
 		const parsed = parseDirectShowDevices(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
-		return parsed.audio.map((device) => ({ label: device.name, value: device.name, description: "DirectShow audio input" }));
+		return parsed.audio.map((device) => ({ label: device.name, value: device.captureName, description: "DirectShow audio input" }));
 	}
 
 	return [];
