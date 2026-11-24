@@ -68,6 +68,12 @@ export function stopProcess(active: Recording) {
 async function stopProcessOnce(active: Recording) {
 	if (active.isSettled()) return active.exitPromise;
 
+	const { exitCode: code, signalCode: signal } = active.process;
+	// Give diagnostics time to drain without claiming the exit or waiting indefinitely on inherited pipes.
+	if (code != null || signal != null) {
+		return (await raceWithTimeout(active.exitPromise, RECORDER_STOP_GRACE_MS)) ?? { code, signal };
+	}
+
 	active.stopRequested = true;
 	let exit: ExitResult | undefined;
 	if (sendStopInput(active)) {
