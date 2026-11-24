@@ -10,9 +10,22 @@ rules:
     merge_when:
       semver: ["patch", "minor"]
     retest: "retest-pr"
+schedules:
+  - name: "weekly-hardening"
+    at: "03:00"
+    days: ["mon"]
+    run: "audit"
+    request: "Weekly security and reliability audit of micme, a Pi extension that records the microphone and runs local processes. Only report a finding when you can show a real failure: the input or state, what goes wrong, and the file and line. Leave out style, naming, refactors with no defect behind them, and npm dependency versions (the dependabot rule handles those). Look for: (1) Process execution in src/processes.ts, audio.ts, backends.ts, transcription.ts and streaming.ts: shell injection through device names, paths or config values, MICME_RECORD_COMMAND and MICME_TRANSCRIBE_COMMAND handling, child processes left running after cancel, error or session end, missing timeouts, and output caps that can be bypassed. (2) Terminal and transcript safety in terminal-text.ts, transcript-delivery.ts and editor.ts: control or escape sequences that get past stripping into Pi or the terminal. (3) Files in recording-dir.ts, config.ts and settings.ts: symlinks or path traversal in micme-rec and temp audio, audio left on disk after a failure, config writes that are not atomic or can corrupt the file, permissions on files that are created. (4) Reliability: missing ffmpeg or whisper, device disconnects, empty or huge recordings, concurrent /micme calls, unhandled promise rejections, and states the recording widget cannot leave. (5) Supply chain: the package.json files list and check-package-contents, no install scripts, and in .github/workflows least-privilege permissions, actions pinned to a commit SHA, and secrets kept out of pull_request runs. (6) Gaps between SECURITY.md and what the code does. Every issue names the smallest fix that keeps current behavior, and the test that proves it. Do not file anything that would change a documented feature, a default or a config key. Group findings that change the same source file into one issue, and all documentation-only findings into one issue."
 notifications:
   - name: "slack"
     type: "slack"
     url: "SLACK_TEAM_URL"
     events: ["question", "failed", "attention", "merge"]
     report: "17:00"
+    enabled: false
+  - name: "teams"
+    type: "teams"
+    url: "TEAMS_URL"
+    events: ["question", "failed", "attention", "merge", "schedule"]
+    report: "17:00"
+    weekly_report: "fri 09:00"
