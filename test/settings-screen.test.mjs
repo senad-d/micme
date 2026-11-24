@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -374,6 +375,29 @@ async function openMissingModelPicker(harness) {
 	harness.component.handleInput("\x1b[A");
 	assert.match(harness.component.render(100).join("\n"), /→ ○ tiny\.en\s/);
 }
+
+test("a settings save rejected by the config writer omits parser excerpts from the notification", async (t) => {
+	await withTempAgent(t, async (root) => {
+		const configPath = join(root, "micme.json");
+		await writeFile(configPath, JSON.stringify({ MICME_AUTO_DOWNLOAD_MODEL: "1" }));
+		const harness = createHarness(root);
+		await showConfiguration(harness.ctx);
+		await waitFor(() => !harness.component.render(100).join("\n").includes("Loading "), "configuration discovery did not finish");
+		harness.component.handleInput("\r");
+		harness.component.handleInput(" ");
+		// The save preflight has run synchronously, but the queued writer has not read the file yet.
+		const sentinel = "privacySentinel";
+		writeFileSync(configPath, sentinel);
+
+		await waitFor(() => harness.notifications.some((entry) => entry.level === "error"), "save failure was not reported");
+		const notification = harness.notifications.find((entry) => entry.level === "error");
+		assert.doesNotMatch(notification.message, new RegExp(sentinel));
+		assert.ok(notification.message.includes(configPath));
+		assert.match(notification.message, /invalid JSON.*Fix or remove it first/);
+		assert.equal(await readFile(configPath, "utf8"), sentinel);
+		harness.component.handleInput("q");
+	});
+});
 
 test("configuration screen skips external discovery but shows repair information for malformed config", async (t) => {
 	mockPlatform(t, "darwin");

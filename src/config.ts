@@ -564,19 +564,26 @@ function parseFiniteNumber(value: string | undefined) {
 
 function readMicmeJsonObjectForWrite(configPath: string): JsonObject {
 	let source: string | undefined;
-	let parsed: JsonObject;
-	const preserved = { count: 0 };
 	try {
 		source = readMicmeConfigSource(configPath);
-		if (source === undefined) return { $schema: MICME_SCHEMA_URL };
-		const value: unknown = JSON.parse(source, preserveConfigNumber.bind(undefined, preserved));
-		// The reviver wraps numbers in objects, so check the original root token too.
-		if (!isJsonObject(value) || !source.trimStart().startsWith("{")) throw new Error("top-level value must be a JSON object");
-		parsed = value;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const reason = error instanceof NonRegularConfigError ? message : `invalid JSON (${message})`;
-		throw new Error(`Cannot save Micme config: ${configPath} is ${reason}. Fix or remove it first.`, { cause: error });
+		throw invalidConfigSaveError(configPath, reason, { cause: error });
+	}
+	if (source === undefined) return { $schema: MICME_SCHEMA_URL };
+
+	const preserved = { count: 0 };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(source, preserveConfigNumber.bind(undefined, preserved));
+	} catch {
+		// Parser errors can quote private config values; do not retain the original error.
+		throw invalidConfigSaveError(configPath, "invalid JSON");
+	}
+	// The reviver wraps numbers in objects, so check the original root token too.
+	if (!isJsonObject(parsed) || !source.trimStart().startsWith("{")) {
+		throw invalidConfigSaveError(configPath, "invalid JSON (top-level value must be a JSON object)");
 	}
 
 	// The reviver never sees values shadowed by duplicate keys. Count tokens in the
@@ -585,6 +592,10 @@ function readMicmeJsonObjectForWrite(configPath: string): JsonObject {
 		throw new Error(`Cannot save Micme config: ${configPath} contains numeric literals that cannot be preserved. The file was not changed.`);
 	}
 	return parsed;
+}
+
+function invalidConfigSaveError(configPath: string, reason: string, options?: ErrorOptions) {
+	return new Error(`Cannot save Micme config: ${configPath} is ${reason}. Fix or remove it first.`, options);
 }
 
 function preserveConfigNumber(preserved: { count: number }, _key: string, value: unknown, context?: { source?: string }): unknown {
