@@ -205,7 +205,7 @@ const args = process.argv.slice(2);
 const output = args.at(-1);
 if (args.includes("volumedetect")) {
   const validationOutput = process.env.MICME_TEST_VALIDATION_OUTPUT;
-  process.stderr.write(validationOutput === undefined ? "mean_volume: -20 dB\\nmax_volume: -5 dB\\n" : validationOutput);
+  process.stderr.write(validationOutput === undefined ? "[Parsed_volumedetect_0 @ 0x1234] mean_volume: -20 dB\\n[Parsed_volumedetect_0 @ 0x1234] max_volume: -5 dB\\n" : validationOutput);
   process.exit(Number(process.env.MICME_TEST_VALIDATION_EXIT_CODE || 0));
 }
 if (output.endsWith("clip.wav")) {
@@ -572,7 +572,7 @@ test("missing ffmpeg silence metrics surface a sanitized error before transcript
 			MICME_TRANSCRIPTION_MODE: "clip",
 			MICME_PROCESS_AUDIO: "0",
 			MICME_VALIDATE_AUDIO: "1",
-			MICME_TEST_VALIDATION_OUTPUT: "\u001b[31mmean_volume: -20 dB\u001b[0m\nmax_vol",
+			MICME_TEST_VALIDATION_OUTPUT: "\u001b[31m[Parsed_volumedetect_0 @ 0x1234] mean_volume: -20 dB\u001b[0m\n[Parsed_volumedetect_0 @ 0x1234] max_vol",
 			MICME_TEST_PROCESS_LOG: processLog,
 		},
 		async () => {
@@ -586,7 +586,7 @@ test("missing ffmpeg silence metrics surface a sanitized error before transcript
 
 			const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
 			assert.match(error?.message ?? "", /required max_volume metric/);
-			assert.match(error?.message ?? "", /FFmpeg output:\nmean_volume: -20 dB/);
+			assert.match(error?.message ?? "", /FFmpeg output:\n\[Parsed_volumedetect_0 @ 0x1234\] mean_volume: -20 dB/);
 			assert.match(error?.message ?? "", /Audio kept for debugging/);
 			assert.equal((error?.message ?? "").includes("\u001b"), false);
 			assert.equal(harness.uiCalls.some((entry) => entry.method === "pasteToEditor"), false);

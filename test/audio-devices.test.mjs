@@ -208,7 +208,7 @@ test("audio preprocessing and validation use ffmpeg output and skip flags", asyn
 	const root = await mkdtemp(join(tmpdir(), "micme-audio-process-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const bin = join(root, "bin");
-	const work = join(root, "work");
+	const work = join(root, "max_volume: -80 dB");
 	await mkdir(bin);
 	await mkdir(work);
 	const input = join(work, "raw.wav");
@@ -218,7 +218,11 @@ test("audio preprocessing and validation use ffmpeg output and skip flags", asyn
 		[
 			"#!/bin/sh",
 			"case \" $* \" in",
-			"  *\" volumedetect \"*) echo 'mean_volume: -24.5 dB' >&2; echo 'max_volume: -12.0 dB' >&2; exit 0 ;;",
+			"  *\" volumedetect \"*)",
+			`    printf "Input #0, wav, from '%s':\\n" "$4" >&2`,
+			"    echo '[Parsed_volumedetect_0 @ 0x1234] mean_volume: -21.1 dB' >&2",
+			"    echo '[Parsed_volumedetect_0 @ 0x1234] max_volume: -18.1 dB' >&2",
+			"    exit 0 ;;",
 			"esac",
 			"last=''",
 			"for arg in \"$@\"; do last=\"$arg\"; done",
@@ -226,15 +230,27 @@ test("audio preprocessing and validation use ffmpeg output and skip flags", asyn
 		].join("\n"),
 	);
 
-	await withEnv({ PATH: bin, MICME_TRANSCRIBE_SAMPLE_RATE: "8000", MICME_AUDIO_FILTER: "", MICME_MIN_MAX_VOLUME_DB: "-50" }, async () => {
-		const output = await prepareAudioForTranscription(input, work);
-		assert.equal(output, join(work, "clip.wav"));
-		assert.equal(await readFile(output, "utf8"), "clip");
-		const validation = await validateRecordedAudio(input);
-		assert.equal(validation.status, "validated");
-		assert.equal(validation.diagnostics.meanVolumeDb, -24.5);
-		assert.equal(validation.diagnostics.maxVolumeDb, -12);
-	});
+	await withEnv(
+		{
+			PATH: bin,
+			PI_CODING_AGENT_DIR: root,
+			MICME_TRANSCRIBE_SAMPLE_RATE: "8000",
+			MICME_AUDIO_FILTER: "",
+			MICME_VALIDATE_AUDIO: "1",
+			MICME_SKIP_AUDIO_VALIDATION: "0",
+			MICME_MIN_MAX_VOLUME_DB: undefined,
+		},
+		async () => {
+			const output = await prepareAudioForTranscription(input, work);
+			assert.equal(output, join(work, "clip.wav"));
+			assert.equal(await readFile(output, "utf8"), "clip");
+			const validation = await validateRecordedAudio(input);
+			assert.equal(validation.status, "validated");
+			assert.ok(validation.diagnostics.raw.includes(input));
+			assert.equal(validation.diagnostics.meanVolumeDb, -21.1);
+			assert.equal(validation.diagnostics.maxVolumeDb, -18.1);
+		},
+	);
 
 	await withEnv({ MICME_PROCESS_AUDIO: "0", MICME_VALIDATE_AUDIO: "0" }, async () => {
 		assert.equal(await prepareAudioForTranscription(input, work), input);
@@ -269,7 +285,7 @@ test("audio preprocessing and validation surface ffmpeg failures", async (t) => 
 
 	await writeExecutable(
 		join(bin, "ffmpeg"),
-		"#!/bin/sh\necho 'mean_volume: -90 dB' >&2\necho 'max_volume: -80 dB' >&2\nexit 0\n",
+		"#!/bin/sh\necho '[Parsed_volumedetect_0 @ 0x1234] mean_volume: -90 dB' >&2\necho '[Parsed_volumedetect_0 @ 0x1234] max_volume: -80 dB' >&2\nexit 0\n",
 	);
 	await withEnv({ PATH: bin, MICME_MIN_MAX_VOLUME_DB: "-50" }, async () => {
 		await assert.rejects(validateRecordedAudio(input), /almost-silent audio/);
@@ -277,7 +293,7 @@ test("audio preprocessing and validation surface ffmpeg failures", async (t) => 
 
 	await writeExecutable(
 		join(bin, "ffmpeg"),
-		"#!/bin/sh\necho 'mean_volume: -inf dB' >&2\necho 'max_volume: -inf dB' >&2\nexit 0\n",
+		"#!/bin/sh\necho '[Parsed_volumedetect_0 @ 0x1234] mean_volume: -inf dB' >&2\necho '[Parsed_volumedetect_0 @ 0x1234] max_volume: -inf dB' >&2\nexit 0\n",
 	);
 	await withEnv({ PATH: bin, MICME_MIN_MAX_VOLUME_DB: "-50" }, async () => {
 		await assert.rejects(validateRecordedAudio(input), /almost-silent audio \(max -inf dB/);
@@ -300,10 +316,10 @@ test("audio validation rejects missing, malformed, partial, and truncated metric
 		join(bin, "ffmpeg"),
 		`#!/usr/bin/env node
 const mode = process.env.MICME_TEST_VALIDATION_CASE;
-if (mode === "malformed") process.stderr.write("\\u001b[31mmax_volume: loud dB\\u001b[0m\\n");
-if (mode === "partial") process.stderr.write("mean_volume: -20 dB\\nmax_vol");
+if (mode === "malformed") process.stderr.write("\\u001b[31m[Parsed_volumedetect_0 @ 0x1234] max_volume: loud dB\\u001b[0m\\n");
+if (mode === "partial") process.stderr.write("[Parsed_volumedetect_0 @ 0x1234] mean_volume: -20 dB\\n[Parsed_volumedetect_0 @ 0x1234] max_vol");
 if (mode === "oversized") {
-  process.stderr.write("x".repeat(${MAX_CAPTURED_OUTPUT_CHARS + 1}) + "\\nmax_volume: -12 dB\\n", () => process.exit(0));
+  process.stderr.write("x".repeat(${MAX_CAPTURED_OUTPUT_CHARS + 1}) + "\\n[Parsed_volumedetect_0 @ 0x1234] max_volume: -12 dB\\n", () => process.exit(0));
 } else {
   process.exit(0);
 }

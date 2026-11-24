@@ -136,12 +136,33 @@ test("DirectShow device parsing keys kind off the (audio)/(video) suffix even wi
 });
 
 test("volume parsing handles finite and negative-infinite ffmpeg volumes", () => {
-	const output = "[Parsed_volumedetect_0] mean_volume: -inf dB\n[Parsed_volumedetect_0] max_volume: -12.4 dB";
+	const output = "[Parsed_volumedetect_0 @ 0x1234] mean_volume: -inf dB\r\n[Parsed_volumedetect_0 @ 0x1234] max_volume: -12.4 dB";
 
 	assert.equal(parseVolumeDb(output, "mean_volume"), Number.NEGATIVE_INFINITY);
 	assert.equal(parseVolumeDb(output, "max_volume"), -12.4);
-	assert.equal(parseVolumeDb("mean_volume: 0 dB", "mean_volume"), 0);
-	assert.equal(parseVolumeDb("max_volume: inf dB", "max_volume"), undefined);
+	assert.equal(parseVolumeDb("[Parsed_volumedetect_1 @ 0000ABCD] mean_volume: 0 dB", "mean_volume"), 0);
+	assert.equal(parseVolumeDb("[Parsed_volumedetect_0 @ 0x1234] max_volume: inf dB", "max_volume"), undefined);
+});
+
+test("volume parsing uses the filter metric instead of volume text in filenames or other logs", () => {
+	const output = [
+		"Input #0, wav, from '/tmp/max_volume: -80 dB/tone.wav':",
+		"max_volume: -80 dB",
+		"[wav @ 0x1234] max_volume: -80 dB",
+		"[Parsed_volumedetect_0 @ 0x5678] max_volume: -18.1 dB",
+	].join("\n");
+
+	assert.equal(parseVolumeDb(output, "max_volume"), -18.1);
+});
+
+test("volume parsing requires a complete metric on one line", () => {
+	const output = [
+		"[Parsed_volumedetect_0 @ 0x1234] max_volume: -80 dB (extra text)",
+		"[Parsed_volumedetect_0 @ 0x1234] max_volume:",
+		" -80 dB",
+	].join("\n");
+
+	assert.equal(parseVolumeDb(output, "max_volume"), undefined);
 });
 
 test("device panel rendering strips terminal control sequences from persisted details", () => {

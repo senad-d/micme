@@ -764,7 +764,10 @@ function formatVolumeDb(value: number) {
 }
 
 export function parseVolumeDb(output: string, label: "mean_volume" | "max_volume") {
-	const pattern = new RegExp(String.raw`${label}:\s*(-?\d+(?:\.\d+)?|-inf)\s*dB`, "i");
+	const pattern = new RegExp(
+		String.raw`^[ \t]*\[Parsed_volumedetect_\d+ @ (?:0x)?[0-9a-f]+\][ \t]+${label}:[ \t]*(-?\d+(?:\.\d+)?|-inf)[ \t]+dB[ \t]*$`,
+		"im",
+	);
 	const match = pattern.exec(output);
 	if (!match) return undefined;
 	return match[1]?.toLowerCase() === "-inf" ? Number.NEGATIVE_INFINITY : Number(match[1]);
