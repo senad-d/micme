@@ -24,13 +24,14 @@ function spawnOwnedProcess({ command, args, spawnOptions }: SpawnSpec, pipeInput
 		: spawnPosixGroupProcess(command, args, pipeInput, spawnOptions);
 }
 
-function observeProcessClose(child: ChildProcess) {
+function observeProcessClose(child: ChildProcess, reportExit?: (exit: ExitResult) => void) {
 	let settled: ExitResult | undefined;
 	let getExit: () => ExitResult = () => ({ code: child.exitCode, signal: child.signalCode });
 	const exitPromise = new Promise<ExitResult>((resolve) => {
 		const settle = (exit: ExitResult) => {
 			if (settled) return;
 			settled = exit;
+			reportExit?.(exit);
 			resolve(exit);
 		};
 		// An operational error after launch is not an exit. Keep the listener
@@ -39,7 +40,8 @@ function observeProcessClose(child: ChildProcess) {
 			if (child.pid === undefined || error instanceof WindowsHookLaunchError) settle({ code: null, signal: null, error });
 		};
 		child.on("error", onError);
-		if (!HOST_IS_WINDOWS) getExit = observePosixGroupClose(child, settle);
+		if (!HOST_IS_WINDOWS) getExit = observePosixGroupClose(child, settle, reportExit);
+		else if (reportExit) child.once("exit", (code, signal) => reportExit({ code, signal }));
 		child.once("close", (code, signal) => {
 			child.off("error", onError);
 			settle({ code, signal });
@@ -50,7 +52,10 @@ function observeProcessClose(child: ChildProcess) {
 
 export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string): Recording {
 	const child = spawnOwnedProcess(command, Boolean(command.stopInput), true);
-	const lifecycle = observeProcessClose(child);
+	// The hook can exit while the supervisor and inherited output pipes stay open.
+	let reportExit!: (exit: ExitResult) => void;
+	const exitObserved = new Promise<ExitResult>((resolve) => { reportExit = resolve; });
+	const lifecycle = observeProcessClose(child, reportExit);
 	if (HOST_IS_WINDOWS) child.once("close", () => windowsJobHasProcesses(child));
 	let stdout = "";
 	let stderr = "";
@@ -80,6 +85,7 @@ export function spawnRecording(command: CommandSpec, audioPath: string, tempDir:
 		startedAt: Date.now(),
 		command,
 		audioLevel: () => audioLevel,
+		exitObserved,
 		...lifecycle,
 		stdout: () => stdout,
 		stderr: () => stderr,
@@ -121,6 +127,10 @@ async function stopProcessOnce(active: Recording) {
 
 	active.stopRequested = true;
 	return stopRecorderTree(active);
+}
+
+export function hasRecorderExited(active: Recording) {
+	return active.isSettled() || hasExit(active.getExit());
 }
 
 function hasExit(exit: ExitResult) {

@@ -19,6 +19,7 @@ import {
 	cleanup,
 	formatExit,
 	formatProcessOutput,
+	hasRecorderExited,
 	normalizeTranscript,
 	raceWithTimeout,
 	spawnRecording,
@@ -167,12 +168,12 @@ export class MicmeSessionOwner {
 
 	activateRecording(operation: MicmeOperation, phase: "recording" | "streaming", primary: Recording, stopHint: string) {
 		if (!this.transition(operation, phase)) return;
-		// The primary can exit at the startup boundary, or before its stdio closes.
+		// Detect the hook's exit independently of the supervisor and stdio drain.
 		if (hasRecorderExited(primary)) {
 			void this.stop(operation);
 			return;
 		}
-		primary.process.once("exit", () => {
+		void primary.exitObserved.then(() => {
 			if (this.isCurrent(operation) && operation.phase === phase) void this.stop(operation);
 		});
 		const ctx = operation.context;
@@ -424,10 +425,6 @@ function initializeStreamingRecording(ctx: ExtensionContext, streamRecording: Re
 		const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
 		handleStreamingOutput(ctx, streamRecording, text);
 	});
-}
-
-function hasRecorderExited(active: Recording) {
-	return active.isSettled() || active.process.exitCode != null || active.process.signalCode != null;
 }
 
 function startOptionalClipRecording(streamRecording: Recording, tempDir: string) {

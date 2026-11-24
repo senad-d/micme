@@ -594,6 +594,7 @@ test("recorder stop lets an owned worker flush but still rejects an earlier zero
 	await waitForFile(ready);
 	const [wrapper, worker] = JSON.parse(await readFile(ready, "utf8"));
 	await assertPidsExited([wrapper]);
+	assert.deepEqual(await raceWithTimeout(recording.exitObserved, 2_000), { code: 0, signal: null }, "the wrapper exit should be reported before pipe closure");
 	assert.equal(await isProcessRunning(worker), true);
 	assert.equal(recording.isSettled(), false, "the worker still owns the recorder pipe");
 
