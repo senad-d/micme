@@ -23,7 +23,9 @@ The default recorder uses `ffmpeg` and your operating system's microphone APIs:
 - Linux: PulseAudio through `ffmpeg -f pulse`
 - Windows: DirectShow through `ffmpeg -f dshow`
 
-Micme writes temporary audio files under the operating system temp directory by default. After successful transcription, those files are removed. Set `MICME_KEEP_AUDIO=1` only when you intentionally want to keep raw/preprocessed audio for debugging; kept recordings are written to per-recording project directories such as `./micme-rec/rec-001/`. Micme refuses to keep audio when the project `micme-rec` directory is a symbolic link.
+Micme writes temporary audio files under the operating system temp directory by default and tries to remove them after successful transcription. If cleanup fails, Micme warns that audio may remain and shows the directory. Run `/micme audio` to find it again in the same session for manual removal.
+
+Set `MICME_KEEP_AUDIO=1` only when you intentionally want to keep raw/preprocessed audio for debugging; kept recordings are written to per-recording project directories such as `./micme-rec/rec-001/`. Micme refuses to keep audio when the project `micme-rec` directory is a symbolic link.
 
 ## Local process execution
 
@@ -72,7 +74,7 @@ Treat `micme.json` as trusted local user configuration. Command hooks stored the
 
 ## Telemetry and retention
 
-Micme has no telemetry. It does not send audio or transcripts to a remote service by default. It does not retain audio after successful transcription unless `MICME_KEEP_AUDIO=1` is configured.
+Micme has no telemetry. It does not send audio or transcripts to a remote service by default. For local retention and cleanup, see [Microphone and local audio handling](#microphone-and-local-audio-handling).
 
 Network access can occur only when you explicitly use features that need it, such as automatic model downloads, or when your own custom commands contact the network.
 

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import fsPromises, { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 
 const { registerMicmeExtension } = await import("../src/extension.ts");
@@ -174,6 +175,21 @@ function processIds(rows) {
 async function assertProcessesStopped(rows) {
 	const pids = processIds(rows);
 	await waitFor(async () => !(await Promise.all(pids.map(processIsAlive))).some(Boolean), `live Micme processes remained: ${pids.join(", ")}`);
+}
+
+function rejectRecordingDirectoryCleanup(t, scratch) {
+	const remove = rm;
+	const removal = t.mock.method(fsPromises, "rm", async (path, options) => {
+		if (typeof path === "string" && dirname(path) === scratch) {
+			throw Object.assign(new Error("\u001b[31mEACCES: permission denied\u001b[0m"), { code: "EACCES" });
+		}
+		return remove(path, options);
+	});
+	syncBuiltinESMExports();
+	t.after(() => {
+		removal.mock.restore();
+		syncBuiltinESMExports();
+	});
 }
 
 async function writeExecutable(path, source) {
@@ -1088,6 +1104,116 @@ for (const mode of ["clip", "stream"]) {
 		);
 	});
 }
+
+for (const { mode, autoSubmit } of [{ mode: "clip", autoSubmit: true }, { mode: "stream", autoSubmit: true }, { mode: "clip", autoSubmit: false }]) {
+	test(`${mode} ${autoSubmit ? "delivers" : "pastes"} one transcript and reports recoverable audio when cleanup fails`, { skip: process.platform === "win32" && "requires POSIX executable fixtures" }, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "micme-extension-cleanup-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const scratch = join(root, "audio-\u001b[31mfiles");
+		const processLog = join(root, "processes.log");
+		const stream = join(root, "whisper-stream");
+		const transcriber = join(root, "whisper-cli");
+		const model = join(root, "ggml-small.en.bin");
+		await Promise.all([
+			mkdir(scratch),
+			writeFfmpegProcess(join(root, "ffmpeg")),
+			writeStreamingProcess(stream),
+			writeExecutable(transcriber, "#!/bin/sh\nprintf 'cleanup transcript\\n'\n"),
+			writeFile(model, "model"),
+		]);
+		rejectRecordingDirectoryCleanup(t, scratch);
+
+		await withEnv(
+			{
+				TMPDIR: scratch,
+				PI_CODING_AGENT_DIR: join(root, "agent"),
+				PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+				MICME_RECORD_COMMAND: undefined,
+				MICME_TEST_PROCESS_LOG: processLog,
+				MICME_TRANSCRIPTION_MODE: mode,
+				MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+				MICME_WHISPER_STREAM_BIN: stream,
+				MICME_WHISPER_CPP_BIN: transcriber,
+				MICME_WHISPER_CPP_MODEL: model,
+				MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+				MICME_PROCESS_AUDIO: "0",
+				MICME_VALIDATE_AUDIO: "0",
+				MICME_AUTO_SUBMIT: autoSubmit ? "1" : "0",
+				MICME_KEEP_AUDIO: "0",
+			},
+			async () => {
+				const harness = createExtensionHarness(root);
+				const command = harness.commands.get("micme");
+				try {
+					await command.handler("", harness.ctx);
+					const expectedProcesses = mode === "clip" ? 1 : 2;
+					await waitFor(async () => (await readProcessRows(processLog)).length === expectedProcesses, "recording fixtures did not start");
+					await command.handler("", harness.ctx);
+
+					assert.equal(harness.owner.getPhase(), "idle");
+					assert.equal(harness.uiCalls.findLast((entry) => entry.method === "setStatus")?.value, undefined);
+					assert.equal(harness.uiCalls.findLast((entry) => entry.method === "setWidget")?.value, undefined);
+					const pastes = harness.uiCalls.filter((entry) => entry.method === "pasteToEditor");
+					assert.deepEqual(pastes, autoSubmit ? [] : [{ method: "pasteToEditor", value: "cleanup transcript " }]);
+					assert.deepEqual(harness.sentMessages, autoSubmit ? [{ message: "cleanup transcript", options: undefined }] : []);
+					const [name] = await readdir(scratch);
+					assert.ok(name, "the recording directory should survive the rejected removal");
+					assert.equal((await stat(join(scratch, name, "raw.wav"))).size, 1024);
+					const displayedPath = join(root, "audio- files", name);
+					const notices = harness.uiCalls.filter((entry) => entry.method === "notify");
+					assert.equal(notices.some((entry) => entry.level === "error"), false);
+					const warnings = notices.filter((entry) => entry.level === "warning");
+					assert.equal(warnings.length, 1);
+					assert.match(warnings[0].message, /EACCES: permission denied/);
+					assert.ok(warnings[0].message.includes(displayedPath));
+					assert.equal(warnings[0].message.includes("\u001b"), false);
+
+					await command.handler("audio", harness.ctx);
+					assert.deepEqual(harness.uiCalls.at(-1), { method: "notify", level: "info", message: `Last Micme audio directory: ${displayedPath}` });
+				} finally {
+					await emit(harness, "session_shutdown");
+				}
+			},
+		);
+	});
+}
+
+test("failed recorder startup reports rejected directory cleanup without masking the startup error", { skip: process.platform === "win32" && "uses POSIX temporary directory selection" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-start-cleanup-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const scratch = join(root, "scratch");
+	await mkdir(scratch);
+	rejectRecordingDirectoryCleanup(t, scratch);
+
+	await withEnv({
+		TMPDIR: scratch,
+		PI_CODING_AGENT_DIR: join(root, "agent"),
+		PATH: root,
+		MICME_TRANSCRIPTION_MODE: "clip",
+		MICME_RECORD_COMMAND: undefined,
+		MICME_KEEP_AUDIO: "0",
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		const command = harness.commands.get("micme");
+		try {
+			await command.handler("", harness.ctx);
+			assert.equal(harness.owner.getPhase(), "idle");
+			const [name] = await readdir(scratch);
+			assert.ok(name);
+			const audioDir = join(scratch, name);
+			const notices = harness.uiCalls.filter((entry) => entry.method === "notify");
+			assert.match(notices.find((entry) => entry.level === "error")?.message ?? "", /Micme needs ffmpeg for recording/);
+			const warning = notices.find((entry) => entry.level === "warning")?.message ?? "";
+			assert.match(warning, /EACCES: permission denied/);
+			assert.ok(warning.includes(audioDir));
+
+			await command.handler("audio", harness.ctx);
+			assert.equal(harness.uiCalls.at(-1)?.message, `Last Micme audio directory: ${audioDir}`);
+		} finally {
+			await emit(harness, "session_shutdown");
+		}
+	});
+});
 
 test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
