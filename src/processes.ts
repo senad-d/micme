@@ -1,23 +1,27 @@
-import type { ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { delimiter, join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } from "./constants.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
 import { observePosixGroupClose, posixGroupHasWorkers, posixRecorderState, releasePosixGroup, signalPosixGroup, spawnPosixGroupProcess } from "./posix-process-group.ts";
 import { sanitizeTerminalOutput, stripTerminalControlSequences } from "./terminal-text.ts";
 import type { CommandSpec, ExitResult, Recording, RunResult } from "./types.ts";
-import { WINDOWS_JOB_STOP_EXIT_CODE, closeWindowsJob, spawnWindowsJobProcess, terminateWindowsJob, windowsJobHasProcesses } from "./windows-process-job.ts";
+import { WINDOWS_JOB_STOP_EXIT_CODE, WindowsHookLaunchError, closeWindowsJob, spawnWindowsJobProcess, terminateWindowsJob, windowsJobHasProcesses } from "./windows-process-job.ts";
 
 const PROCESS_TERM_GRACE_MS = 1_000;
 const PROCESS_PIPE_DRAIN_MS = 500;
+const FAILED_KILL_CLOSE_GRACE_MS = 1_000;
 const HOST_IS_WINDOWS = process.platform === "win32";
 
-function spawnOwnedProcess(command: string, args: string[], pipeInput = false, retainUntilStop = false) {
+type SpawnSpec = Pick<CommandSpec, "command" | "args" | "spawnOptions">;
+
+function spawnOwnedProcess({ command, args, spawnOptions }: SpawnSpec, pipeInput = false, retainUntilStop = false) {
 	return HOST_IS_WINDOWS
-		? spawnWindowsJobProcess(command, args, pipeInput, retainUntilStop)
-		: spawnPosixGroupProcess(command, args, pipeInput);
+		? spawnWindowsJobProcess(command, args, pipeInput, retainUntilStop, spawnOptions)
+		: spawnPosixGroupProcess(command, args, pipeInput, spawnOptions);
 }
 
 function observeProcessClose(child: ChildProcess) {
@@ -29,15 +33,23 @@ function observeProcessClose(child: ChildProcess) {
 			settled = exit;
 			resolve(exit);
 		};
-		child.once("error", (error) => settle({ code: null, signal: null, error }));
+		// An operational error after launch is not an exit. Keep the listener
+		// until close even when the caller is no longer waiting for the child.
+		const onError = (error: Error) => {
+			if (child.pid === undefined || error instanceof WindowsHookLaunchError) settle({ code: null, signal: null, error });
+		};
+		child.on("error", onError);
 		if (!HOST_IS_WINDOWS) getExit = observePosixGroupClose(child, settle);
-		child.once("close", (code, signal) => settle({ code, signal }));
+		child.once("close", (code, signal) => {
+			child.off("error", onError);
+			settle({ code, signal });
+		});
 	});
 	return { exitPromise, isSettled: () => settled !== undefined, getExit: () => settled ?? getExit() };
 }
 
 export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string): Recording {
-	const child = spawnOwnedProcess(command.command, command.args, Boolean(command.stopInput), true);
+	const child = spawnOwnedProcess(command, Boolean(command.stopInput), true);
 	const lifecycle = observeProcessClose(child);
 	if (HOST_IS_WINDOWS) child.once("close", () => windowsJobHasProcesses(child));
 	let stdout = "";
@@ -82,26 +94,36 @@ export function stopProcess(active: Recording) {
 
 async function stopProcessOnce(active: Recording) {
 	const { process: child, exitPromise } = active;
-	let stoppingWorkers = false;
 	if (active.isSettled()) {
 		if (!await hasOwnedProcesses(child, 200)) return exitPromise;
-	} else {
-		const state = HOST_IS_WINDOWS ? "running" : await posixRecorderState(child);
-		if (!active.isSettled()) {
-			if (state === "running") active.stopRequested = true;
-			stoppingWorkers = state === "workers";
-		}
+		return stopRecorderTree(active);
 	}
-	const exit = await stopRecorderTree(active);
-	// A successful wrapper can hand off its open pipes to the actual recorder.
-	// Stopping that worker is expected, but must not mask an earlier wrapper failure.
-	if (stoppingWorkers && exit.code === 0) active.stopRequested = true;
-	return exit;
+
+	const initialExit = active.getExit();
+	const state = !HOST_IS_WINDOWS && !hasExit(initialExit) ? await posixRecorderState(child) : "running";
+	const exit = active.getExit();
+	if (active.isSettled() || hasExit(exit) || state !== "running") {
+		// A wrapper exit before stop is unexpected even if its workers are still
+		// alive. Let inherited stdin and diagnostics drain before signalling them.
+		if (await hasOwnedProcesses(child, 200)) return stopRecorderTree(active, true);
+		const drained = await raceWithTimeout(exitPromise, RECORDER_STOP_GRACE_MS);
+		if (drained) return drained;
+		const result = active.getExit();
+		abandonProcessPipes(child);
+		return result;
+	}
+
+	active.stopRequested = true;
+	return stopRecorderTree(active);
 }
 
-async function stopRecorderTree(active: Recording) {
+function hasExit(exit: ExitResult) {
+	return exit.code != null || exit.signal != null || exit.error !== undefined;
+}
+
+async function stopRecorderTree(active: Recording, drainBeforeSignalling = false) {
 	const { process: child, exitPromise } = active;
-	if (sendStopInput(active)) {
+	if (sendStopInput(active) || drainBeforeSignalling) {
 		const exit = await waitForTreeGrace(child, exitPromise, RECORDER_STOP_GRACE_MS);
 		if (exit) return exit;
 	}
@@ -115,8 +137,9 @@ async function stopRecorderTree(active: Recording) {
 		const exit = await waitForTreeGrace(child, exitPromise, PROCESS_TERM_GRACE_MS);
 		if (exit) return exit;
 	}
-	const wrapperRunning = !active.isSettled() && child.exitCode === null && child.signalCode === null;
-	const forced = forceKillTree(child);
+	const wrapperRunning = !hasExit(active.getExit());
+	const forced = await forceKillTree(child);
+	if (forced instanceof Error) return waitAfterFailedKill(child, exitPromise, forced);
 	if (forced === "windows-job" && wrapperRunning) active.windowsTreeStopped = true;
 	if (forced === "signal") rememberStopSignal(active, "SIGKILL");
 	return waitForFinalClose(child, exitPromise, active.getExit);
@@ -136,20 +159,33 @@ function releaseOwnedTree(child: ChildProcess) {
 	else releasePosixGroup(child);
 }
 
-function forceKillTree(child: ChildProcess) {
-	if (!HOST_IS_WINDOWS) return signalPosixGroup(child, "SIGKILL") ? "signal" : undefined;
-	if (terminateWindowsJob(child)) return "windows-job";
-	if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-	if (killChild(child)) return "signal";
+async function forceKillTree(child: ChildProcess) {
+	try {
+		if (HOST_IS_WINDOWS) return terminateWindowsJob(child) ? "windows-job" : killFailure();
+		const sent = await raceWithTimeout(requestPosixKill(child), FAILED_KILL_CLOSE_GRACE_MS);
+		return sent?.ok ? "signal" : killFailure(sent?.cause);
+	} catch (error) {
+		return killFailure(error);
+	}
 }
 
-function killChild(child: ChildProcess) {
-	try {
-		return child.kill("SIGKILL");
-	} catch {
-		// The bounded close wait still applies if signaling fails.
-		return false;
-	}
+function requestPosixKill(child: ChildProcess) {
+	return new Promise<{ ok: boolean; cause?: unknown }>((resolve) => {
+		if (!signalPosixGroup(child, "SIGKILL", (cause) => resolve({ ok: !cause, cause }))) resolve({ ok: false });
+	});
+}
+
+function killFailure(cause?: unknown) {
+	const reason = cause instanceof Error ? formatProcessOutput(appendCapped("", cause.message)) : "";
+	return new Error(`Micme could not send SIGKILL${reason ? ` (${reason})` : ""}; the child process may still be running.`, { cause });
+}
+
+async function waitAfterFailedKill(child: ChildProcess, exitPromise: Promise<ExitResult>, failure: Error) {
+	// A real exit can win the race, but the wrapper's result alone cannot
+	// excuse a failed kill while the owned tree is still running.
+	const exit = await waitForTreeGrace(child, exitPromise, FAILED_KILL_CLOSE_GRACE_MS);
+	if (exit) return exit;
+	throw failure;
 }
 
 async function waitForTreeGrace(child: ChildProcess, exitPromise: Promise<ExitResult>, graceMs: number) {
@@ -166,23 +202,34 @@ async function waitForTreeGrace(child: ChildProcess, exitPromise: Promise<ExitRe
 	}
 }
 
-async function waitForFinalClose(child: ChildProcess, exitPromise: Promise<ExitResult>, getExit?: () => ExitResult): Promise<ExitResult> {
+async function waitForFinalClose(child: ChildProcess, exitPromise: Promise<ExitResult>, getExit: () => ExitResult): Promise<ExitResult> {
 	// The POSIX supervisor performs the final kill itself. Keep IPC open for it
 	// even if the wrapper result was already delivered and the pipes were closed.
-	const closed = !HOST_IS_WINDOWS && child.pid && child.exitCode === null && child.signalCode === null
+	const closed = isPosixLauncherRunning(child)
 		? Promise.all([exitPromise, new Promise<void>((resolve) => child.once("exit", () => resolve()))]).then(([exit]) => exit)
 		: exitPromise;
 	const exit = await raceWithTimeout(closed, PROCESS_PIPE_DRAIN_MS);
 	if (exit) return exit;
-	const result = getExit?.() ?? { code: child.exitCode, signal: child.signalCode };
+	const result = getExit();
 
-	// If a worker still holds inherited descriptors, stop waiting for EOF.
+	abandonProcessPipes(child);
+	// An IPC write only queues SIGKILL. A live launcher has not completed
+	// the group kill, even if the original hook and all its pipes are gone.
+	if (isPosixLauncherRunning(child)) throw new Error("Micme could not confirm SIGKILL; the child process may still be running.");
+	return result;
+}
+
+function isPosixLauncherRunning(child: ChildProcess) {
+	return !HOST_IS_WINDOWS && child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+}
+
+// An external worker can hold inherited descriptors past either drain deadline.
+function abandonProcessPipes(child: ChildProcess) {
 	child.stdin?.destroy();
 	child.stdout?.destroy();
 	child.stderr?.destroy();
 	child.channel?.unref();
 	child.unref();
-	return result;
 }
 
 export function sendStopInput(active: Recording) {
@@ -208,28 +255,83 @@ export async function stopRecorder(active: Recording) {
 	}
 }
 
-export function runShell(command: string, timeoutMs: number, options: RunProcessOptions = {}) {
-	const spec = shellCommand(command);
-	return runProcess(spec.command, spec.args, timeoutMs, options);
+export function runShell(template: string, timeoutMs: number, options: RunProcessOptions & { placeholders?: Record<string, string> } = {}) {
+	if (options.signal?.aborted) return Promise.resolve(cancelledRun());
+	return runCommand(shellCommand(template, options.placeholders), timeoutMs, options);
 }
 
-export function shellCommand(command: string): CommandSpec {
+export function shellCommand(template: string, placeholders?: Record<string, string>): CommandSpec {
+	const display = placeholders ? replacePlaceholders(template, placeholders) : template;
 	if (process.platform === "win32") {
-		return { command: "cmd.exe", args: ["/d", "/s", "/c", command], display: command };
+		// Use the host's Windows installation directory, not ComSpec or executable lookup.
+		const systemRoot = process.env.SystemRoot;
+		if (!systemRoot || !/^[a-z]:[\\/]/i.test(systemRoot)) {
+			throw new Error("Micme cannot locate the Windows system shell: SystemRoot must be a drive-qualified absolute path.");
+		}
+		const interpreter = win32.join(systemRoot, "System32", "cmd.exe");
+		if (placeholders) return windowsHookCommand(interpreter, template, placeholders, display);
+		return { command: interpreter, args: ["/d", "/s", "/c", display], display };
 	}
-	return { command: "sh", args: ["-lc", command], display: command };
+	return { command: "sh", args: ["-lc", display], display };
+}
+
+function windowsHookCommand(command: string, template: string, placeholders: Record<string, string>, display: string): CommandSpec {
+	const hookEnv: NodeJS.ProcessEnv = {};
+	let prefix: string | undefined;
+	let delayedExpansion: boolean | undefined;
+	const script = replacePlaceholders(template, placeholders, (value, key) => {
+		prefix ??= `MICME_HOOK_${randomUUID().replaceAll("-", "")}`;
+		const name = `${prefix}_${key}`;
+		hookEnv[name] = value;
+		// Percent expansion leaves inserted percent signs alone. A later bang scan
+		// also strips carets, even if the bang belongs to another argument.
+		const delimiter = /[!^]/.test(value) && (delayedExpansion ??= windowsDelayedExpansion(command)) ? "!" : "%";
+		return `"${delimiter}${name}${delimiter}"`;
+	});
+	if (!prefix) return { command, args: ["/d", "/s", "/c", script], display };
+
+	// Keep the host's expansion rules for Raw text. /s removes the outer quotes
+	// without CRT escaping the inner quotes that belong to the hook.
+	return {
+		command,
+		args: ["/d", "/s", "/c", `"${script}"`],
+		display,
+		spawnOptions: { env: { ...process.env, ...hookEnv }, windowsVerbatimArguments: true },
+	};
+}
+
+function windowsDelayedExpansion(command: string) {
+	// cmd removes the unmatched bang only when its default delayed expansion is on.
+	const probe = spawnSync(command, ["/d", "/s", "/c", '"echo micme!probe"'], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+		timeout: 2_000,
+		windowsHide: true,
+		windowsVerbatimArguments: true,
+	});
+	const marker = probe.stdout?.trim();
+	if (probe.error || probe.status !== 0 || (marker !== "micmeprobe" && marker !== "micme!probe")) {
+		throw new Error("Micme could not determine the Windows shell's delayed expansion mode.", { cause: probe.error });
+	}
+	return marker === "micmeprobe";
 }
 
 export type RunProcessOptions = {
 	signal?: AbortSignal;
 };
 
-export async function runProcess(command: string, args: string[], timeoutMs: number, options: RunProcessOptions = {}): Promise<RunResult> {
-	if (options.signal?.aborted) {
-		return { code: null, signal: null, stdout: "", stderr: "", timedOut: false, cancelled: true };
-	}
+export function runProcess(command: string, args: string[], timeoutMs: number, options: RunProcessOptions = {}): Promise<RunResult> {
+	return runCommand({ command, args }, timeoutMs, options);
+}
 
-	const child = spawnOwnedProcess(command, args);
+function cancelledRun(): RunResult {
+	return { code: null, signal: null, stdout: "", stderr: "", timedOut: false, cancelled: true };
+}
+
+async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProcessOptions): Promise<RunResult> {
+	if (options.signal?.aborted) return cancelledRun();
+
+	const child = spawnOwnedProcess(spec);
 	const { exitPromise, getExit } = observeProcessClose(child);
 	let stdout = "";
 	let stderr = "";
@@ -261,9 +363,7 @@ export async function runProcess(command: string, args: string[], timeoutMs: num
 		: outcome;
 	if (typeof outcome !== "string") releaseOwnedTree(child);
 	if (exit.error) throw exit.error;
-	// A wrapper may have exited with code 0 while the hook was still running.
-	const code = (timedOut || cancelled) && exit.code === 0 ? null : exit.code;
-	return { code, signal: exit.signal, stdout, stderr, timedOut, ...(cancelled ? { cancelled: true } : {}) };
+	return { code: exit.code, signal: exit.signal, stdout, stderr, timedOut, ...(cancelled ? { cancelled: true } : {}) };
 }
 
 async function stopInterruptedRun(child: ChildProcess, exitPromise: Promise<ExitResult>, getExit: () => ExitResult, cancelled: boolean) {
@@ -272,8 +372,11 @@ async function stopInterruptedRun(child: ChildProcess, exitPromise: Promise<Exit
 	}
 	// Even if the snapshot looked empty, end an interrupted run through the
 	// identity-safe supervisor rather than releasing a possibly live group.
-	forceKillTree(child);
-	return waitForFinalClose(child, exitPromise, getExit);
+	const forced = await forceKillTree(child);
+	if (forced instanceof Error) return waitAfterFailedKill(child, exitPromise, forced);
+	const exit = await waitForFinalClose(child, exitPromise, getExit);
+	// A wrapper may have exited with code 0 while the owned hook was still running.
+	return exit.code === 0 ? { ...exit, code: null } : exit;
 }
 
 export function normalizeTranscript(text: string) {
@@ -287,20 +390,21 @@ export function normalizeTranscript(text: string) {
 		.trim();
 }
 
-export function replacePlaceholders(template: string, values: Record<string, string>) {
+export function replacePlaceholders(template: string, values: Record<string, string>, quote: (value: string, key: string) => string = shellQuote) {
 	return template.replace(/\{([A-Za-z][A-Za-z0-9]*?)(Raw)?\}/g, (placeholder, key: string, rawSuffix: string | undefined) => {
 		if (!Object.hasOwn(values, key)) return placeholder;
 		const value = values[key] ?? "";
-		return rawSuffix ? value : shellQuote(value);
+		return rawSuffix ? value : quote(value, key);
 	});
 }
 
-export function findExecutable(names: string[]) {
+export function findExecutable(names: string[], { allowWindowsBatch = false }: { allowWindowsBatch?: boolean } = {}) {
 	const dirs = getPathDirectories();
 	const extensions = getExecutableExtensions();
+	const isCandidate = allowWindowsBatch ? isFileWithExecuteAccess : isExecutableFile;
 
 	for (const name of names) {
-		const executable = findExecutableByName(name, dirs, extensions);
+		const executable = findExecutableByName(name, dirs, extensions, isCandidate);
 		if (executable) return executable;
 	}
 	return undefined;
@@ -314,18 +418,18 @@ function getExecutableExtensions() {
 	return process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";") : [""];
 }
 
-function findExecutableByName(name: string, dirs: string[], extensions: string[]) {
+function findExecutableByName(name: string, dirs: string[], extensions: string[], isCandidate: typeof isExecutableFile) {
 	for (const dir of dirs) {
-		const executable = findExecutableInDirectory(name, dir, extensions);
+		const executable = findExecutableInDirectory(name, dir, extensions, isCandidate);
 		if (executable) return executable;
 	}
 	return undefined;
 }
 
-function findExecutableInDirectory(name: string, dir: string, extensions: string[]) {
+function findExecutableInDirectory(name: string, dir: string, extensions: string[], isCandidate: typeof isExecutableFile) {
 	for (const extension of extensions) {
 		const candidate = join(dir, getExecutableFileName(name, extension));
-		if (isExecutableFile(candidate)) return candidate;
+		if (isCandidate(candidate)) return candidate;
 	}
 	return undefined;
 }
@@ -335,6 +439,12 @@ function getExecutableFileName(name: string, extension: string) {
 }
 
 export function isExecutableFile(path: string) {
+	// Batch files need a command interpreter, even when listed in PATHEXT.
+	if (process.platform === "win32" && /\.(?:bat|cmd)[. ]*$/i.test(path)) return false;
+	return isFileWithExecuteAccess(path);
+}
+
+function isFileWithExecuteAccess(path: string) {
 	try {
 		const stats = statSync(path);
 		if (!stats.isFile()) return false;

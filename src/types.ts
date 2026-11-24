@@ -1,4 +1,4 @@
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 
 export type TranscriptionMode = "clip" | "stream";
 export type TranscribeBackend = "auto" | "whisper.cpp" | "python" | "custom";
@@ -33,6 +33,7 @@ export type CommandSpec = {
 	command: string;
 	args: string[];
 	display: string;
+	spawnOptions?: Pick<SpawnOptions, "env" | "windowsVerbatimArguments">;
 	meterFromStdout?: boolean;
 	stopInput?: string;
 	signalStopExitCodes?: number[];

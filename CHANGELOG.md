@@ -25,6 +25,11 @@ All notable changes to Micme will be documented in this file.
 - Align `micme-doctor` executable/model checks with runtime validation and translation-capable model fallback behavior.
 - Let `MICME_RECORD_COMMAND` use the same `{audio}`, `{tempDir}`, and `{transcript}` placeholders as custom transcription commands.
 
+## [0.3.9] - 2026-11-24
+
+- Windows recording and transcription hooks now launch the system command interpreter rather than a same-named executable in the project directory.
+- Micme reports failed signal escalation instead of treating a still-running recorder as stopped or letting a second signal error go unhandled.
+
 ## 0.1.0 - 2026-06-18
 
 Initial publication-readiness candidate.

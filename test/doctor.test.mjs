@@ -26,7 +26,7 @@ function isolatedEnvironment(root, binDir) {
 		if (key.startsWith("MICME_") || key === "PI_CODING_AGENT_DIR" || value === undefined) continue;
 		environment[key] = value;
 	}
-	return { ...environment, HOME: root, PATH: binDir, PI_CODING_AGENT_DIR: root };
+	return { ...environment, HOME: root, PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM", PI_CODING_AGENT_DIR: root };
 }
 
 function runNode(args, environment) {
@@ -49,8 +49,9 @@ function getDoctorField(output, label) {
 
 async function createWhisperCppFixture(binDir) {
 	await mkdir(binDir, { recursive: true });
-	const executable = join(binDir, process.platform === "win32" ? "whisper-cli.CMD" : "whisper-cli");
-	await writeFile(executable, process.platform === "win32" ? "@exit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
+	const executable = join(binDir, process.platform === "win32" ? "whisper-cli.EXE" : "whisper-cli");
+	// The doctor only discovers this file; it never starts it.
+	await writeFile(executable, process.platform === "win32" ? "" : "#!/bin/sh\nexit 0\n");
 	if (process.platform !== "win32") await chmod(executable, 0o755);
 }
 
