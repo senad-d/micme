@@ -253,6 +253,8 @@ MICME_TRANSCRIBE_COMMAND=whisper-cli -m /path/to/model.bin -f {audio} -otxt -of 
 
 `{audio}`, `{tempDir}`, and `{transcript}` are shell-quoted. `*Raw` placeholders bypass quoting and should only be used when you fully control the command.
 
+Micme prefers a non-blank transcript file. If it falls back to stdout, it rejects output longer than 100,000 characters rather than inserting an incomplete transcript. For longer transcripts from a custom command, write to `{transcript}` instead of stdout.
+
 Recorder and streaming commands must remain alive until Micme stops them. A requested stop accepts exit code `0`, a signal Micme sent during escalation, its conventional shell exit code, or ffmpeg's signal-stop code `255`; spawn errors, spontaneous exits, unrelated signals, and other nonzero codes are reported as failures. Partial recorder audio is kept for debugging but is not transcribed. When final-clip streaming is enabled, Micme explicitly falls back to the append-only live transcript if that optional clip recorder fails.
 
 ---

@@ -4,8 +4,10 @@ import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
 import { env, getTranscribeTimeoutMs, getTranslateToEnglishLanguage } from "./config.ts";
+import { MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import { ensureWhisperCppModel, getPythonWhisperModelName } from "./models.ts";
 import { formatProcessOutput, formatRunExit, runProcess, runShell } from "./processes.ts";
+import type { RunResult } from "./types.ts";
 
 export { getWhisperCppBinary, getWhisperStreamBinary, resolveExecutableConfig } from "./backends.ts";
 
@@ -39,12 +41,7 @@ export async function transcribeWithCustomCommand(template: string, audioPath: s
 		throw new Error(`MICME_TRANSCRIBE_COMMAND failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	if (existsSync(transcriptPath)) {
-		const fromFile = await readFile(transcriptPath, "utf8");
-		if (fromFile.trim()) return fromFile;
-	}
-
-	return result.stdout;
+	return readTranscript(transcriptPath, result);
 }
 
 export async function transcribeWithWhisperCpp(
@@ -71,13 +68,7 @@ export async function transcribeWithWhisperCpp(
 		throw new Error(`whisper.cpp failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	const outputPath = `${outputBase}.txt`;
-	if (existsSync(outputPath)) {
-		const fromFile = await readFile(outputPath, "utf8");
-		if (fromFile.trim()) return fromFile;
-	}
-
-	return result.stdout;
+	return readTranscript(`${outputBase}.txt`, result);
 }
 
 export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string, signal?: AbortSignal) {
@@ -117,11 +108,17 @@ export async function transcribeWithOpenAiWhisper(binary: string, audioPath: str
 	}
 
 	const txtName = basename(audioPath).replace(/\.[^.]+$/, ".txt");
-	const outputPath = join(tempDir, txtName);
+	return readTranscript(join(tempDir, txtName), result);
+}
+
+async function readTranscript(outputPath: string, result: RunResult): Promise<string> {
 	if (existsSync(outputPath)) {
 		const fromFile = await readFile(outputPath, "utf8");
 		if (fromFile.trim()) return fromFile;
 	}
 
+	if (result.stdoutTruncated) {
+		throw new Error(`Transcriber stdout exceeded the ${MAX_CAPTURED_OUTPUT_CHARS}-character capture limit and was truncated. Write the transcript to the output file instead.`);
+	}
 	return result.stdout;
 }
