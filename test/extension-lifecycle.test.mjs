@@ -684,6 +684,49 @@ test("missing ffmpeg silence metrics surface a sanitized error before transcript
 	);
 });
 
+test("a nonregular clip transcript reports an error instead of pasting hook stdout", { skip: process.platform === "win32" && "requires POSIX device and recorder fixtures" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-nonregular-transcript-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const processLog = join(root, "processes.log");
+	await writeFfmpegProcess(join(root, "ffmpeg"));
+
+	await withEnv(
+		{
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+			MICME_TRANSCRIPTION_MODE: "clip",
+			MICME_RECORD_COMMAND: undefined,
+			MICME_TEST_PROCESS_LOG: processLog,
+			MICME_TRANSCRIBE_BACKEND: "custom",
+			// A device gives immediate EOF even if the regular-file check is missing.
+			MICME_TRANSCRIBE_COMMAND: "ln -s /dev/null {transcript} && printf 'fallback transcript'",
+			MICME_PROCESS_AUDIO: "0",
+			MICME_VALIDATE_AUDIO: "0",
+			MICME_AUTO_SUBMIT: "0",
+			MICME_KEEP_AUDIO: "1",
+		},
+		async () => {
+			const harness = createExtensionHarness(root);
+			const command = harness.commands.get("micme");
+			assert.ok(command);
+			try {
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "recording");
+				await waitFor(async () => (await readProcessRows(processLog)).length > 0, "recorder did not start");
+				await command.handler("", harness.ctx);
+
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "pasteToEditor" || entry.method === "setEditorText"), []);
+				assert.equal(harness.sentMessages.length, 0);
+				const error = harness.uiCalls.find((entry) => entry.method === "notify" && entry.level === "error");
+				assert.match(error?.message ?? "", /Transcript output is not a regular file/);
+			} finally {
+				await emit(harness, "session_shutdown", { reason: "quit" });
+			}
+		},
+	);
+});
+
 test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
