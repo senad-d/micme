@@ -69,6 +69,10 @@ export type AudioValidationOutcome =
 export type StreamingState = {
 	baseText: string;
 	renderedWordCount: number;
+	/** Editor text after Micme's last live write; undefined until the first write. */
+	renderedEditorText?: string;
+	/** Set once text Micme did not write appears in the editor during the stream. */
+	editorTextInserted?: boolean;
 	outputBuffer: string;
 	lastText: string;
 	emittedWords: string[];

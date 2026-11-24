@@ -107,7 +107,7 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI,
 	if (signal?.aborted) return;
 	const backend = getCurrentDeviceBackend();
 	if (backend.backend === "unsupported") {
-		await showDevicePanel(ctx, pi, {
+		showDevicePanel(ctx, pi, {
 			sourceLabel: backend.sourceLabel,
 			backend: backend.backend,
 			errorLines: ["Device listing is not implemented for this platform"],
@@ -117,7 +117,7 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI,
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
 	if (!ffmpeg) {
-		await showDevicePanel(ctx, pi, {
+		showDevicePanel(ctx, pi, {
 			sourceLabel: backend.sourceLabel,
 			backend: backend.backend,
 			errorLines: ["ffmpeg not found", "Install ffmpeg or configure a custom recorder before listing devices."],
@@ -130,7 +130,7 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI,
 		result = await runProcess(ffmpeg, backend.args, DEVICE_SCAN_TIMEOUT_MS, { signal });
 	} catch {
 		if (signal?.aborted) return;
-		await showDevicePanel(ctx, pi, {
+		showDevicePanel(ctx, pi, {
 			sourceLabel: backend.sourceLabel,
 			backend: backend.backend,
 			errorLines: ["Device scan failed", "Could not start ffmpeg to list capture devices."],
@@ -139,7 +139,7 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI,
 	}
 
 	if (signal?.aborted || result.cancelled) return;
-	await showDevicePanel(ctx, pi, buildDevicePanelFromRun(backend, result));
+	showDevicePanel(ctx, pi, buildDevicePanelFromRun(backend, result));
 }
 
 function getCurrentDeviceBackend(): DeviceBackendInfo {
@@ -318,7 +318,8 @@ function parseDirectShowDevice(line: string, section: DeviceKind | undefined): (
 	if (/Alternative name/i.test(line)) return undefined;
 
 	const kindMatch = DIRECT_SHOW_DEVICE_KIND_PATTERN.exec(line);
-	const kind = kindMatch ? (kindMatch[2]?.toLowerCase() === "video" ? "video" : "audio") : section;
+	let kind = section;
+	if (kindMatch) kind = kindMatch[2]?.toLowerCase() === "video" ? "video" : "audio";
 	if (!kind) return undefined;
 
 	const match = kindMatch ?? DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN.exec(line) ?? DIRECT_SHOW_DEVICE_NAME_PATTERN.exec(line);
@@ -393,7 +394,7 @@ function getBackendLongName(backend: Exclude<DeviceBackend, "unsupported">) {
 	return "DirectShow";
 }
 
-async function showDevicePanel(ctx: ExtensionContext, pi: ExtensionAPI | undefined, options: DevicePanelOptions) {
+function showDevicePanel(ctx: ExtensionContext, pi: ExtensionAPI | undefined, options: DevicePanelOptions) {
 	if (sendDevicePanelMessage(pi, options)) return;
 	ctx.ui.setWidget(DEVICE_PANEL_MESSAGE_TYPE, renderDevicePanel(options).split("\n"));
 }
@@ -757,9 +758,7 @@ export async function validateRecordedAudio(audioPath: string, signal?: AbortSig
 
 	const minimumMaxVolumeDb = getMinMaxVolumeDb();
 	if (diagnostics.maxVolumeDb < minimumMaxVolumeDb) {
-		const deviceKey = process.platform === "linux" ? PULSE_SOURCE_KEY
-			: process.platform === "win32" ? "MICME_DSHOW_AUDIO_DEVICE"
-			: "MICME_AUDIO_DEVICE";
+		const deviceKey = getAudioInputConfigKey(process.platform);
 		throw new Error(
 			`Micme recorded almost-silent audio (max ${formatVolumeDb(diagnostics.maxVolumeDb)} dB; threshold ${minimumMaxVolumeDb.toFixed(1)} dB). ` +
 				"Whisper often hallucinates phrases like 'Thank you very much' from silence. " +
@@ -768,6 +767,12 @@ export async function validateRecordedAudio(audioPath: string, signal?: AbortSig
 	}
 
 	return { status: "validated", diagnostics };
+}
+
+function getAudioInputConfigKey(platform: NodeJS.Platform) {
+	if (platform === "linux") return PULSE_SOURCE_KEY;
+	if (platform === "win32") return "MICME_DSHOW_AUDIO_DEVICE";
+	return "MICME_AUDIO_DEVICE";
 }
 
 function audioValidationOutputReachedLimit(result: RunResult) {

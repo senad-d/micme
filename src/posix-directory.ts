@@ -37,7 +37,7 @@ export function posixDirectoryLibrary() {
 
 // Darwin's /dev/fd does not support traversal through directory descriptors.
 // Change cwd only in a dedicated subprocess, never in Pi or its worker threads.
-export const FCHDIR_SOURCE = String.raw`
+export const FCHDIR_SOURCE = `
 function enterDirectory(library, fd) {
 	const koffi = require(library);
 	// Keep the library reference alive for the duration of the native call.
@@ -47,7 +47,7 @@ function enterDirectory(library, fd) {
 }
 `;
 
-const DIRECTORY_TASK_SOURCE = FCHDIR_SOURCE + String.raw`
+const DIRECTORY_TASK_SOURCE = FCHDIR_SOURCE + `
 const { readdirSync, rmSync } = require("node:fs");
 enterDirectory(process.argv[1], 3);
 if (process.argv[2] === "list") {
@@ -143,6 +143,7 @@ export class PosixDirectory {
 			return;
 		}
 		// POSIX entry names are bytes; decoding to UTF-8 can change the name we remove.
+		// Bound recursive removals to one subtree at a time and stop on the first failure.
 		const prefix = Buffer.from(`${this.procPath}/`);
 		for (const name of await readdir(this.procPath, { encoding: "buffer" })) {
 			await rm(Buffer.concat([prefix, name]), { recursive: true, force: true });

@@ -27,16 +27,18 @@ function loadWindowsApi() {
 }
 
 function validHandle(handle: bigint | null): handle is bigint {
-	return Boolean(handle && handle !== -1n && handle !== 0xffff_ffff_ffff_ffffn && handle !== 0xffff_ffffn);
+	return Boolean(handle && handle !== -1n && handle !== 0xffffffffffffffffn && handle !== 0xffffffffn);
 }
 
 export class WindowsRecordingDirectory {
-	private readonly api = api ??= loadWindowsApi();
+	private readonly api: ReturnType<typeof loadWindowsApi>;
 	private handle: bigint | undefined;
 	readonly path: string;
 	private readonly parent?: WindowsRecordingDirectory;
 
 	constructor(path: string, parent?: WindowsRecordingDirectory) {
+		api ??= loadWindowsApi();
+		this.api = api;
 		this.path = path;
 		this.parent = parent;
 		// No sharing for delete or write: a different handle cannot rename this
@@ -83,6 +85,7 @@ export class WindowsRecordingDirectory {
 	}
 
 	async remove() {
+		// Bound recursive removals to one subtree at a time and stop on the first failure.
 		for (const name of await readdir(this.path)) {
 			await rm(win32.join(this.path, name), { recursive: true, force: true });
 		}

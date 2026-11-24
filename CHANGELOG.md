@@ -25,6 +25,12 @@ All notable changes to Micme will be documented in this file.
 - Align `micme-doctor` executable/model checks with runtime validation and translation-capable model fallback behavior.
 - Let `MICME_RECORD_COMMAND` use the same `{audio}`, `{tempDir}`, and `{transcript}` placeholders as custom transcription commands.
 
+## [0.4.1] - 2026-11-24
+
+- Micme preserves text typed or replayed into the editor during live dictation instead of replacing or auto-submitting the edited draft.
+- Failed recordings keep captured audio for debugging but discard empty or header-only attempts. Session shutdown keeps captured audio only when Keep audio is on or Micme already reported the clip as kept.
+- On POSIX, recorder processes that stay in Micme’s process group are stopped if Pi is killed.
+
 ## [0.4.0] - 2026-11-24
 
 - Micme now keeps partial audio and reports its location when a recorder exits during startup, while still removing empty attempts.

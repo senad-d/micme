@@ -452,12 +452,15 @@ export function renderStreamingPreview(ctx: ExtensionContext, state: StreamingSt
 
 	const delta = emittedWords.slice(renderedWordCount).join(" ");
 	const editorText = ctx.ui.getEditorText();
+	noteInsertedEditorText(state, editorText);
 	// Keep spacing between stream words even when punctuation arrives in a later delta.
 	const separator = needsStreamingSeparator(editorText, delta, renderedWordCount > 0) ? " " : "";
 	const appendedText = `${editorText}${separator}${delta}`;
 	const nextText = trailingSpace && appendedText && !isWhitespaceCharacter(appendedText.at(-1)) ? `${appendedText} ` : appendedText;
 	if (nextText === editorText) return;
 	ctx.ui.setEditorText(nextText);
+	// Read back rather than store nextText: the editor normalizes line endings and tabs.
+	state.renderedEditorText = ctx.ui.getEditorText();
 	state.renderedWordCount = emittedWords.length;
 	if (delta && !state.firstPreviewAt) {
 		state.firstPreviewAt = Date.now();
@@ -474,10 +477,25 @@ export function showStreamingDiagnostics(ctx: ExtensionContext, state: Streaming
 	ctx.ui.notify(`Micme stream timings: first output ${firstOutput}, first preview ${firstPreview}`, "info");
 }
 
-export async function pasteOrSubmitFinalStreamingTranscript(ctx: ExtensionContext, pi: ExtensionAPI, state: StreamingState, transcript: string) {
+// Clearing the editor or trimming its end only removes text Micme can rebuild.
+// Anything else adds text (typed, or replayed with /micme last) that the final
+// transcript must not overwrite. Once seen, keep the flag for the whole stream.
+function noteInsertedEditorText(state: StreamingState, observed: string) {
+	if (!(state.renderedEditorText ?? state.baseText).startsWith(observed)) state.editorTextInserted = true;
+}
+
+export function keepEditedStreamingEditor(ctx: ExtensionContext, state: StreamingState) {
+	noteInsertedEditorText(state, ctx.ui.getEditorText());
+	if (!state.editorTextInserted) return false;
+	ctx.ui.notify("Micme left the editor unchanged because it was edited during dictation. Use /micme last to paste the transcript.", "warning");
+	return true;
+}
+
+export function pasteOrSubmitFinalStreamingTranscript(ctx: ExtensionContext, pi: ExtensionAPI, state: StreamingState, transcript: string) {
+	if (keepEditedStreamingEditor(ctx, state)) return;
 	if (envFlag("MICME_AUTO_SUBMIT")) {
 		ctx.ui.setEditorText(state.baseText);
-		await pasteOrSubmitTranscript(ctx, pi, transcript);
+		pasteOrSubmitTranscript(ctx, pi, transcript);
 		return;
 	}
 

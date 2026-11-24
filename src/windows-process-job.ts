@@ -4,7 +4,7 @@ import type { CommandSpec } from "./types.ts";
 
 // The launcher waits for IPC so nothing from the hook can run before job assignment.
 // The hook inherits Micme's pipes directly, including the recorder's graceful stdin.
-const LAUNCHER = String.raw`
+const LAUNCHER = `
 const { spawn } = require("node:child_process");
 function reportError(error) {
 	const { message, code, errno, syscall, path, spawnargs } = error;
@@ -62,10 +62,13 @@ function loadWindowsApi() {
 }
 
 class WindowsProcessJob {
-	private readonly api = windowsApi ??= loadWindowsApi();
-	private handle: bigint | null = this.api.create(null, null);
+	private readonly api: ReturnType<typeof loadWindowsApi>;
+	private handle: bigint | null;
 
 	constructor(terminateOnClose: boolean) {
+		windowsApi ??= loadWindowsApi();
+		this.api = windowsApi;
+		this.handle = this.api.create(null, null);
 		if (!this.handle) throw new Error("Could not create a Windows job for the Micme process.");
 		// Bounded runs release their job on normal completion without killing
 		// background workers. Only their explicit interruption terminates the job.

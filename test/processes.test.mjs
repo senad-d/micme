@@ -616,6 +616,37 @@ test("recorder shutdown stops an owned worker after the wrapper and its pipes ha
 	await assertTreeExited(ready);
 });
 
+test("a POSIX recorder that ignores graceful signals does not outlive a killed Pi process", { skip: process.platform === "win32" && "Windows uses a kill-on-close job" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-orphan-recorder-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const recorder = join(root, "recorder.mjs");
+	const driver = join(root, "pi.mjs");
+	const pidFile = join(root, "recorder.pid");
+	await writeFile(recorder, `import { writeFileSync } from "node:fs";
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
+writeFileSync(process.argv[2], String(process.pid));
+setInterval(() => {}, 1_000);
+`);
+	await writeFile(driver, `const { spawnRecording } = await import(${JSON.stringify(new URL("../src/processes.ts", import.meta.url).href)});
+spawnRecording({ command: process.execPath, args: [process.argv[2], process.argv[3]], display: "recorder" }, "raw.wav", process.argv[4]);
+setInterval(() => {}, 1_000);
+`);
+	const pi = childProcess.spawn(process.execPath, [driver, recorder, pidFile, root], { stdio: "ignore" });
+	t.after(() => pi.kill("SIGKILL"));
+	await waitForFile(pidFile);
+	const pid = Number(await readFile(pidFile, "utf8"));
+	assert.equal(await isProcessRunning(pid), true);
+
+	pi.kill("SIGKILL");
+	for (let attempt = 0; attempt < 300 && await isProcessRunning(pid); attempt += 1) {
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	if (await isProcessRunning(pid)) {
+		process.kill(pid, "SIGKILL");
+		assert.fail("the recorder kept running after Pi was killed");
+	}
+});
+
 test("recorder shutdown does not mistake a truncated process snapshot for an empty tree", { skip: process.platform === "win32" }, async (t) => {
 	const { root, args, ready } = await makeProcessTree(t, { closeBeforeStop: true });
 	const recording = spawnRecording({ command: process.execPath, args, display: "recorder wrapper" }, join(root, "recording.wav"), root);

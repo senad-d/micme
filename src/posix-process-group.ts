@@ -4,19 +4,30 @@ import type { CommandSpec, ExitResult } from "./types.ts";
 
 // A detached launcher is the session and group leader. Only it signals its own
 // group (kill(0, ...)), even after the hook exits. The parent never signals a PGID.
-const LAUNCHER = FCHDIR_SOURCE + String.raw`
+const LAUNCHER = FCHDIR_SOURCE + `
 const { spawn } = require("node:child_process");
 const { closeSync } = require("node:fs");
+let killGroupOnDisconnect = false;
 process.on("SIGINT", () => {});
 process.on("SIGTERM", () => {});
-process.on("disconnect", () => process.exit(0));
+process.on("disconnect", handleDisconnect);
+// A recording must not outlive Pi. Ask the group to stop, then force it.
+function handleDisconnect() {
+	if (!killGroupOnDisconnect) process.exit(0);
+	process.kill(0, "SIGTERM");
+	setTimeout(killGroup, 1000);
+}
+function killGroup() {
+	process.kill(0, "SIGKILL");
+}
 function report(result) {
 	if (process.connected) process.send(result, () => {});
 }
 function reportError({ message, code, errno, syscall, path, spawnargs }) {
 	report({ error: { message, code, errno, syscall, path, spawnargs } });
 }
-function launch({ command, args, pipeInput, spawnOptions, directoryLibrary }) {
+function launch({ command, args, pipeInput, spawnOptions, directoryLibrary, killOnDisconnect }) {
+	killGroupOnDisconnect = killOnDisconnect === true;
 	try {
 		if (directoryLibrary) enterDirectory(directoryLibrary, 4);
 		const child = spawn(command, args, { ...spawnOptions, stdio: [pipeInput ? 0 : "ignore", 1, 2] });
@@ -40,7 +51,7 @@ process.on("message", (message) => {
 const supervisors = new WeakSet<ChildProcess>();
 const hookPids = new WeakMap<ChildProcess, number>();
 
-export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean, spawnOptions?: CommandSpec["spawnOptions"], cwdFd?: number) {
+export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean, killOnDisconnect: boolean, spawnOptions?: CommandSpec["spawnOptions"], cwdFd?: number) {
 	const directoryLibrary = cwdFd === undefined ? undefined : posixDirectoryLibrary();
 	const child = spawn(process.execPath, ["--input-type=commonjs", "-e", LAUNCHER], {
 		detached: true,
@@ -49,7 +60,7 @@ export function spawnPosixGroupProcess(command: string, args: string[], pipeInpu
 	if (child.pid) {
 		supervisors.add(child);
 		child.once("close", () => supervisors.delete(child));
-		child.send({ command, args, pipeInput, spawnOptions, directoryLibrary }, () => undefined);
+		child.send({ command, args, pipeInput, spawnOptions, directoryLibrary, killOnDisconnect }, () => undefined);
 	}
 	return child;
 }
@@ -110,7 +121,7 @@ export async function posixRecorderState(child: ChildProcess) {
 
 export async function posixGroupHasWorkers(child: ChildProcess, remainingMs: number) {
 	const workers = await readGroupWorkers(child, remainingMs);
-	return workers === undefined || workers.length !== 0;
+	return workers?.length !== 0;
 }
 
 // A snapshot informs grace and exit reporting, never the destination of a signal.

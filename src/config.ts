@@ -610,7 +610,9 @@ function preserveConfigNumber(preserved: { count: number }, _key: string, value:
 
 function countJsonNumberTokens(source: string) {
 	let count = 0;
-	for (const [token] of source.matchAll(/"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g)) {
+	// JSON.parse already validated the input. Skip complete strings and count
+	// runs of numeric characters; a leading minus does not affect the count.
+	for (const [token] of source.matchAll(/"(?:[^"\\]|\\.)*"|\d[\d.eE+-]*/g)) {
 		if (!token.startsWith('"')) count += 1;
 	}
 	return count;

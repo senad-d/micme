@@ -65,7 +65,8 @@ export class RecordingDirectory {
 	async remove() {
 		if (this.removal) return this.removal;
 		if (this.closed) throw new Error("Micme's recording directory has been closed.");
-		return this.removal = this.access?.remove() ?? cleanup(this.path);
+		this.removal = this.access?.remove() ?? cleanup(this.path);
+		return this.removal;
 	}
 
 	close() {

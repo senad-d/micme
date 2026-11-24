@@ -23,8 +23,9 @@ function spawnOwnedProcess({ command, args, spawnOptions }: SpawnSpec, pipeInput
 	if (HOST_IS_WINDOWS) return spawnWindowsJobProcess(command, args, pipeInput, retainUntilStop, spawnOptions);
 	// Relative executable paths were resolved from Pi's cwd, not the workspace
 	// entered by a descriptor-relative launch.
-	const executable = cwdFd === undefined ? command : command === "sh" ? "/bin/sh" : resolve(command);
-	return spawnPosixGroupProcess(executable, args, pipeInput, spawnOptions, cwdFd);
+	let executable = command;
+	if (cwdFd !== undefined) executable = command === "sh" ? "/bin/sh" : resolve(command);
+	return spawnPosixGroupProcess(executable, args, pipeInput, retainUntilStop, spawnOptions, cwdFd);
 }
 
 function observeProcessClose(child: ChildProcess, reportExit?: (exit: ExitResult) => void) {
@@ -197,7 +198,8 @@ function requestPosixKill(child: ChildProcess) {
 
 function killFailure(cause?: unknown) {
 	const reason = cause instanceof Error ? formatProcessOutput(appendCapped("", cause.message)) : "";
-	return new Error(`Micme could not send SIGKILL${reason ? ` (${reason})` : ""}; the child process may still be running.`, { cause });
+	const details = reason ? ` (${reason})` : "";
+	return new Error(`Micme could not send SIGKILL${details}; the child process may still be running.`, { cause });
 }
 
 async function waitAfterFailedKill(child: ChildProcess, exitPromise: Promise<ExitResult>, failure: Error) {

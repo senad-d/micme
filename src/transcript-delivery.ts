@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { envFlag } from "./config.ts";
 import { normalizeTranscript } from "./processes.ts";
 
-export async function pasteOrSubmitTranscript(ctx: ExtensionContext, pi: ExtensionAPI, transcript: string) {
+export function pasteOrSubmitTranscript(ctx: ExtensionContext, pi: ExtensionAPI, transcript: string) {
 	const text = normalizeTranscript(transcript);
 	if (!text) {
 		ctx.ui.notify("No previous Micme transcript is available.", "warning");

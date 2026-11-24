@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -87,8 +87,9 @@ test("whisper.cpp starts the native executable behind a Windows batch shim on PA
 	await mkdir(binDir);
 	await writeFile(join(root, "whisper-cli.CMD"), "@exit /b 73\r\n");
 	const native = join(binDir, "whisper-cli.EXE");
-	await copyFile(process.execPath, native);
-	if (process.platform !== "win32") await chmod(native, 0o755);
+	// On POSIX, keep Node at its installed path so relative shared-library lookups work.
+	if (process.platform === "win32") await copyFile(process.execPath, native);
+	else await symlink(process.execPath, native);
 
 	const plan = resolveWithWindowsPath(`${root}${delimiter}${binDir}`);
 	assert.equal(plan.effectiveBackend, "whisper.cpp");

@@ -856,6 +856,7 @@ export function buildConfigurationItems(
 	const currentModelPath = getCurrentWhisperCppModelValue();
 	const usesDirectShow = process.platform === "win32";
 	const audioDeviceKey = usesDirectShow ? "MICME_DSHOW_AUDIO_DEVICE" : "MICME_AUDIO_DEVICE";
+	const defaultDeviceDescription = audioDevices.length > 0 ? "macOS avfoundation audio device id" : "Audio device id/source used by ffmpeg recorder.";
 	const currentDevice = env(audioDeviceKey) ?? (usesDirectShow ? "" : "0");
 	const audioValues = audioDevices.length > 0 ? audioDevices.map((device) => device.value) : [currentDevice];
 	if (!audioValues.includes(currentDevice)) audioValues.unshift(currentDevice);
@@ -1042,9 +1043,7 @@ export function buildConfigurationItems(
 			id: audioDeviceKey,
 			categoryId: "audio",
 			label: "Microphone device",
-			description: usesDirectShow
-				? "Windows DirectShow audio input name."
-				: audioDevices.length > 0 ? "macOS avfoundation audio device id" : "Audio device id/source used by ffmpeg recorder.",
+			description: usesDirectShow ? "Windows DirectShow audio input name." : defaultDeviceDescription,
 			rawValue: currentDevice,
 			currentValue: currentDevice,
 			values: audioValues,
