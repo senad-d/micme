@@ -38,7 +38,7 @@ Micme spawns local processes for recording and transcription:
 - `python -I` only for optional Python Whisper model-name discovery in `/micme conf`; isolated mode avoids importing project-local Python files.
 - Optional user-provided shell commands in `MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`.
 
-The default process output is capped. Terminal control sequences (including 8-bit C1 forms) and standalone C1 controls are stripped from process output, transcript text, device panels, and configuration display values before they are shown or inserted into pi. Diagnostics should not print secret values.
+The default process output is capped. Terminal control sequences (including 8-bit C1 forms) and standalone C1 controls are stripped from process output, transcript text, device panels, and configuration display values before they are shown or inserted into pi.
 
 ## Custom command risks
 
@@ -52,7 +52,9 @@ Micme replaces these placeholders in custom commands:
 
 Placeholders without `Raw` are shell-quoted. `*Raw` placeholders bypass shell quoting and can break command safety if a path contains shell syntax. Use raw placeholders only where the target CLI requires an unquoted path fragment and you understand the risk.
 
-Doctor reports the hook's length and any of the supported placeholders above, but redacts the rest of the command, including other brace-wrapped text.
+Doctor reports the hook's length and any of the supported placeholders above, but redacts the rest of the configured command, including other brace-wrapped text.
+
+That redaction does not apply to hook output. When a custom transcriber exits with a nonzero status, Micme includes its captured stderr in the error message, or falls back to stdout if stderr is empty after sanitization. Micme strips terminal controls but does not redact secrets from that output. Do not log credentials or other secrets to stdout or stderr from custom hooks.
 
 ## Model downloads
 
