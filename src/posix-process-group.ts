@@ -1,9 +1,10 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { FCHDIR_SOURCE, posixDirectoryLibrary } from "./posix-directory.ts";
 import type { CommandSpec, ExitResult } from "./types.ts";
 
 // A detached launcher is the session and group leader. Only it signals its own
 // group (kill(0, ...)), even after the hook exits. The parent never signals a PGID.
-const LAUNCHER = String.raw`
+const LAUNCHER = FCHDIR_SOURCE + String.raw`
 const { spawn } = require("node:child_process");
 const { closeSync } = require("node:fs");
 process.on("SIGINT", () => {});
@@ -15,8 +16,9 @@ function report(result) {
 function reportError({ message, code, errno, syscall, path, spawnargs }) {
 	report({ error: { message, code, errno, syscall, path, spawnargs } });
 }
-function launch({ command, args, pipeInput, spawnOptions }) {
+function launch({ command, args, pipeInput, spawnOptions, directoryLibrary }) {
 	try {
+		if (directoryLibrary) enterDirectory(directoryLibrary, 4);
 		const child = spawn(command, args, { ...spawnOptions, stdio: [pipeInput ? 0 : "ignore", 1, 2] });
 		if (child.pid) report({ pid: child.pid });
 		child.once("error", reportError);
@@ -38,15 +40,16 @@ process.on("message", (message) => {
 const supervisors = new WeakSet<ChildProcess>();
 const hookPids = new WeakMap<ChildProcess, number>();
 
-export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean, spawnOptions?: CommandSpec["spawnOptions"]) {
+export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean, spawnOptions?: CommandSpec["spawnOptions"], cwdFd?: number) {
+	const directoryLibrary = cwdFd === undefined ? undefined : posixDirectoryLibrary();
 	const child = spawn(process.execPath, ["--input-type=commonjs", "-e", LAUNCHER], {
 		detached: true,
-		stdio: [pipeInput ? "pipe" : "ignore", "pipe", "pipe", "ipc"],
+		stdio: [pipeInput ? "pipe" : "ignore", "pipe", "pipe", "ipc", ...(cwdFd === undefined ? [] : [cwdFd])],
 	});
 	if (child.pid) {
 		supervisors.add(child);
 		child.once("close", () => supervisors.delete(child));
-		child.send({ command, args, pipeInput, spawnOptions }, () => undefined);
+		child.send({ command, args, pipeInput, spawnOptions, directoryLibrary }, () => undefined);
 	}
 	return child;
 }

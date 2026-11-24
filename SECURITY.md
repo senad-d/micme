@@ -23,9 +23,9 @@ The default recorder uses `ffmpeg` and your operating system's microphone APIs:
 - Linux: PulseAudio through `ffmpeg -f pulse`
 - Windows: DirectShow through `ffmpeg -f dshow`
 
-Micme writes temporary audio files under the operating system temp directory by default and tries to remove them after successful transcription. If cleanup fails, Micme warns that audio may remain and shows the directory. Run `/micme audio` to find it again in the same session for manual removal.
+Micme writes temporary audio files under the operating system temp directory by default and tries to remove them after successful transcription, even if pasting or submitting the transcript fails. If cleanup fails, Micme warns that audio may remain and shows the directory. Run `/micme audio` to find it again in the same session for manual removal.
 
-Set `MICME_KEEP_AUDIO=1` only when you intentionally want to keep raw/preprocessed audio for debugging; kept recordings are written to per-recording project directories such as `./micme-rec/rec-001/`. Micme refuses to keep audio when the project `micme-rec` directory is a symbolic link.
+Set `MICME_KEEP_AUDIO=1` only when you intentionally want to keep raw/preprocessed audio for debugging; kept recordings are written to per-recording project directories such as `./micme-rec/rec-001/`. Micme refuses a symbolic-link recordings root. On Linux and macOS, creation, recording file access, and cleanup use open directories rather than reopening their public pathnames. On Windows, Micme resolves the project path and locks its physical ancestors. It rejects junctions and other reparse points when opening the recordings root and recording directory, and keeps both directories locked during recording and transcription. If you rename `micme-rec`, `/micme audio` still shows the original pathname; verify where it points before removing files manually.
 
 ## Local process execution
 

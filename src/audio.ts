@@ -691,7 +691,7 @@ export function parseAvfoundationAudioDevices(output: string): AudioDeviceCandid
 	}));
 }
 
-export async function prepareAudioForTranscription(inputPath: string, tempDir: string, signal?: AbortSignal) {
+export async function prepareAudioForTranscription(inputPath: string, tempDir: string, signal?: AbortSignal, cwdFd?: number) {
 	if (env("MICME_PROCESS_AUDIO") === "0") return inputPath;
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
@@ -700,7 +700,7 @@ export async function prepareAudioForTranscription(inputPath: string, tempDir: s
 	const outputPath = join(tempDir, "clip.wav");
 	const args = buildAudioPreprocessingArgs(inputPath, outputPath, getAudioFilter());
 
-	const result = await runProcess(ffmpeg, args, AUDIO_VALIDATION_TIMEOUT_MS, { signal });
+	const result = await runProcess(ffmpeg, args, AUDIO_VALIDATION_TIMEOUT_MS, { signal, cwdFd });
 	if (result.code !== 0) {
 		throw new Error(`Micme audio preprocessing failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
@@ -715,7 +715,7 @@ export function buildAudioPreprocessingArgs(inputPath: string, outputPath: strin
 	return args;
 }
 
-export async function validateRecordedAudio(audioPath: string, signal?: AbortSignal): Promise<AudioValidationOutcome> {
+export async function validateRecordedAudio(audioPath: string, signal?: AbortSignal, cwdFd?: number): Promise<AudioValidationOutcome> {
 	if (env("MICME_VALIDATE_AUDIO") === "0" || envFlag("MICME_SKIP_AUDIO_VALIDATION")) {
 		return { status: "skipped", reason: "disabled" };
 	}
@@ -723,7 +723,7 @@ export async function validateRecordedAudio(audioPath: string, signal?: AbortSig
 	const ffmpeg = findExecutable(["ffmpeg"]);
 	if (!ffmpeg) return { status: "skipped", reason: "ffmpeg-unavailable" };
 
-	const result = await runProcess(ffmpeg, ["-hide_banner", "-nostats", "-i", audioPath, "-af", "volumedetect", "-f", "null", "-"], AUDIO_VALIDATION_TIMEOUT_MS, { signal });
+	const result = await runProcess(ffmpeg, ["-hide_banner", "-nostats", "-i", audioPath, "-af", "volumedetect", "-f", "null", "-"], AUDIO_VALIDATION_TIMEOUT_MS, { signal, cwdFd });
 	const raw = formatProcessOutput(appendCapped("", `${result.stdout}\n${result.stderr}`));
 	if (result.code !== 0) {
 		throw new Error(`Micme could not inspect recorded audio (${formatRunExit(result)}).${formatAudioValidationDiagnostics(raw)}`);

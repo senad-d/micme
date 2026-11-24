@@ -1,25 +1,20 @@
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { getMeterFloorDb, getMeterGain, getMeterPeakFloorDb, getMeterRangeDb } from "./config.ts";
 
-export function readPcm16WaveLevel(path: string) {
+export function readPcm16WaveLevel(path: string, openFile: (path: string, flags: number) => number = openSync) {
 	try {
-		const stats = statSync(path);
-		if (stats.size <= 44) return 0;
-
-		const maxBytes = 48_000;
-		const start = Math.max(44, stats.size - maxBytes);
-		const length = Math.max(0, stats.size - start);
-		if (length < 2) return 0;
-
-		const buffer = Buffer.alloc(length - (length % 2));
-		const fd = openSync(path, "r");
+		const fd = openFile(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
 		try {
+			const stats = fstatSync(fd);
+			if (!stats.isFile() || stats.size <= 45) return 0;
+			const start = Math.max(44, stats.size - 48_000);
+			const length = stats.size - start;
+			const buffer = Buffer.alloc(length - (length % 2));
 			readSync(fd, buffer, 0, buffer.length, start);
+			return pcm16BufferLevel(buffer);
 		} finally {
 			closeSync(fd);
 		}
-
-		return pcm16BufferLevel(buffer);
 	} catch {
 		return 0;
 	}

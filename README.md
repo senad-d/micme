@@ -251,7 +251,7 @@ MICME_RECORD_COMMAND=ffmpeg -hide_banner -loglevel error -f avfoundation -i :0 -
 MICME_TRANSCRIBE_COMMAND=whisper-cli -m /path/to/model.bin -f {audio} -otxt -of {tempDirRaw}/out -nt -np && cat {tempDirRaw}/out.txt
 ```
 
-`{audio}`, `{tempDir}`, and `{transcript}` are shell-quoted. `*Raw` placeholders bypass quoting and should only be used when you fully control the command.
+`{audio}`, `{tempDir}`, and `{transcript}` are shell-quoted. `*Raw` placeholders bypass quoting and should only be used when you fully control the command. When keeping audio, use the supplied paths as-is rather than rebuilding them from `./micme-rec`. On macOS (or Linux without `/proc`), hooks start in the verified recording directory and these placeholders are relative to it. Use them before changing directories, and use absolute paths for other resources your hook needs.
 
 Micme prefers a non-blank transcript file. If it falls back to stdout, it rejects output longer than 100,000 characters rather than inserting an incomplete transcript. For longer transcripts from a custom command, write to `{transcript}` instead of stdout.
 
