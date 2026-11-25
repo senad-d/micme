@@ -24,6 +24,23 @@ function withEnv(values, fn) {
 	}
 }
 
+test("PulseAudio recorder args omit the FFmpeg thread queue option", () => {
+	const args = buildFfmpegRecorderArgs("pulse", "default", "/tmp/micme-audio-test/raw.wav", "48000", { meter: false });
+
+	assert.equal(args.includes("-thread_queue_size"), false);
+});
+
+test("non-Pulse recorder args retain the FFmpeg input thread queue size", () => {
+	for (const [format, input] of [["avfoundation", ":2"], ["dshow", "audio=Microphone"]]) {
+		const args = buildFfmpegRecorderArgs(format, input, "/tmp/micme-audio-test/raw.wav", "48000", { meter: false });
+		const inputArgs = args.slice(0, args.indexOf("-i"));
+		const queueIndex = inputArgs.indexOf("-thread_queue_size");
+
+		assert.ok(queueIndex >= 0, `${format} should set a thread queue size before -i`);
+		assert.equal(inputArgs[queueIndex + 1], "4096");
+	}
+});
+
 test("file-only recorder args avoid the stdout meter branch", () => {
 	const args = buildFfmpegRecorderArgs("pulse", "default", "/tmp/micme-audio-test/raw.wav", "48000", { meter: false });
 
