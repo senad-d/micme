@@ -379,7 +379,11 @@ async function withLiveFixture(t, { worker = {}, recorder = {}, env = {}, create
 	});
 }
 
+<<<<<<< HEAD
 async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024, logPostprocessing = false, corruptConfigOnStop, argsLog } = {}) {
+=======
+async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024, logPostprocessing = false, corruptConfigOnStop, pulseSource } = {}) {
+>>>>>>> origin/main
 	await writeExecutable(
 		path,
 		`#!/usr/bin/env node
@@ -403,10 +407,26 @@ if (output.endsWith("clip.wav")) {
   writeFileSync(output, Buffer.alloc(1024));
   process.exit(0);
 }
+<<<<<<< HEAD
 if (${rawBytes !== null}) {
   const wav = args.includes("-flush_packets") && ${rawBytes ?? 0} >= 44;
   writeFileSync(output, wav ? Buffer.from(${JSON.stringify(testWav(Math.max(44, rawBytes ?? 0)).toString("base64"))}, "base64") : Buffer.alloc(${rawBytes ?? 0}));
 }
+=======
+const pulseSource = ${JSON.stringify(pulseSource)};
+if (pulseSource !== undefined) {
+  const inputIndex = args.indexOf("-i");
+  if (inputIndex < 0 || args[args.indexOf("-f") + 1] !== "pulse" || args[inputIndex + 1] !== pulseSource) {
+    process.stderr.write("Expected PulseAudio input " + pulseSource + "\\n");
+    process.exit(1);
+  }
+  if (args.slice(0, inputIndex).includes("-thread_queue_size")) {
+    process.stderr.write("Option thread_queue_size cannot be applied to input url " + pulseSource + "\\n");
+    process.exit(234);
+  }
+}
+if (${rawBytes !== null}) writeFileSync(output, Buffer.alloc(${rawBytes ?? 0}));
+>>>>>>> origin/main
 appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`recorder \${process.pid}\\n\`);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -1478,6 +1498,42 @@ test("a kept clip records inside a private leaf under an existing public root", 
 			}
 		},
 	);
+});
+
+test("built-in PulseAudio clips start with FFmpeg's muxer-only queue restriction and paste a transcript", { skip: process.platform !== "linux" && "requires the Linux PulseAudio recorder" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-pulse-clip-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const processLog = join(root, "processes.log");
+	await writeFfmpegProcess(join(root, "ffmpeg"), { pulseSource: "default" });
+
+	await withEnv({
+		TMPDIR: root,
+		PI_CODING_AGENT_DIR: join(root, "agent"),
+		PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+		MICME_TRANSCRIPTION_MODE: "clip",
+		MICME_RECORD_COMMAND: undefined,
+		MICME_PULSE_SOURCE: undefined,
+		MICME_TEST_PROCESS_LOG: processLog,
+		MICME_TRANSCRIBE_BACKEND: "custom",
+		MICME_TRANSCRIBE_COMMAND: "test -s {audio} && printf 'pulse clip transcript'",
+		MICME_PROCESS_AUDIO: "0",
+		MICME_VALIDATE_AUDIO: "0",
+		MICME_AUTO_SUBMIT: "0",
+		MICME_KEEP_AUDIO: "0",
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		const command = harness.commands.get("micme");
+		assert.ok(command);
+		try {
+			await command.handler("", harness.ctx);
+			assert.equal(harness.owner.getPhase(), "recording", JSON.stringify(harness.uiCalls));
+			await command.handler("", harness.ctx);
+			assert.equal(harness.owner.getPhase(), "idle");
+			assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "pasteToEditor"), [{ method: "pasteToEditor", value: "pulse clip transcript " }]);
+		} finally {
+			await emit(harness, "session_shutdown", { reason: "quit" });
+		}
+	});
 });
 
 test("clip auto-submit strips a C1 terminal string from the transcriber's file", { skip: process.platform === "win32" && "requires POSIX recorder and transcriber fixtures" }, async (t) => {

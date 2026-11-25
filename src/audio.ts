@@ -871,8 +871,8 @@ export function buildFfmpegRecorderArgs(inputFormat: string, input: string, audi
 		"-hide_banner",
 		"-loglevel",
 		"error",
-		"-thread_queue_size",
-		"4096",
+		// FFmpeg 9.1 rejects the queue option on PulseAudio input.
+		...(inputFormat === "pulse" ? [] : ["-thread_queue_size", "4096"]),
 		"-f",
 		inputFormat,
 		...(options.inputOptions ?? []),
