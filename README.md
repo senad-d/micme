@@ -181,7 +181,6 @@ You can also edit the JSON manually. Minimal `micme.json`:
   "MICME_TRANSLATE_TO_ENGLISH": "off",
   "MICME_TRANSCRIBE_BACKEND": "auto",
   "MICME_AUTO_DOWNLOAD_MODEL": "1",
-  "MICME_DEFAULT_WHISPER_CPP_MODEL": "small.en",
   "MICME_AUTO_SUBMIT": "0",
   "MICME_KEEP_AUDIO": "0"
 }
@@ -213,7 +212,7 @@ See [`micme.example.json`](micme.example.json) for the full JSON template.
 
 ## Live Dictation
 
-For English live dictation on a four-core CPU, try `base.en`. In a paced speech test, it showed the first relevant words in about 1.5 seconds and kept the visible draft relevant throughout all five runs at both terminal widths. The default `small.en` produced more accurate final text on that recording but fell behind while speech was in progress. Stream mode is experimental: these measurements used recorded speech, not a microphone. See [Models and Backends](#models-and-backends) to select a weight.
+In a paced speech test on a four-core CPU, `base.en` showed the first relevant words in about 1.5 seconds. All five runs at each terminal width passed the relevance check on the words visible while speaking; an occasional draft was still wrong. `small.en` produced more accurate final text on that recording but fell behind while speech was in progress. Stream mode is experimental: these measurements used recorded speech, not a microphone. See [Models and Backends](#models-and-backends) to select a weight.
 
 ### Set up or migrate
 
@@ -269,9 +268,9 @@ Live capture is a growing 16 kHz mono signed 16-bit little-endian PCM WAV. The b
 
 In clip mode, `MICME_TRANSCRIBE_BACKEND` accepts `whisper.cpp`, `python`, `custom`, or `auto`. The whisper.cpp clip backend uses `whisper-cli` or `whisper-cpp`, Python Whisper uses the `whisper` CLI with `MICME_WHISPER_MODEL`, and the custom backend uses `MICME_TRANSCRIBE_COMMAND`.
 
-For both the whisper.cpp clip backend and the live worker, `MICME_WHISPER_CPP_MODEL` selects a local model file. If it is unset, Micme resolves `ggml-<name>.bin` in `MICME_MODEL_DIR` using `MICME_DEFAULT_WHISPER_CPP_MODEL`. See [Model downloads](SECURITY.md#model-downloads) for weight sources and how to disable automatic downloads.
+For both the whisper.cpp clip backend and the live worker, `MICME_WHISPER_CPP_MODEL` selects a local model file. `MICME_DEFAULT_WHISPER_CPP_MODEL` overrides the model by name instead, resolving `ggml-<name>.bin` in `MICME_MODEL_DIR`. Leave both unset for the built-in defaults: `small.en` for clip (`small` for translation), `base.en` for English live dictation, and `base` for live language detection, non-English input, or translation. Saved model choices are not changed. See [Model downloads](SECURITY.md#model-downloads) for weight sources and how to disable automatic downloads.
 
-`small.en` is Micme's default whisper.cpp model. Translation uses Whisper's built-in translate task and requires compatible multilingual weights. When resolving by model name with translation enabled, Micme maps `.en` names to multilingual names (`small.en` → `small`, `base.en` → `base`) and maps `large-v3-turbo` to `large-v3`. Clip mode can resolve a corresponding sibling file for an explicit whisper.cpp path; stream mode keeps the explicit path and rejects known incompatible choices. In stream mode, known English-only weights use English for `MICME_LANGUAGE=auto` and reject other languages.
+Translation uses Whisper's built-in translate task and requires compatible multilingual weights. When resolving by model name with translation enabled, Micme maps `.en` names to multilingual names (`small.en` → `small`, `base.en` → `base`) and maps `large-v3-turbo` to `large-v3`. Clip mode can resolve a corresponding sibling file for an explicit whisper.cpp path; stream mode keeps the explicit path and rejects known incompatible choices. In stream mode, known English-only weights use English for `MICME_LANGUAGE=auto` and reject other languages.
 
 Advanced users can replace the recorder or clip transcriber. These are clip-mode examples:
 

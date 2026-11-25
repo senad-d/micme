@@ -315,7 +315,8 @@ async function writeLiveRecorderHook(path, options = {}) {
 	const initial = testWav(44 + 2 * (options.initialSamples ?? 490), options.initialFill ?? 0x12);
 	initial.writeUInt32LE(36, 4);
 	initial.writeUInt32LE(0, 40);
-	await writeFile(path, `import { appendFileSync, closeSync, existsSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
+	await writeFile(path, `import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
+import { dirname, join } from "node:path";
 const path = process.argv[2];
 const options = ${JSON.stringify(options)};
 writeFileSync(path, Buffer.from(${JSON.stringify(initial.toString("base64"))}, "base64"));
@@ -336,9 +337,17 @@ function stop() {
   if (options.mutate) original.fill(0x78, 44, 46);
   writeSync(fd, original, 0, options.mutate ? 46 : 44, 0);
   closeSync(fd);
-  if (options.replace) {
-    renameSync(path, path + ".original");
-    writeFileSync(path, original.fill(0x90, 44));
+  if (options.archiveAtStop) {
+    const archive = join(dirname(path), "archive", "session");
+    mkdirSync(archive, { recursive: true });
+    renameSync(path, join(archive, "original.wav"));
+  } else if (options.renameAtStop) renameSync(path, path + ".original");
+  if (options.renameAtStop === "replace") {
+    // Leave an unrelated valid WAV; for usable captures it is even the same size as the original.
+    const replacement = original.length < ${MIN_AUDIO_BYTES}
+      ? Buffer.from(${JSON.stringify(testWav(1024, 0x90).toString("base64"))}, "base64")
+      : original.fill(0x90, 44);
+    writeFileSync(path, replacement);
   }
   process.exit(0);
 }
@@ -2491,8 +2500,61 @@ test("stopping or shutting down one Pi session leaves the other recording clock 
 	);
 });
 
+async function assertKeptLiveAudio({ root, harness, micme }, expected) {
+	const recordings = join(root, "micme-rec");
+	const audioDir = join(recordings, "rec-001");
+	await micme("audio");
+	assert.deepEqual({ notice: harness.uiCalls.at(-1)?.message, directories: await readdir(recordings) }, {
+		notice: `Last Micme audio directory: ${audioDir}`,
+		directories: ["rec-001"],
+	});
+	const names = (await readdir(audioDir)).filter((name) => name === "raw.wav" || name === "raw.wav.original");
+	const retained = await Promise.all(names.map((name) => readFile(join(audioDir, name))));
+	assert.ok(retained.some((wav) => wav.equals(expected)), "the reported audio directory does not contain the original WAV, including the stop-time tail");
+}
+
+test("keep-audio retains the verified live WAV after a stop-time rename without replacement or refinement", { skip: process.platform === "win32" }, async (t) => {
+	const tail = [0x2a, 0x71];
+	await withLiveFixture(t, {
+		worker: ({ root }) => ({ sampleLog: join(root, "samples.log") }),
+		recorder: { initialSamples: 490, tail, renameAtStop: "rename" },
+		env: { MICME_KEEP_AUDIO: "1" },
+	}, async ({ root, harness, micme }) => {
+		await micme();
+		assert.equal(harness.owner.getPhase(), "streaming");
+		await micme();
+		assert.equal(harness.owner.getPhase(), "idle");
+		assert.equal((await readProcessRows(join(root, "samples.log"))).at(-1), "finish 491");
+		const expected = testWav(44 + 2 * 490 + tail.length, 0x12);
+		Buffer.from(tail).copy(expected, expected.length - tail.length);
+		await assertKeptLiveAudio({ root, harness, micme }, expected);
+	});
+});
+
+test("keep-audio reports the directory with the verified WAV archived by the recorder", { skip: process.platform === "win32" }, async (t) => {
+	const tail = [0x2a, 0x71];
+	await withLiveFixture(t, {
+		worker: ({ root }) => ({ sampleLog: join(root, "samples.log") }),
+		recorder: { initialSamples: 1599, tail, archiveAtStop: true, renameAtStop: "replace" },
+		env: { MICME_KEEP_AUDIO: "1" },
+	}, async ({ root, harness, micme }) => {
+		await micme();
+		await micme();
+		assert.equal((await readProcessRows(join(root, "samples.log"))).at(-1), "finish 1600");
+		await micme("audio");
+		const notice = harness.uiCalls.at(-1)?.message ?? "";
+		const prefix = "Last Micme audio directory: ";
+		assert.equal(notice, `${prefix}${join(root, "micme-rec", "rec-001")}`);
+		const expected = testWav(3244, 0x12);
+		Buffer.from(tail).copy(expected, expected.length - tail.length);
+		const reported = notice.slice(prefix.length);
+		assert.deepEqual(await readFile(join(reported, "archive", "session", "original.wav")), expected);
+		assert.notDeepEqual(await readFile(join(reported, "raw.wav")), expected);
+	});
+});
+
 for (const input of ["raw hook", "prefiltered hook", "built-in recorder"]) {
-	test(`refinement uses verified decoder-ready bytes without a second filter (${input})`, { skip: process.platform === "win32" }, async (t) => {
+	test(`refinement and keep-audio use verified decoder-ready bytes without a second filter (${input})`, { skip: process.platform === "win32" }, async (t) => {
 		const builtIn = input === "built-in recorder";
 		const useFilteredHook = input === "prefiltered hook";
 		const tail = [0x2a, 0x71, 0x4b, 0x01, 0x7f, 0x42];
@@ -2502,7 +2564,7 @@ for (const input of ["raw hook", "prefiltered hook", "built-in recorder"]) {
 			createRecorder: async ({ root }) => {
 				await writeFfmpegProcess(join(root, "ffmpeg"), { argsLog: join(root, "ffmpeg-args") });
 				if (!builtIn) return writeLiveRecorderHook(join(root, "recorder.mjs"), {
-					initialSamples, initialFill: useFilteredHook ? 0x24 : 0x12, tail, replace: true,
+					initialSamples, initialFill: useFilteredHook ? 0x24 : 0x12, tail, renameAtStop: "replace",
 				});
 			},
 			env: ({ root }) => ({
@@ -2539,13 +2601,31 @@ console.log("verified words");
 			} else {
 				assert.deepEqual(rows, [], "refinement must not preprocess hook audio");
 				assert.deepEqual(await readProcessRows(feedLog), ["2 16000", "2 16000", "1 9", "2 3", "finish 32012"]);
-				const stored = await readFile(join(root, "micme-rec", "rec-001", "raw.wav"));
-				assert.equal(stored.length, expected.length, "the substituted path deliberately has the exact same size");
-				assert.notDeepEqual(stored, expected);
 			}
+			await assertKeptLiveAudio({ root, harness, micme }, expected);
 		});
 	});
 }
+
+test("keep-audio does not accept a replacement WAV after an empty verified live capture", { skip: process.platform === "win32" }, async (t) => {
+	await withLiveFixture(t, {
+		worker: ({ root }) => ({ text: "", sampleLog: join(root, "samples.log") }),
+		recorder: { initialSamples: 0, renameAtStop: "replace" },
+		env: { MICME_KEEP_AUDIO: "1" },
+	}, async ({ root, harness, micme }) => {
+		const starting = micme();
+		await waitFor(() => harness.uiCalls.some((entry) => entry.value === "waiting for microphone samples…"), "no verified WAV reader");
+		await micme();
+		await starting;
+		assert.equal(harness.owner.getPhase(), "idle");
+		assert.deepEqual(await readProcessRows(join(root, "samples.log")), ["finish 0"]);
+		await micme("audio");
+		assert.deepEqual({ notice: harness.uiCalls.at(-1)?.message, directories: await readdir(join(root, "micme-rec")) }, {
+			notice: "No kept Micme audio yet. Set MICME_KEEP_AUDIO=1.",
+			directories: [],
+		});
+	});
+});
 
 test("digest mismatch keeps the confirmed transcript for explicit replay and never automatically sends it", { skip: process.platform === "win32" }, async (t) => {
 	await withLiveFixture(t, {

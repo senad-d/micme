@@ -3,7 +3,7 @@ import type { TranscribeBackend, TranscriptionMode, ResolvedTranscriptionPlan, R
 import { DEFAULT_TRANSCRIBE_BACKEND } from "./constants.ts";
 import { env, expandConfigPath, getTranscribeBackend, getTranslateToEnglishLanguage, isTranscribeBackend } from "./config.ts";
 import { getPythonWhisperModelName, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
-import { resolveLivePlan } from "./live-plan.ts";
+import { resolveLivePlanDetails } from "./live-plan.ts";
 import { findExecutable, isExecutableFile } from "./processes.ts";
 
 export type RequestedTranscribeBackend = TranscribeBackend | (string & Record<never, never>);
@@ -125,12 +125,8 @@ export function formatEffectiveBackendLabel(backend: ResolvedTranscriptionPlan["
 function projectLivePlan(override: RequestedTranscribeBackend | undefined): ResolvedTranscriptionPlan {
 	const warnings: string[] = [];
 	const requestedBackend = override === undefined ? getTranscribeBackend() : parseRequestedBackend(override, warnings);
-	if (override !== undefined && (requestedBackend === "python" || requestedBackend === "custom")) {
-		return nonePlan(requestedBackend, `Live streaming does not support the ${requestedBackend} backend. Choose clip mode to use it.`, warnings);
-	}
 	try {
-		const live = resolveLivePlan();
-		const model = resolveWhisperCppModel({ preserveExplicitPath: true });
+		const { live, model } = resolveLivePlanDetails(override === undefined ? undefined : requestedBackend);
 		const plan = whisperCppPlan(requestedBackend, live.binary, model, "selected micme-live for stream mode", warnings);
 		return { ...plan, modelPath: live.modelPath, live };
 	} catch (error) {

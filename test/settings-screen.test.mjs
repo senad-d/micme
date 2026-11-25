@@ -296,6 +296,32 @@ async function assertEffectiveLinuxSettings(root, config, shellOverride = false)
 	harness.component.handleInput("q");
 }
 
+test("stream settings show the installed default ASR model used in the worker argv", async (t) => {
+	await withTempAgent(t, async (root) => {
+		const modelDir = join(root, "models");
+		const liveDefault = join(modelDir, "ggml-base.en.bin");
+		await mkdir(modelDir);
+		await writeFile(liveDefault, "installed ASR fixture");
+		await writeFile(join(root, "micme.json"), JSON.stringify({
+			MICME_TRANSCRIPTION_MODE: "stream",
+			MICME_TRANSCRIBE_BACKEND: "auto",
+			MICME_LIVE_BIN: process.execPath,
+		}));
+
+		const harness = createHarness(root);
+		await openSettingsPane(harness, 1);
+		harness.component.handleInput("\x1b[B");
+		harness.component.handleInput("\x1b[B");
+		const rendered = harness.component.render(160).join("\n");
+		assert.match(rendered, /ASR model/);
+		assert.ok(rendered.includes(liveDefault), rendered);
+		assert.doesNotMatch(rendered, /small\.en|ASR model file is missing/);
+		const worker = buildLiveWorkerCommand(resolveTranscriptionPlan({ transcriptionMode: "stream" }).live);
+		assert.equal(worker.args[worker.args.indexOf("--model") + 1], liveDefault);
+		harness.component.handleInput("q");
+	});
+});
+
 test("settings show missing live components without suggesting they are ready", async (t) => {
 	await withTempAgent(t, async (root) => {
 		const bin = join(root, "bin");

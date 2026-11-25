@@ -43,6 +43,16 @@ function validHandle(handle: bigint | null): handle is bigint {
 
 type WindowsFileApi = Pick<ReturnType<typeof loadWindowsApi>, "open" | "lastError" | "fileType" | "information" | "fileSize" | "seek" | "read" | "close">;
 
+function readWindowsEntries(path: string) {
+	return readdir(path, { withFileTypes: true });
+}
+
+function windowsFileId(native: Pick<WindowsFileApi, "information">, handle: bigint) {
+	const id = Buffer.alloc(24); // FILE_ID_INFO: volume serial number and 128-bit file ID
+	if (native.information(handle, 18, id, id.length)) return id.toString("hex"); // FileIdInfo
+	throw new Error("Micme could not read a Windows recording file or directory identity.");
+}
+
 function readWindowsFile(read: ReturnType<ReturnType<typeof import("koffi").load>["func"]>, handle: bigint, bytes: Buffer, count: number) {
 	return new Promise<number>((resolve, reject) => {
 		const transferred = Buffer.alloc(4);
@@ -87,6 +97,10 @@ class WindowsRecordingFile implements VerifiedRecordingFile {
 		return this.handle;
 	}
 
+	identity() {
+		return windowsFileId(this.native, this.openedHandle());
+	}
+
 	size() {
 		const size = Buffer.alloc(8);
 		if (!this.native.fileSize(this.openedHandle(), size)) throw new Error("Windows could not read the live recording size.");
@@ -111,13 +125,14 @@ class WindowsRecordingFile implements VerifiedRecordingFile {
 
 export class WindowsRecordingDirectory {
 	private readonly api: ReturnType<typeof loadWindowsApi>;
+	private readonly readEntries: typeof readWindowsEntries;
 	private handle: bigint | undefined;
 	readonly path: string;
 	private readonly parent?: WindowsRecordingDirectory;
 
-	constructor(path: string, parent?: WindowsRecordingDirectory) {
-		api ??= loadWindowsApi();
-		this.api = api;
+	constructor(path: string, parent?: WindowsRecordingDirectory, native = parent?.api ?? (api ??= loadWindowsApi()), readEntries = parent?.readEntries ?? readWindowsEntries) {
+		this.api = native;
+		this.readEntries = readEntries;
 		this.path = path;
 		this.parent = parent;
 		// No sharing for delete or write: a different handle cannot rename this
@@ -155,6 +170,35 @@ export class WindowsRecordingDirectory {
 		return openVerifiedWindowsFile(win32.join(this.path, name), this.api);
 	}
 
+	async containsFile(identity: string): Promise<boolean> {
+		if (this.handle === undefined) throw new Error("Micme's Windows recording directory lock is closed.");
+		const entries = await this.readEntries(this.path);
+		for (const entry of entries) {
+			if (!entry.name || entry.name === "." || entry.name === ".." || /[\\/:\0]/.test(entry.name)) {
+				throw new Error("Micme refused to inspect an invalid recording directory entry.");
+			}
+			if (entry.isDirectory()) {
+				// Verify and lock every directory in the chain before enumerating its
+				// path. The native open rejects junctions, mounts and reparse points.
+				const child = this.openDirectory(entry.name);
+				try {
+					if (await child.containsFile(identity)) return true;
+				} finally {
+					child.closeOnly();
+				}
+			} else if (entry.isFile()) {
+				const file = this.openVerifiedFile(entry.name);
+				if (!file) continue;
+				try {
+					if (file.identity() === identity) return true;
+				} finally {
+					file.close();
+				}
+			}
+		}
+		return false;
+	}
+
 	openDirectory(name: string) {
 		return new WindowsRecordingDirectory(win32.join(this.path, name), this);
 	}
@@ -164,7 +208,7 @@ export class WindowsRecordingDirectory {
 	}
 
 	async listDirectories() {
-		const entries = await readdir(this.path, { withFileTypes: true });
+		const entries = await this.readEntries(this.path);
 		return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 	}
 
@@ -182,11 +226,11 @@ export class WindowsRecordingDirectory {
 		const reference: bigint | null = this.api.reopen(this.handle, FILE_READ_ATTRIBUTES, FILE_SHARE_ALL, OPEN_DIRECTORY_NO_REPARSE);
 		if (!validHandle(reference)) throw new Error(`Micme could not retain the recording directory identity: ${this.path}.`);
 		try {
-			const expectedId = this.fileId(reference);
+			const expectedId = windowsFileId(this.api, reference);
 			this.closeOnly();
 			const removal = this.open(FILE_READ_ATTRIBUTES | DELETE);
 			try {
-				if (!this.fileId(removal).equals(expectedId)) throw new Error(`Micme refused to remove a recording directory whose identity changed: ${this.path}.`);
+				if (windowsFileId(this.api, removal) !== expectedId) throw new Error(`Micme refused to remove a recording directory whose identity changed: ${this.path}.`);
 				if (!this.api.setInformation(removal, 4, Buffer.from([1]), 1)) { // FileDispositionInfo
 					throw new Error(`Windows refused to remove the owned Micme recording directory: ${this.path}.`);
 				}
@@ -204,12 +248,6 @@ export class WindowsRecordingDirectory {
 			FILE_SHARE_READ, null, OPEN_EXISTING, OPEN_DIRECTORY_NO_REPARSE, null);
 		if (validHandle(handle)) return handle;
 		throw new Error(`Micme could not lock its recording directory: ${this.path}.`);
-	}
-
-	private fileId(handle: bigint) {
-		const id = Buffer.alloc(24); // FILE_ID_INFO: volume serial number and 128-bit file ID
-		if (this.api.information(handle, 18, id, id.length)) return id; // FileIdInfo
-		throw new Error(`Micme could not read the recording directory identity: ${this.path}.`);
 	}
 
 	close() {

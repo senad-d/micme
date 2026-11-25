@@ -824,7 +824,7 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 	const plan = resolveTranscriptionPlan({ transcriptionMode: mode });
 	const streamPlan = mode === "stream" ? plan : resolveTranscriptionPlan({ transcriptionMode: "stream" });
 	const live = streamPlan.live;
-	const model = resolveWhisperCppModel({ preserveExplicitPath: mode === "stream" });
+	const model = resolveWhisperCppModel({ transcriptionMode: mode });
 	const currentModelPath = plan.live?.modelPath ?? model.path;
 	const configuredWorker = env("MICME_LIVE_BIN")?.trim();
 	const workerPath = live?.binary ?? (configuredWorker ? expandConfigPath(configuredWorker) : "micme-live (PATH default)");

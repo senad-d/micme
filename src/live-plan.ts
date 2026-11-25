@@ -2,30 +2,34 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { resolveExecutableConfig } from "./backends.ts";
-import { env, getStreamFinalizeWithClip, getTranslateToEnglishLanguage } from "./config.ts";
+import { env, getLiveSpeechLanguage, getStreamFinalizeWithClip, getTranslateToEnglishLanguage } from "./config.ts";
 import { DEFAULT_TRANSCRIBE_BACKEND } from "./constants.ts";
 import { ensureWhisperCppModel, ensureWhisperVadModel, getWhisperVadModelPath, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
+import type { LivePlan } from "./types.ts";
 
 export function resolveLivePlan() {
-	const backend = env("MICME_TRANSCRIBE_BACKEND")?.trim() || DEFAULT_TRANSCRIBE_BACKEND;
+	return resolveLivePlanDetails().live;
+}
+
+export function resolveLivePlanDetails(backend = env("MICME_TRANSCRIBE_BACKEND")?.trim() || DEFAULT_TRANSCRIBE_BACKEND) {
 	if (backend !== "auto" && backend !== "whisper.cpp") {
 		throw new Error(`Live streaming requires MICME_TRANSCRIBE_BACKEND=auto or whisper.cpp (not ${backend}). Choose clip mode to use another backend.`);
 	}
 
 	const binary = resolveLiveBinary();
-	const model = resolveWhisperCppModel({ preserveExplicitPath: true });
+	const model = resolveWhisperCppModel({ transcriptionMode: "stream" });
 	const translationSource = getTranslateToEnglishLanguage();
 	const translate = translationSource !== undefined;
-	const language = (translationSource ?? env("MICME_LANGUAGE")?.trim() ?? "").toLowerCase() || "en";
-	return {
+	const live: LivePlan = {
 		binary,
 		modelPath: resolve(model.path),
 		vadModelPath: getWhisperVadModelPath(),
-		language: resolveLiveLanguage(language, translate, model.modelName),
+		language: resolveLiveLanguage(getLiveSpeechLanguage(translationSource), translate, model.modelName),
 		translate,
 		finalizeWithClip: getStreamFinalizeWithClip(),
 	};
+	return { live, model };
 }
 
 export async function ensureLiveModels(plan: ReturnType<typeof resolveLivePlan>, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {

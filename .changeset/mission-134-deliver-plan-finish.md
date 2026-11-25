@@ -2,4 +2,4 @@
 "@senad-d/micme": major
 ---
 
-Live dictation now shows replaceable drafts while you speak; existing stream users must install micme-live and its speech-detection model and select their recorder input instead of an SDL device.
+Stream mode replaces whisper-stream with micme-live and VAD weights, defaults to base.en for English live drafts, and requires existing stream users to migrate; clip mode retains its previous model default.

@@ -323,6 +323,10 @@ export function getTranslateToEnglishLanguage() {
 	return value;
 }
 
+export function getLiveSpeechLanguage(translationSource = getTranslateToEnglishLanguage()) {
+	return (translationSource ?? env("MICME_LANGUAGE")?.trim() ?? "").toLowerCase() || "en";
+}
+
 export function getTranscribeBackend(): TranscribeBackend {
 	return parseConfiguredChoice(env("MICME_TRANSCRIBE_BACKEND")?.trim(), TRANSCRIBE_BACKENDS, DEFAULT_TRANSCRIBE_BACKEND);
 }

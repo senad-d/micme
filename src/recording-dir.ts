@@ -4,7 +4,7 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import { PosixDirectory } from "./posix-directory.ts";
+import { posixFileIdentity, PosixDirectory } from "./posix-directory.ts";
 import { cleanup } from "./processes.ts";
 import { WindowsRecordingDirectory } from "./windows-recording-dir.ts";
 
@@ -18,6 +18,7 @@ const EXCLUSIVE_FILE_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.
 const readAt = promisify(read);
 
 export interface VerifiedRecordingFile {
+	identity(): string;
 	size(): number;
 	readAt(bytes: Buffer, offset: number): Promise<number>;
 	close(): void;
@@ -28,6 +29,8 @@ type DirectoryAccess = {
 	cwdFd?: number;
 	openFile?: (name: string, flags: number) => number;
 	openVerifiedFile: (name: string) => VerifiedRecordingFile | undefined;
+	containsFile: (identity: string) => Promise<boolean>;
+	verifiedDisplayPath: () => string | undefined;
 	createPrivateFile: (name: string) => number;
 	remove: () => Promise<void>;
 	close: () => void;
@@ -53,6 +56,14 @@ export class RecordingDirectory {
 
 	openVerifiedFile(path: string) {
 		return this.liveAccess().openVerifiedFile(recordingFileName(path));
+	}
+
+	containsVerifiedFile(file: VerifiedRecordingFile) {
+		return this.liveAccess().containsFile(file.identity());
+	}
+
+	verifiedDisplayPath() {
+		return this.liveAccess().verifiedDisplayPath();
 	}
 
 	createPrivateFile(path: string) {
@@ -172,11 +183,14 @@ async function createPosixLiveTempDirectory(prefix: string) {
 
 function createPosixLeaf(root: PosixDirectory, parent: string, name: string) {
 	const leaf = root.openDirectory(name);
-	return new RecordingDirectory(join(parent, name), {
+	const path = join(parent, name);
+	return new RecordingDirectory(path, {
 		filesPath: leaf.procPath ?? ".",
 		cwdFd: leaf.procPath ? undefined : leaf.fd,
 		openFile: leaf.openFile.bind(leaf),
 		openVerifiedFile: (file) => openVerifiedPosixFile(leaf, file),
+		containsFile: leaf.containsFile.bind(leaf),
+		verifiedDisplayPath: () => leaf.isAt(path) ? path : undefined,
 		createPrivateFile: (file) => leaf.openFile(file, EXCLUSIVE_FILE_FLAGS | constants.O_NOFOLLOW, PRIVATE_FILE_MODE),
 		remove: () => removePosixRecording(root, name, leaf),
 		close: () => closePosixRecording(root, leaf),
@@ -210,6 +224,10 @@ class PosixRecordingFile implements VerifiedRecordingFile {
 	private descriptor() {
 		if (this.fd === undefined) throw new Error("Micme's live recording file is closed.");
 		return this.fd;
+	}
+
+	identity() {
+		return posixFileIdentity(fstatSync(this.descriptor(), { bigint: true }));
 	}
 
 	size() {
@@ -307,6 +325,9 @@ function windowsLeaf(path: string, leaf: WindowsRecordingDirectory) {
 	return new RecordingDirectory(path, {
 		filesPath: leaf.path,
 		openVerifiedFile: leaf.openVerifiedFile.bind(leaf),
+		containsFile: leaf.containsFile.bind(leaf),
+		// Report the locked physical path, not a workspace alias that may have changed.
+		verifiedDisplayPath: () => leaf.path,
 		// Create a new file exclusively under the locked directory; this is
 		// never the path used to read or verify a recorder-created leaf.
 		createPrivateFile: (name) => openSync(join(leaf.path, name), EXCLUSIVE_FILE_FLAGS, PRIVATE_FILE_MODE),

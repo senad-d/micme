@@ -133,7 +133,7 @@ async function main() {
 
   const transcriptionMode = getTranscriptionMode();
   info("transcription mode", transcriptionMode);
-  const whisperCppModel = resolveWhisperCppModel({ preserveExplicitPath: transcriptionMode === "stream" });
+  const whisperCppModel = resolveWhisperCppModel({ transcriptionMode });
   printWhisperCppModelDiagnostics(whisperCppModel);
 
   const whisper = getPythonWhisperBinary();

@@ -348,7 +348,7 @@ Depends on: Task 6. Create `test/live-native-quality.mjs` (not a default `.test.
 
 - Work kinds: **bug**, **feature**, **hardening** (recognition cost/latency), **interface**. This is one delivery for an existing extension, not a new app or a change to Pi/runtime versions.
 - Choose the user's live-during-speech option: one local resident decoder plus acoustic speech detection. Reject both pause-only phrase batching and a legacy output-parser patch: neither can deliver correctable feedback from the configured microphone throughout continuous speech.
-- Start from the current `small.en` choice and compare `base.en` on the same signal. A larger model can still hallucinate on silence; published benchmark speeds do not establish local dictation accuracy. No cloud fallback or new accounts.
+- The native comparison started from `small.en` and tested `base.en` on the same signal. After the [reference-host results](../../test/live-native/results.md), the release requirement changed: unconfigured English live dictation must select `base.en`, and live dictation requiring a multilingual model must select `base`. This supersedes the original decision to retain the live default, not the frozen evaluation inputs or thresholds. Preserve explicit model-file and named-model overrides, shell precedence and the `small.en` clip default; settings and doctor must report the model the worker will actually load. No cloud fallback or new accounts.
 - Use an explicit worker build/install, not a mandatory install script, a local HTTP service or a binary release pipeline. Optional clip refinement is retained, but cannot count as proof of working live recognition.
 
 ## Open questions

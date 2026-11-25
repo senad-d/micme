@@ -220,6 +220,28 @@ test("stream doctor and runtime agree on worker and weights, but doctor only pro
 	for (const binary of [legacy, clip, recorder]) await assert.rejects(access(`${binary}.args`), { code: "ENOENT" });
 });
 
+test("stream doctor reports the installed runtime default instead of the clip model", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-live-default-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const modelDir = join(root, "models");
+	const modelPath = join(modelDir, "ggml-base.en.bin");
+	await mkdir(modelDir);
+	await writeFile(modelPath, "cached ASR fixture");
+	await createLoggedCommand(join(root, "micme-live"), 1);
+	const environment = { ...isolatedEnvironment(root, root), MICME_TRANSCRIPTION_MODE: "stream", MICME_MODEL_DIR: modelDir };
+	const runtime = runRuntimeProbe(environment);
+	const doctor = runNode(["--import", noDownload, "scripts/doctor.mjs"], environment);
+
+	assert.equal(getDoctorField(doctor, "effective model path"), modelPath);
+	assert.equal(getDoctorField(doctor, "effective model name"), "base.en");
+	assert.equal(getDoctorField(doctor, "effective model source"), "default-name");
+	assert.equal(runtime.plan.modelPath, modelPath);
+	assert.equal(runtime.plan.modelName, "base.en");
+	assert.equal(runtime.worker.args[runtime.worker.args.indexOf("--model") + 1], modelPath);
+	assert.ok(doctor.split(/\r?\n/).includes(`✓ resolved whisper.cpp model: ${modelPath}`), doctor);
+	assert.doesNotMatch(doctor, /^! resolved whisper\.cpp model is missing:/m);
+});
+
 test("stream doctor and runtime reject SDL-only installs without launching whisper-stream", { skip: process.platform === "win32" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-doctor-sdl-only-"));
 	t.after(() => rm(root, { recursive: true, force: true }));

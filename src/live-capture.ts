@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { buildLiveRecorderSpec, LIVE_CAPTURE_RATE } from "./audio.ts";
 import { getTranscribeTimeoutMs } from "./config.ts";
+import { MIN_AUDIO_BYTES } from "./constants.ts";
 import type { RecordingDirectory, VerifiedRecordingFile } from "./recording-dir.ts";
 import type { CommandSpec } from "./types.ts";
 
@@ -21,6 +22,7 @@ const writeAt = promisify(write);
 export interface LivePcmReader {
 	read(final: boolean): Promise<{ pcm: Buffer; availableThrough: number }>;
 	writeRefinementInput(target: RecordingDirectory, acknowledgedThrough: number, signal: AbortSignal): Promise<string>;
+	hasRetainableCapture(): Promise<boolean>;
 	close(): void;
 }
 
@@ -218,6 +220,13 @@ class HeldLivePcm implements LivePcmReader {
 		if (this.layout && this.layout.dataOffset !== layout.dataOffset) throw invalidWav("the WAV data offset changed during recording");
 		checkFinalLength(layout, size);
 		return layout;
+	}
+
+	async hasRetainableCapture() {
+		const dataOffset = this.finalLayout?.dataOffset ?? this.layout?.dataOffset ?? 0;
+		if (this.finalThrough === 0 || this.file.size() < Math.max(MIN_AUDIO_BYTES, dataOffset + SAMPLE_BYTES)) return false;
+		// Retention consults the still-held identity, not whatever now occupies raw.wav.
+		return this.source.containsVerifiedFile(this.file);
 	}
 
 	async writeRefinementInput(target: RecordingDirectory, acknowledgedThrough: number, signal: AbortSignal) {

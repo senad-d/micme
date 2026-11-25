@@ -61,7 +61,8 @@ test("the npm-installed micme-doctor runs without type stripping and probes Work
 	for (const line of [
 		"- transcription mode: stream",
 		`- live worker binary: ${worker}`,
-		`! resolved whisper.cpp model is missing: ${join(models, "ggml-small.en.bin")}`,
+		`! resolved whisper.cpp model is missing: ${join(models, "ggml-base.en.bin")}`,
+		"- effective model name: base.en",
 		`! live VAD weights not present as a regular file: ${join(models, "vad", "ggml-silero-v5.1.2.bin")}`,
 		"✓ live worker protocol: Worker v1 available; model readiness and capture not tested",
 	]) assert.ok(lines.includes(line), output);

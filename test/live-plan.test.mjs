@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
 
+import { resolveTranscriptionPlan } from "../src/backends.ts";
 import { reloadMicmeConfig } from "../src/config.ts";
 import { ensureLiveModels, resolveLivePlan } from "../src/live-plan.ts";
 import { ensureWhisperCppModel } from "../src/models.ts";
@@ -55,7 +56,7 @@ async function writeExecutable(root, name) {
 	return path;
 }
 
-test("live resolution selects micme-live over SDL without downloading or writing", async (t) => {
+test("unconfigured English live resolution selects micme-live and base.en without downloading or writing", async (t) => {
 	const { root, modelDir } = await setupLiveConfig(t);
 	const binary = await writeExecutable(root, "micme-live");
 	await writeExecutable(root, "whisper-stream");
@@ -64,7 +65,7 @@ test("live resolution selects micme-live over SDL without downloading or writing
 	const plan = resolveLivePlan();
 	assert.deepEqual(plan, {
 		binary,
-		modelPath: join(modelDir, "ggml-small.en.bin"),
+		modelPath: join(modelDir, "ggml-base.en.bin"),
 		vadModelPath: join(modelDir, "vad", "ggml-silero-v5.1.2.bin"),
 		language: "en",
 		translate: false,
@@ -73,6 +74,43 @@ test("live resolution selects micme-live over SDL without downloading or writing
 	setEnv({ MICME_MODEL_DIR: modelDir });
 	assert.deepEqual(resolveLivePlan(), plan);
 	assert.deepEqual(await readdir(root), before);
+});
+
+test("unconfigured non-English live resolution selects multilingual base", async (t) => {
+	const { root, modelDir } = await setupLiveConfig(t, { MICME_LANGUAGE: "de" });
+	await writeExecutable(root, "micme-live");
+	const live = resolveLivePlan();
+	assert.equal(live.modelPath, join(modelDir, "ggml-base.bin"));
+	assert.equal(live.language, "de");
+	assert.equal(live.translate, false);
+});
+
+test("live language detection defaults to multilingual weights and keeps auto detection enabled", async (t) => {
+	const { root, modelDir } = await setupLiveConfig(t, { MICME_LANGUAGE: "AUTO" });
+	await writeExecutable(root, "micme-live");
+	const live = resolveLivePlan();
+	assert.equal(live.modelPath, join(modelDir, "ggml-base.bin"));
+	assert.equal(live.language, "auto");
+});
+
+test("changing live defaults leaves the unconfigured English clip model at small.en", async (t) => {
+	const { root, modelDir } = await setupLiveConfig(t);
+	const binary = await writeExecutable(root, "whisper-cli");
+	const plan = resolveTranscriptionPlan({ transcriptionMode: "clip", requestedBackend: "whisper.cpp", whisperCppBinary: binary });
+	assert.equal(plan.effectiveBackend, "whisper.cpp");
+	assert.equal(plan.modelPath, join(modelDir, "ggml-small.en.bin"));
+	assert.equal(plan.modelName, "small.en");
+	assert.equal(plan.modelSource, "default-name");
+});
+
+test("explicit live model names override the mode default and honor shell precedence", async (t) => {
+	const { root, modelDir } = await setupLiveConfig(t, { MICME_DEFAULT_WHISPER_CPP_MODEL: "tiny.en" });
+	await writeExecutable(root, "micme-live");
+	assert.equal(resolveLivePlan().modelPath, join(modelDir, "ggml-tiny.en.bin"));
+	setEnv({ MICME_DEFAULT_WHISPER_CPP_MODEL: "medium.en" });
+	assert.equal(resolveLivePlan().modelPath, join(modelDir, "ggml-medium.en.bin"));
+	setEnv({ MICME_WHISPER_CPP_MODEL: join(root, "ggml-small.en.bin") });
+	assert.equal(resolveLivePlan().modelPath, join(root, "ggml-small.en.bin"));
 });
 
 test("live resolution expands JSON paths, then takes explicit environment overrides", async (t) => {
@@ -155,19 +193,23 @@ test("a non-English language is incompatible with known English-only live weight
 	assert.throws(resolveLivePlan, /base\.en-q5_1.*English-only.*MICME_LANGUAGE.*multilingual/i);
 });
 
-test("translation takes the source language and maps named weights to translate-capable choices", async (t) => {
+test("live translation defaults to multilingual base using the translation source language", async (t) => {
 	const { root, modelDir } = await setupLiveConfig(t);
 	const binary = await writeExecutable(root, "micme-live");
 	setEnv({ MICME_TRANSCRIBE_BACKEND: "whisper.cpp", MICME_LANGUAGE: "en", MICME_TRANSLATE_TO_ENGLISH: "HR" });
 	assert.deepEqual(resolveLivePlan(), {
 		binary,
-		modelPath: join(modelDir, "ggml-small.bin"),
+		modelPath: join(modelDir, "ggml-base.bin"),
 		vadModelPath: join(modelDir, "vad", "ggml-silero-v5.1.2.bin"),
 		language: "hr",
 		translate: true,
 		finalizeWithClip: false,
 	});
-	setEnv({ MICME_DEFAULT_WHISPER_CPP_MODEL: "large-v3-turbo" });
+});
+
+test("live translation maps explicitly named weights to translate-capable choices", async (t) => {
+	const { root, modelDir } = await setupLiveConfig(t, { MICME_TRANSLATE_TO_ENGLISH: "hr", MICME_DEFAULT_WHISPER_CPP_MODEL: "large-v3-turbo" });
+	await writeExecutable(root, "micme-live");
 	assert.equal(resolveLivePlan().modelPath, join(modelDir, "ggml-large-v3.bin"));
 });
 
@@ -187,7 +229,7 @@ test("explicit ensure provisions the resolved ASR and uses the resolved local VA
 	await writeExecutable(root, "micme-live");
 	const plan = resolveLivePlan();
 	const fetch = t.mock.method(globalThis, "fetch", async (url) => {
-		assert.match(url, /\/ggml-small\.en\.bin$/);
+		assert.match(url, /\/ggml-base\.en\.bin$/);
 		return new Response("ASR fixture");
 	});
 	const ctx = { ui: { setStatus() {}, notify() {} } };

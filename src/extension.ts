@@ -55,7 +55,7 @@ type LiveSession = {
 	lastPcmAt: number;
 	stopping: boolean;
 };
-type KeptAudio = { note: string; path: string; directory: RecordingDirectory };
+type KeptAudio = { note: string; path?: string; directory: RecordingDirectory };
 type AudioOutcome = "delivered" | "failed" | "shutdown";
 export type MicmeOperationPhase = "idle" | "starting" | "recording" | "streaming" | "stopping" | "transcribing" | "finalizing" | "shutting_down";
 
@@ -198,7 +198,6 @@ export class MicmeSessionOwner {
 		active.phase = "shutting_down";
 		clearLiveDraft(active);
 		active.controller.abort();
-		active.live?.reader?.close();
 		await stopOwnedProcesses(active);
 		if (phaseAtShutdown !== "starting" && completion) await raceWithTimeout(completion, 2_000);
 		await stopOwnedProcesses(active);
@@ -206,8 +205,8 @@ export class MicmeSessionOwner {
 		await settleRecordedAudio(this, active, "shutdown");
 		// Late startup/finalization can still own a borrowed fd or be allocating a
 		// directory. Do not recycle its descriptor while that work is in flight.
-		if (completion) void completion.then(() => closeOwnedDirectories(active));
-		else closeOwnedDirectories(active);
+		if (completion) void completion.then(() => closeRecordingResources(active));
+		else closeRecordingResources(active);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		this.recordingWidget.clear(ctx);
 		await pendingSessionWork;
@@ -291,7 +290,7 @@ export class MicmeSessionOwner {
 			if (!this.isCurrent(operation)) return;
 			notifyExtensionError(operation.context, reportedError);
 			this.finish(operation);
-			closeOwnedDirectories(operation);
+			closeRecordingResources(operation);
 		} finally {
 			if (operation.completion === work) operation.completion = undefined;
 		}
@@ -300,7 +299,6 @@ export class MicmeSessionOwner {
 	private async cleanupFailedRecordingStart(operation: MicmeOperation, error: unknown) {
 		this.recordingWidget.clear(operation.context);
 		clearLiveDraft(operation);
-		operation.live?.reader?.close();
 		await stopOwnedProcesses(operation);
 		await operation.live?.pump;
 		return withKeptAudio(recordingError(operation, error), await settleRecordedAudio(this, operation, "failed"));
@@ -321,7 +319,7 @@ export class MicmeSessionOwner {
 			if (operation.completion === work) operation.completion = undefined;
 			if (this.isCurrent(operation)) {
 				this.finish(operation);
-				closeOwnedDirectories(operation);
+				closeRecordingResources(operation);
 			}
 		}
 	}
@@ -523,7 +521,6 @@ async function startLiveCapture(owner: MicmeSessionOwner, operation: MicmeOperat
 		if (first) live.pump = pumpLivePcm(live, reader, first).catch((error: unknown) => worker.fail(error));
 		return active;
 	} catch (error) {
-		live.reader?.close();
 		throw worker.failure ?? error;
 	} finally {
 		clearTimeout(timer);
@@ -630,7 +627,6 @@ async function stopStreamingTranscription(
 			} catch (error) {
 				if (!owner.isCurrent(operation)) return;
 				owner.rememberTranscript(operation, live.transcript.text);
-				reader.close();
 				const kept = await settleRecordedAudio(owner, operation, "failed");
 				const message = sanitizeTerminalOutput(withKeptAudio(error, kept).message);
 				ctx.ui.notify(`Micme saved the confirmed live transcript for /micme last because final clip refinement failed: ${message}`, "warning");
@@ -641,11 +637,8 @@ async function stopStreamingTranscription(
 		worker.fail(error);
 		await stopOwnedProcesses(operation);
 		await live.pump;
-		reader?.close();
 		if (!owner.isCurrent(operation)) return;
 		throw withKeptAudio(recordingError(operation, error), await settleRecordedAudio(owner, operation, "failed"));
-	} finally {
-		reader?.close();
 	}
 
 	if (!owner.isCurrent(operation)) return;
@@ -706,32 +699,46 @@ async function refineLiveTranscript(operation: MicmeOperation, reader: LivePcmRe
 // The one place that decides what happens to recorded audio when an operation ends:
 // - failed: keep captured audio so the failure can be debugged; the caller says where.
 // - delivered or shutdown: keep captured audio only when Keep audio is on.
-// Captured means at least MIN_AUDIO_BYTES, so a header-only WAV is not kept.
 async function settleRecordedAudio(owner: MicmeSessionOwner, operation: MicmeOperation, outcome: AudioOutcome) {
-	const kept = outcome === "failed" || operation.keepAudio ? findCapturedAudio(operation) : undefined;
-	if (kept) owner.rememberAudioDirectory(operation, kept.path);
+	const kept = outcome === "failed" || operation.keepAudio ? await findCapturedAudio(operation, outcome) : undefined;
+	if (kept?.path) owner.rememberAudioDirectory(operation, kept.path);
+	// Leave the reader open through retention checks, but release its handle before deleting the spool.
+	if (!kept) operation.live?.reader?.close();
 	const removable = [...operation.directories].filter((directory) => directory !== kept?.directory);
 	await Promise.all(removable.map((directory) => cleanupRecordingDirectory(owner, operation, directory)));
 	return kept;
 }
 
-function findCapturedAudio(operation: MicmeOperation): KeptAudio | undefined {
-	const clip = operation.primary;
-	if (!clip?.directory) return;
-	const { directory } = clip;
+async function findCapturedAudio(operation: MicmeOperation, outcome: AudioOutcome): Promise<KeptAudio | undefined> {
+	const recording = operation.primary;
+	if (!recording?.directory) return;
+	const { directory } = recording;
+	const { live } = operation;
 	try {
-		if (!directory.hasRegularFile(clip.audioPath, MIN_AUDIO_BYTES)) return;
+		if (live?.reader) {
+			if (!await live.reader.hasRetainableCapture()) return;
+		} else {
+			// Preserve the existing partial-file diagnostic for recorder startup failures before a reader was acquired.
+			if (live && outcome !== "failed") return;
+			if (!directory.hasRegularFile(recording.audioPath, MIN_AUDIO_BYTES)) return;
+		}
+		const path = live ? directory.verifiedDisplayPath() : directory.path;
+		return path
+			? { note: "Audio kept for debugging", path, directory }
+			: { note: "Micme left the recording directory untouched but could not confirm its location.", directory };
 	} catch {
 		// Failed inspection is not proof that the directory is safe to delete.
-		return { note: "Audio may remain in", path: directory.path, directory };
+		return live
+			? { note: "Micme left the recording directory untouched but could not verify retained audio.", directory }
+			: { note: "Audio may remain in", path: directory.path, directory };
 	}
-	return { note: "Audio kept for debugging", path: directory.path, directory };
 }
 
 function withKeptAudio(error: unknown, kept: KeptAudio | undefined) {
 	const message = error instanceof Error ? error.message : String(error);
 	if (!kept) return error instanceof Error ? error : new Error(message);
-	return new Error(`${message}\n${kept.note}: ${sanitizeTerminalOutput(kept.path)}`, { cause: error });
+	const note = kept.path ? `${kept.note}: ${sanitizeTerminalOutput(kept.path)}` : kept.note;
+	return new Error(`${message}\n${note}`, { cause: error });
 }
 
 function recordingError(operation: MicmeOperation, error: unknown) {
@@ -782,7 +789,8 @@ async function stopOwnedProcesses(operation: MicmeOperation) {
 	await Promise.all([...operation.processes].map((active) => stopProcess(active).catch(() => undefined)));
 }
 
-function closeOwnedDirectories(operation: MicmeOperation) {
+function closeRecordingResources(operation: MicmeOperation) {
+	operation.live?.reader?.close();
 	for (const directory of operation.directories) directory.close();
 	operation.directories.clear();
 }
@@ -792,9 +800,13 @@ async function cleanupRecordingDirectory(owner: MicmeSessionOwner, operation: Mi
 		await directory.remove();
 	} catch (error) {
 		if (!owner.isCurrent(operation)) return;
-		owner.rememberAudioDirectory(operation, directory.path);
 		const message = sanitizeTerminalOutput(error instanceof Error ? error.message : String(error)) || "unknown error";
-		operation.context.ui.notify(`Micme could not clean up the recording directory: ${message}\nAudio may remain in: ${sanitizeTerminalOutput(directory.path)}`, "warning");
+		let detail = "";
+		if (!operation.live) {
+			owner.rememberAudioDirectory(operation, directory.path);
+			detail = `\nAudio may remain in: ${sanitizeTerminalOutput(directory.path)}`;
+		}
+		operation.context.ui.notify(`Micme could not clean up the recording directory: ${message}${detail}`, "warning");
 	}
 }
 

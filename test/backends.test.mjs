@@ -286,6 +286,33 @@ test("stream mode projects the same unsupported-backend error as the live resolv
 	}
 });
 
+for (const requestedBackend of ["auto", "whisper.cpp"]) {
+	test(`an explicit ${requestedBackend} stream request overrides configured Python`, () => {
+		withEnv({
+			MICME_TRANSCRIBE_BACKEND: "python",
+			MICME_LIVE_BIN: process.execPath,
+			MICME_WHISPER_CPP_MODEL: join(tmpdir(), "stream-override-model.bin"),
+		}, () => {
+			const plan = resolveTranscriptionPlan({ transcriptionMode: "stream", requestedBackend });
+			assert.equal(plan.requestedBackend, requestedBackend);
+			assert.equal(plan.effectiveBackend, "whisper.cpp", plan.reason);
+			assert.equal(plan.live?.binary, process.execPath);
+		});
+	});
+}
+
+test("an explicit clip-only backend is rejected even when the configured stream backend works", () => {
+	withEnv({ MICME_TRANSCRIBE_BACKEND: "auto", MICME_LIVE_BIN: process.execPath }, () => {
+		assert.equal(resolveTranscriptionPlan({ transcriptionMode: "stream" }).effectiveBackend, "whisper.cpp");
+		for (const requestedBackend of ["python", "custom"]) {
+			const plan = resolveTranscriptionPlan({ transcriptionMode: "stream", requestedBackend });
+			assert.equal(plan.requestedBackend, requestedBackend);
+			assert.equal(plan.effectiveBackend, "none");
+			assert.match(plan.reason, /choose clip mode/i);
+		}
+	});
+});
+
 test("stream selects the shared live plan instead of any of the installed clip backends", () => {
 	withEnv({
 		MICME_TRANSCRIBE_BACKEND: "auto",

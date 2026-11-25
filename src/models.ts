@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { finished } from "node:stream/promises";
 import {
+	DEFAULT_LIVE_WHISPER_MODEL_NAME,
 	DEFAULT_PYTHON_WHISPER_MODEL_NAME,
 	DEFAULT_WHISPER_CPP_MODEL_NAME,
 	MODEL_DOWNLOAD_INACTIVITY_TIMEOUT_MS,
@@ -16,10 +17,10 @@ import {
 	WHISPER_CPP_MODEL_NAMES,
 	WHISPER_VAD_MODEL,
 } from "./constants.ts";
-import { env, expandConfigPath, getAutoDownloadModel, getTranslateToEnglishLanguage } from "./config.ts";
+import { env, expandConfigPath, getAutoDownloadModel, getLiveSpeechLanguage, getTranslateToEnglishLanguage } from "./config.ts";
 import { findExecutable, runProcess } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
-import type { ModelCandidate, ResolvedWhisperCppModel } from "./types.ts";
+import type { ModelCandidate, ResolvedWhisperCppModel, TranscriptionMode } from "./types.ts";
 
 export type ModelDownloadOptions = {
 	signal?: AbortSignal;
@@ -156,12 +157,12 @@ export function describeWhisperModel(name: string) {
 	return "Whisper model";
 }
 
-export function resolveWhisperCppModel({ preserveExplicitPath = false } = {}): ResolvedWhisperCppModel {
+export function resolveWhisperCppModel({ transcriptionMode = "clip" }: { transcriptionMode?: TranscriptionMode } = {}): ResolvedWhisperCppModel {
 	const explicitPath = env("MICME_WHISPER_CPP_MODEL")?.trim();
-	if (explicitPath) return resolveExplicitWhisperCppModel(expandConfigPath(explicitPath), explicitPath, preserveExplicitPath);
+	if (explicitPath) return resolveExplicitWhisperCppModel(expandConfigPath(explicitPath), explicitPath, transcriptionMode === "stream");
 
 	const configuredName = env("MICME_DEFAULT_WHISPER_CPP_MODEL")?.trim();
-	const rawModelName = configuredName || DEFAULT_WHISPER_CPP_MODEL_NAME;
+	const rawModelName = configuredName || getDefaultWhisperCppModelName(transcriptionMode);
 	const modelName = getTranslationAwareWhisperModelName(rawModelName);
 	const path = join(getWhisperCppModelCacheDir(), `ggml-${modelName}.bin`);
 	return buildResolvedWhisperCppModel(path, {
@@ -170,6 +171,13 @@ export function resolveWhisperCppModel({ preserveExplicitPath = false } = {}): R
 		configuredValue: configuredName,
 		translationFallbackFrom: getTranslationFallbackSource(rawModelName, modelName),
 	});
+}
+
+function getDefaultWhisperCppModelName(mode: TranscriptionMode) {
+	if (mode === "clip") return DEFAULT_WHISPER_CPP_MODEL_NAME;
+	return getTranslateToEnglishLanguage() || getLiveSpeechLanguage() !== "en"
+		? toMultilingualWhisperModelName(DEFAULT_LIVE_WHISPER_MODEL_NAME)
+		: DEFAULT_LIVE_WHISPER_MODEL_NAME;
 }
 
 function resolveExplicitWhisperCppModel(path: string, configuredValue: string, preserveExplicitPath: boolean): ResolvedWhisperCppModel {

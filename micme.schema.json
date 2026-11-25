@@ -61,8 +61,7 @@
     },
     "MICME_DEFAULT_WHISPER_CPP_MODEL": {
       "type": "string",
-      "default": "small.en",
-      "description": "whisper.cpp model name mapped to MICME_MODEL_DIR/ggml-<name>.bin unless MICME_WHISPER_CPP_MODEL is set."
+      "description": "Optional whisper.cpp model-name override mapped to MICME_MODEL_DIR/ggml-<name>.bin unless MICME_WHISPER_CPP_MODEL is set. Leave unset for the mode default: small.en for clip (small for translation), base.en for English stream, and base for stream with language detection, non-English input, or translation."
     },
     "MICME_WHISPER_CPP_MODEL": {
       "type": "string",
