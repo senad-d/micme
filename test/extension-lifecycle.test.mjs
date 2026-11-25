@@ -379,11 +379,7 @@ async function withLiveFixture(t, { worker = {}, recorder = {}, env = {}, create
 	});
 }
 
-<<<<<<< HEAD
-async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024, logPostprocessing = false, corruptConfigOnStop, argsLog } = {}) {
-=======
-async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024, logPostprocessing = false, corruptConfigOnStop, pulseSource } = {}) {
->>>>>>> origin/main
+async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024, logPostprocessing = false, corruptConfigOnStop, argsLog, pulseSource } = {}) {
 	await writeExecutable(
 		path,
 		`#!/usr/bin/env node
@@ -407,12 +403,6 @@ if (output.endsWith("clip.wav")) {
   writeFileSync(output, Buffer.alloc(1024));
   process.exit(0);
 }
-<<<<<<< HEAD
-if (${rawBytes !== null}) {
-  const wav = args.includes("-flush_packets") && ${rawBytes ?? 0} >= 44;
-  writeFileSync(output, wav ? Buffer.from(${JSON.stringify(testWav(Math.max(44, rawBytes ?? 0)).toString("base64"))}, "base64") : Buffer.alloc(${rawBytes ?? 0}));
-}
-=======
 const pulseSource = ${JSON.stringify(pulseSource)};
 if (pulseSource !== undefined) {
   const inputIndex = args.indexOf("-i");
@@ -425,8 +415,10 @@ if (pulseSource !== undefined) {
     process.exit(234);
   }
 }
-if (${rawBytes !== null}) writeFileSync(output, Buffer.alloc(${rawBytes ?? 0}));
->>>>>>> origin/main
+if (${rawBytes !== null}) {
+  const wav = args.includes("-flush_packets") && ${rawBytes ?? 0} >= 44;
+  writeFileSync(output, wav ? Buffer.from(${JSON.stringify(testWav(Math.max(44, rawBytes ?? 0)).toString("base64"))}, "base64") : Buffer.alloc(${rawBytes ?? 0}));
+}
 appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`recorder \${process.pid}\\n\`);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
