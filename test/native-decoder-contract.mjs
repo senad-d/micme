@@ -6,16 +6,19 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { after } from "node:test";
+import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const source = process.env.MICME_TEST_WHISPER_CPP_SOURCE;
-assert.ok(source, "Set MICME_TEST_WHISPER_CPP_SOURCE to the pinned whisper.cpp source tree.");
-// Upstream's ASR testing fixture has no trained weights: Silero and the worker
-// run normally, but Whisper provides no words. This deliberately exercises
-// the bounded empty-window recovery without asserting any model quality.
-const args = ["--model", join(source, "models/for-tests-ggml-base.en.bin"),
-	"--vad-model", join(source, "models/for-tests-silero-v6.2.0-ggml.bin"), "--language", "en"];
+let args;
+before(() => {
+	assert.ok(source, "Set MICME_TEST_WHISPER_CPP_SOURCE to the pinned whisper.cpp source tree.");
+	// Upstream's ASR testing fixture has no trained weights: Silero and the worker
+	// run normally, but Whisper provides no words. This deliberately exercises
+	// the bounded empty-window recovery without asserting any model quality.
+	args = ["--model", join(source, "models/for-tests-ggml-base.en.bin"),
+		"--vad-model", join(source, "models/for-tests-silero-v6.2.0-ggml.bin"), "--language", "en"];
+});
 const finish = Buffer.of(3);
 
 function feed(pcm, kind = 1) {
