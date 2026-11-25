@@ -21,6 +21,36 @@ test("configuration display values strip terminal control sequences", () => {
 	assert.equal(displayConfigurationValue("MICME_WHISPER_CPP_MODEL", "/tmp/\x1b[31mggml-small.en.bin\x1b[0m"), "ggml-small.en.bin");
 });
 
+test("changing the mode only writes the mode and preserves the local capture and model choices", async (t) => {
+	const agentDir = await mkdtemp(join(tmpdir(), "micme-settings-test-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	t.after(async () => {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		reloadMicmeConfig();
+		await rm(agentDir, { recursive: true, force: true });
+	});
+	const configPath = join(agentDir, "micme.json");
+	const initial = {
+		MICME_TRANSCRIPTION_MODE: "clip",
+		MICME_WHISPER_CPP_MODEL: "/offline/Base ASR.bin",
+		MICME_LIVE_BIN: "/offline/Live worker",
+		MICME_VAD_MODEL: "/offline/Silero weights.bin",
+		MICME_PULSE_SOURCE: "studio.monitor",
+		MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+		MICME_STREAM_DIAGNOSTICS: "1",
+		MICME_STREAM_VAD_THRESHOLD: "0.6",
+		MICME_RECORD_SAMPLE_RATE: "48000",
+		MICME_AUDIO_FILTER: "",
+	};
+	await writeFile(configPath, JSON.stringify(initial));
+	reloadMicmeConfig();
+
+	await saveConfigurationValue(createCtx(), "MICME_TRANSCRIPTION_MODE", "stream");
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { ...initial, MICME_TRANSCRIPTION_MODE: "stream" });
+});
+
 test("saving a missing model rechecks config and rejects malformed JSON before fetching", async (t) => {
 	const agentDir = await mkdtemp(join(tmpdir(), "micme-settings-test-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

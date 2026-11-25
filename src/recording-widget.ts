@@ -1,7 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { RECORDING_WIDGET_KEY } from "./constants.ts";
+import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { readPcm16WaveLevel } from "./audio-level.ts";
+import { RECORDING_WIDGET_KEY } from "./constants.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { Recording } from "./types.ts";
+
+const LIVE_LABEL = "Live: ";
+const MAX_DRAFT_COLUMNS = 160;
+const DEFAULT_TERMINAL_COLUMNS = 80;
 
 export class RecordingWidget {
 	private timer: ReturnType<typeof setInterval> | undefined;
@@ -9,14 +15,24 @@ export class RecordingWidget {
 	start(ctx: ExtensionContext, active: Recording) {
 		this.clear(ctx);
 		let displayLevel = 0;
+		let lastDraft: string | undefined;
+		let lastWidth = 0;
+		let draftLine: string | undefined;
 		const openFile = active.directory?.openFile.bind(active.directory);
 		const update = () => {
 			const elapsedSeconds = Math.max(0, Math.floor((Date.now() - active.startedAt) / 1000));
 			const liveLevel = active.audioLevel();
-			const measuredLevel = liveLevel > 0 ? liveLevel : readPcm16WaveLevel(active.audioPath, openFile);
+			const measuredLevel = active.livePcmMeter || liveLevel > 0 ? liveLevel : readPcm16WaveLevel(active.audioPath, openFile);
 			displayLevel = displayLevel * 0.55 + measuredLevel * 0.45;
-			const line = formatRecordingWidgetLine(ctx, elapsedSeconds, displayLevel);
-			ctx.ui.setWidget(RECORDING_WIDGET_KEY, [line]);
+			// Pi's TUI pads each string-array line by one column on either side. RPC has no terminal width.
+			const width = ctx.mode === "tui" ? Math.max(1, (process.stdout.columns || DEFAULT_TERMINAL_COLUMNS) - 2) : MAX_DRAFT_COLUMNS;
+			if (active.liveDraft !== lastDraft || width !== lastWidth) {
+				lastDraft = active.liveDraft;
+				lastWidth = width;
+				draftLine = formatLiveDraft(lastDraft, Math.min(width, MAX_DRAFT_COLUMNS));
+			}
+			const line = truncateToWidth(formatRecordingWidgetLine(ctx, elapsedSeconds, displayLevel), width, "");
+			ctx.ui.setWidget(RECORDING_WIDGET_KEY, draftLine ? [line, draftLine] : [line]);
 		};
 		update();
 		this.timer = setInterval(update, 120);
@@ -27,6 +43,23 @@ export class RecordingWidget {
 		this.timer = undefined;
 		ctx.ui.setWidget(RECORDING_WIDGET_KEY, undefined);
 	}
+}
+
+function formatLiveDraft(draft: string | undefined, width: number) {
+	if (!draft || width <= LIVE_LABEL.length) return undefined;
+	const clean = sanitizeTerminalText(draft.replace(/\p{Bidi_Control}/gu, ""));
+	return clean ? LIVE_LABEL + fitTerminalTail(clean, width - LIVE_LABEL.length, true) : undefined;
+}
+
+/** Fit an already sanitized line, preserving its right edge and whole graphemes. */
+export function fitTerminalTail(text: string, width: number, wholeWords = false) {
+	if (width <= 0) return "";
+	const textWidth = visibleWidth(text);
+	if (textWidth <= width) return text;
+	const tail = sliceByColumn(text, textWidth - width + 1, width - 1, true);
+	const cut = text.length - tail.length;
+	const startsMidWord = cut > 0 && !/\s/u.test(text[cut - 1]!) && /^\S/u.test(tail);
+	return `…${(wholeWords && startsMidWord ? tail.replace(/^\S+\s+(?=\S)/u, "") : tail).trimStart()}`;
 }
 
 export function formatRecordingWidgetLine(ctx: ExtensionContext, elapsedSeconds: number, audioLevel: number) {

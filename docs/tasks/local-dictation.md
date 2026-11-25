@@ -274,7 +274,7 @@ On stop, close recorder normally, drain the held reader, finish and check done/c
 
 ### 6. Show live words and configure the actual microphone
 
-- [ ] Render a replaceable draft while speech is in progress and expose only settings that apply to the new live path.
+- [x] Render a replaceable draft while speech is in progress and expose only settings that apply to the new live path.
 
 #### Why
 
