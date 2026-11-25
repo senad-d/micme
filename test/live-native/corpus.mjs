@@ -5,6 +5,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export const RATE = 16_000;
+// Only the continuous final-tail check accepts equivalent renderings of the frozen year.
+export const CONTINUOUS_KEYWORDS = ["but now it eighteen sixty three", "but now it 1863"];
 const bytesPerMs = RATE * 2 / 1_000;
 const hashes = {
 	"jfk.wav": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
@@ -65,7 +67,7 @@ export async function prepareCorpus(assets, work) {
 	const first = await loadSource(assets, "174-84280-0011.flac");
 	const rain = await loadSource(assets, "rain.wav");
 	const cases = {
-		continuous: { ...continuous, reference: continuous.words.map(({ word }) => word).join(" "), keywords: "but now it eighteen sixty three" },
+		continuous: { ...continuous, reference: continuous.words.map(({ word }) => word).join(" "), keywords: CONTINUOUS_KEYWORDS },
 		jfk: { pcm: await loadSource(assets, "jfk.wav"), reference: jfk, keywords: "fellow americans ask not ask what you can do for your country" },
 		silence: { pcm: silence(10_000), reference: "", negative: true },
 		noise: { pcm: Buffer.concat([rain, rain]), reference: "", negative: true },

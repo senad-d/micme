@@ -1,8 +1,16 @@
 # Native dictation: reference-host result
 
-Measured 2026-11-25 at Micme `561701a` (merged live-draft-settings dependency, unchanged production sources). See the [replay procedure](README.md) and the [gate definitions](../../docs/specs/local-dictation-hardening.md#proof).
+See the [replay procedure](README.md) and the [gate definitions](../../docs/specs/local-dictation-hardening.md#proof).
 
-## Host and build
+## Merged-checkout recheck: final year formatting
+
+Rebuilt the CPU worker from `57178a0` and reran the full matrix with the fixture accepting either `1863` or `eighteen sixty three` **only** for the continuous final keyword check. Both forms require the same ordered onset `but now it`. The scorer regression rejects a missing, wrong or out-of-order year and a missing onset. The PCM, timed word reference, visible-relevance scorer and WER calculation and thresholds are unchanged.
+
+All 20 continuous finals passed the corrected keyword check, ending in `June 13, 1863`. Continuous final WER was 8.93% for `base.en` and 6.25% for `small.en`, and both had 0% JFK live WER. Neither passed the combined gate. At 80/40 columns, visible relevance passed 3/5 and 4/5 for `base.en` and 0/5 and 0/5 for `small.en` on this rerun; the four-CPU host was contended (load average 12.60 during the matrix). Both still failed the independent mid-phrase pause keyword check (`seem` became `Seemed`/`seemed`). Accepting equivalent final-year formatting does not fix those recognition or freshness failures.
+
+## Original reference run: host and build
+
+The historical results below were measured 2026-11-25 at Micme `561701a`, before the decoder repairs and the final-year check correction. The archived [runs.jsonl](runs.jsonl) is unchanged.
 
 Linux x86_64 `7.0.0-44-generic`, Intel Core i5-7500 at 3.40 GHz, four logical/available CPUs, 14.7 GiB RAM, no cgroup CPU quota, Node v24.22.3, FFmpeg 6.1.1. Both Release binaries use whisper.cpp `96ec4d9823e9d0211944172da35f9f29134af990` (v1.9.6 pin), CMake 3.31.10 and GCC 13.3.0. Native ggml CPU and OpenMP enabled; BLAS, CUDA, Vulkan and Metal disabled. Clip explicitly uses four CPU threads; the worker uses four for Whisper and one for Silero. The worker uses greedy `best_of=1`, no temperature fallback, no ASR context carry, an audio-dependent encoder window, 512-sample Silero frames, two-frame onset, 0.5/0.35 VAD thresholds, 500 ms release and 20 s rollover. Translation off in every run (`en` for English, `fr` for French).
 
@@ -55,7 +63,7 @@ Numbers are WER in percent, **clip → live**, unless marked as words/presence. 
 | Immediate stop (320 samples) | Neither writes words; 0 live ASR calls | Same |
 | Delayed first feed (JFK) | 0 → 331.82; all PCM preserved | 0 → 0; all PCM preserved |
 
-Both live continuous transcripts reached the date at the end (rendered `June 13, 1863`); digit rendering differs from the predeclared literal keyword sequence `eighteen sixty three` and is not evidence of a lost tail. The keyword gate stays as declared, with the actual final text visible in the record. Supplemental French with multilingual `base` and `fr` gave clip `Marie.` (100% WER), live `Paris` (0%); this is one same-language control, not general multilingual evidence. Optional JFK refinement reached 0% WER for both, with 3.25 s (`base.en`) or 6.52 s (`small.en`) stop-to-return wall time. It does not repair text already shown or committed during streaming.
+Both live continuous transcripts reached the date at the end (rendered `June 13, 1863`); digit rendering differs from the predeclared literal keyword sequence `eighteen sixty three` and is not evidence of a lost tail. The historical record retains the original literal keyword gate; the merged-checkout recheck above isolates the equivalent numeric form. Supplemental French with multilingual `base` and `fr` gave clip `Marie.` (100% WER), live `Paris` (0%); this is one same-language control, not general multilingual evidence. Optional JFK refinement reached 0% WER for both, with 3.25 s (`base.en`) or 6.52 s (`small.en`) stop-to-return wall time. It does not repair text already shown or committed during streaming.
 
 ### Coverage, load and stop latency
 
