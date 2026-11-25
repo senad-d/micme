@@ -248,7 +248,7 @@ function abandonProcessPipes(child: ChildProcess) {
 	child.stdin?.destroy();
 	child.stdout?.destroy();
 	child.stderr?.destroy();
-	child.channel?.unref();
+	child.channel?.unref?.();
 	child.unref();
 }
 

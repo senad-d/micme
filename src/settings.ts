@@ -1,20 +1,4 @@
-import { DynamicBorder, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	Container,
-	decodeKittyPrintable,
-	fuzzyFilter,
-	Key,
-	matchesKey,
-	parseKey,
-	type Component,
-	type SelectItem,
-	SelectList,
-	type SettingItem,
-	Text,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
@@ -46,6 +30,7 @@ import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCpp
 import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
 import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
+import { decodeKittyPrintable, fuzzyFilter, matchesKey, matchesSelectionAction, parseShortcutKey, terminalDefaultShortcut, type TerminalRows, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
@@ -60,7 +45,13 @@ interface ConfigurationCategory {
 	description: string;
 }
 
-interface ConfigurationItem extends SettingItem {
+interface ConfigurationItem {
+	id: string;
+	label: string;
+	description?: string;
+	currentValue: string;
+	values?: string[];
+	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => TerminalRows;
 	categoryId: ConfigurationCategoryId;
 	rawValue: string;
 	displayKind?: DisplayKind;
@@ -145,6 +136,7 @@ export async function showConfiguration(ctx: ExtensionContext, sessionSignal?: A
 				pendingSave = saveConfigurationValue(ctx, id, newValue, { signal: controller.signal });
 				return pendingSave.then(() => buildConfigurationView(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme));
 			},
+			readShortcut: (data) => getShortcutInput(data, ctx.ui),
 			requestRender: () => tui.requestRender(),
 			statusText: canDiscover ? formatDiscoveryStatus(discovery.pending) : "Fix Micme config and reopen settings to run discovery.",
 		});
@@ -234,13 +226,14 @@ function notifySanitized(ctx: ExtensionContext, message: string, level: "warning
 	ctx.ui.notify(sanitizeTerminalOutput(message) || "Micme configuration message was empty.", level);
 }
 
-class ConfigurationScreen implements Component {
+class ConfigurationScreen implements TerminalRows {
 	private readonly configPath: string;
 	private view: ConfigurationView;
 	private readonly theme: MicmeTheme;
 	private readonly onDone: () => void;
 	private readonly onError: (error: unknown) => void;
 	private readonly onSave: (id: string, newValue: string) => Promise<ConfigurationView>;
+	private readonly readShortcut: (data: string) => string | null;
 	private readonly requestRender: () => void;
 	private focusedPane: FocusedPane = "categories";
 	private categoryIndex = 0;
@@ -248,7 +241,7 @@ class ConfigurationScreen implements Component {
 	private searchActive = false;
 	private searchQuery = "";
 	private selectedSearchIndex = 0;
-	private submenuComponent: Component | null = null;
+	private submenuComponent: TerminalRows | null = null;
 	private editingShortcutItem: ConfigurationItem | null = null;
 	private pendingShortcutValue = "";
 	private saving = false;
@@ -262,6 +255,7 @@ class ConfigurationScreen implements Component {
 		onDone: () => void;
 		onError: (error: unknown) => void;
 		onSave: (id: string, newValue: string) => Promise<ConfigurationView>;
+		readShortcut: (data: string) => string | null;
 		requestRender: () => void;
 		statusText?: string;
 	}) {
@@ -271,6 +265,7 @@ class ConfigurationScreen implements Component {
 		this.onDone = options.onDone;
 		this.onError = options.onError;
 		this.onSave = options.onSave;
+		this.readShortcut = options.readShortcut;
 		this.requestRender = options.requestRender;
 		this.statusText = options.statusText ?? "";
 		for (const category of CONFIGURATION_CATEGORIES) this.selectedByCategory.set(category.id, 0);
@@ -327,7 +322,8 @@ class ConfigurationScreen implements Component {
 	}
 
 	private handleCloseInput(data: string) {
-		if (!matchesKey(data, Key.ctrl("c")) && data !== "q" && data !== "Q") return false;
+		const text = getPrintableInput(data);
+		if (!matchesKey(data, "ctrl+c") && text !== "q" && text !== "Q") return false;
 		this.close();
 		return true;
 	}
@@ -338,27 +334,32 @@ class ConfigurationScreen implements Component {
 		this.onDone();
 	}
 
+	// OMP may unmount the rows independently of their own key handler.
+	dispose() {
+		this.close();
+	}
+
 	private handlePaneSwitchInput(data: string) {
-		if (!matchesKey(data, Key.tab) && !matchesKey(data, Key.shift("tab"))) return false;
+		if (!matchesKey(data, "tab") && !matchesKey(data, "shift+tab")) return false;
 		this.focusedPane = this.focusedPane === "categories" ? "settings" : "categories";
 		this.requestRender();
 		return true;
 	}
 
 	private handleSelectionMoveInput(data: string) {
-		if (matchesKey(data, Key.up)) {
+		if (matchesKey(data, "up")) {
 			this.moveSelection(-1);
 			this.requestRender();
 			return true;
 		}
-		if (!matchesKey(data, Key.down)) return false;
+		if (!matchesKey(data, "down")) return false;
 		this.moveSelection(1);
 		this.requestRender();
 		return true;
 	}
 
 	private handleSettingActivationInput(data: string) {
-		if (matchesKey(data, Key.enter)) {
+		if (matchesKey(data, "enter")) {
 			if (this.focusedPane === "categories") {
 				this.focusedPane = "settings";
 			} else {
@@ -368,14 +369,14 @@ class ConfigurationScreen implements Component {
 			return true;
 		}
 
-		if (!matchesKey(data, Key.space) || this.focusedPane !== "settings") return false;
+		if (!matchesKey(data, "space") || this.focusedPane !== "settings") return false;
 		this.activateSelectedSetting();
 		this.requestRender();
 		return true;
 	}
 
 	private handleEscapeNavigation(data: string) {
-		if (!matchesKey(data, Key.escape)) return;
+		if (!matchesKey(data, "escape")) return;
 		if (this.focusedPane === "settings") {
 			this.focusedPane = "categories";
 			this.requestRender();
@@ -702,7 +703,7 @@ class ConfigurationScreen implements Component {
 		const item = this.editingShortcutItem;
 		if (!item) return;
 
-		if (matchesKey(data, Key.escape)) {
+		if (matchesKey(data, "escape")) {
 			this.editingShortcutItem = null;
 			this.pendingShortcutValue = "";
 			this.statusText = "";
@@ -710,7 +711,7 @@ class ConfigurationScreen implements Component {
 			return;
 		}
 
-		if (matchesKey(data, Key.enter)) {
+		if (matchesKey(data, "enter")) {
 			if (!this.pendingShortcutValue) {
 				this.statusText = "Press a shortcut before confirming";
 				this.requestRender();
@@ -723,9 +724,10 @@ class ConfigurationScreen implements Component {
 			return;
 		}
 
-		const captured = getShortcutInput(data);
+		const captured = this.readShortcut(data);
 		if (!captured) {
-			this.statusText = "Shortcut input not recognized";
+			if (captured === null) this.pendingShortcutValue = "";
+			this.statusText = captured === null ? "Ambiguous terminal input. Press a different shortcut." : "Shortcut input not recognized";
 			this.requestRender();
 			return;
 		}
@@ -768,7 +770,7 @@ class ConfigurationScreen implements Component {
 
 
 	private handleSearchInput(data: string) {
-		if (matchesKey(data, Key.slash)) {
+		if (matchesKey(data, "/")) {
 			this.searchActive = true;
 			this.searchQuery = "";
 			this.selectedSearchIndex = 0;
@@ -776,7 +778,7 @@ class ConfigurationScreen implements Component {
 			return true;
 		}
 
-		if (this.searchActive && matchesKey(data, Key.backspace)) {
+		if (this.searchActive && matchesKey(data, "backspace")) {
 			const chars = Array.from(this.searchQuery);
 			chars.pop();
 			this.searchQuery = chars.join("");
@@ -785,7 +787,7 @@ class ConfigurationScreen implements Component {
 			return true;
 		}
 
-		if (this.searchActive && matchesKey(data, Key.escape)) {
+		if (this.searchActive && matchesKey(data, "escape")) {
 			this.searchActive = false;
 			this.searchQuery = "";
 			this.selectedSearchIndex = 0;
@@ -834,7 +836,7 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 	const diagnostics = flagValue(envFlag("MICME_STREAM_DIAGNOSTICS"));
 	const whisperCppBinValues = uniqueStrings([env("MICME_WHISPER_CPP_BIN") ?? "", findExecutable(["whisper-cli"]) ?? "", findExecutable(["whisper-cpp"]) ?? "", "whisper-cli", "whisper-cpp"]);
 	const audioFilter = getAudioFilter();
-	const shortcut = getShortcutSettingValue();
+	const shortcut = getShortcutSettingValue(terminalDefaultShortcut);
 	const translateToEnglish = getTranslateToEnglishLanguage() ?? "off";
 	const backendValues = ["auto", "whisper.cpp", "python"];
 	const processing = flagValue(mode === "stream" ? getFlagSetting("MICME_PROCESS_AUDIO", true) : env("MICME_PROCESS_AUDIO") !== "0");
@@ -1177,45 +1179,81 @@ function flagValue(enabled: boolean) {
 	return enabled ? "1" : "0";
 }
 
-export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTheme, done: (selectedValue?: string) => void): Component {
-	const items: SelectItem[] = candidates.map((candidate) => {
-		const label = sanitizeTerminalText(candidate.label) || "model";
-		return {
+const MAX_MODEL_ROWS = 16;
+
+type ModelSelection = { label: string; description: string; value: string };
+
+class ModelSelector implements TerminalRows {
+	private readonly items: ModelSelection[];
+	private readonly theme: MicmeTheme;
+	private readonly done: (value?: string) => void;
+	private filter = "";
+	private index = 0;
+
+	constructor(candidates: ModelCandidate[], theme: MicmeTheme, done: (value?: string) => void) {
+		this.theme = theme;
+		this.done = done;
+		this.items = candidates.map((candidate) => ({
 			value: candidate.value,
-			label: candidate.installed ? `✓ ${label}` : `○ ${label}`,
+			label: `${candidate.installed ? "✓" : "○"} ${sanitizeTerminalText(candidate.label) || "model"}`,
 			description: sanitizeTerminalText(candidate.description),
-		};
-	});
+		}));
+	}
 
-	const container = new Container();
-	container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-	container.addChild(new Text(theme.fg("accent", theme.bold("Select whisper.cpp model")), 1, 0));
-	container.addChild(new Text(theme.fg("dim", "✓ found locally • ○ missing; selecting downloads automatically when enabled"), 1, 0));
+	render(width: number) {
+		const { theme } = this;
+		const items = this.visibleItems();
+		const [start, end] = getVisibleRange(this.index, items.length, MAX_MODEL_ROWS);
+		const border = theme.fg("accent", "─".repeat(Math.max(0, width)));
+		const rows = [border, theme.fg("accent", theme.bold(" Select whisper.cpp model")), ...this.hintRows("✓ found locally • ○ missing; selecting downloads automatically when enabled", width)];
+		if (this.filter) rows.push(theme.fg("dim", ` Search: ${this.filter}`));
+		if (items.length === 0) rows.push(theme.fg("warning", "  No matching models"));
+		for (let index = start; index < end; index++) {
+			const item = items[index]!;
+			const prefix = index === this.index ? "→ " : "  ";
+			const label = prefix + fitAnsi(item.label, Math.max(0, (width > 40 ? Math.min(32, Math.floor(width / 2)) : width) - 2));
+			const description = width > 40 && item.description ? `  ${theme.fg("muted", item.description)}` : "";
+			rows.push(index === this.index ? theme.fg("accent", label) + description : label + description);
+		}
+		if (items.length > MAX_MODEL_ROWS) rows.push(theme.fg("dim", `  (${this.index + 1}/${items.length})`));
+		rows.push(...this.hintRows("↑↓ navigate • type to search • enter select • esc back", width), border);
+		return rows.map((line) => fitAnsi(line, width, ""));
+	}
 
-	const list = new SelectList(items, Math.min(items.length, 16), {
-		selectedPrefix: (text) => theme.fg("accent", text),
-		selectedText: (text) => theme.fg("accent", text),
-		description: (text) => theme.fg("muted", text),
-		scrollInfo: (text) => theme.fg("dim", text),
-		noMatch: (text) => theme.fg("warning", text),
-	});
-	list.onSelect = (item) => done(item.value);
-	list.onCancel = () => done(undefined);
-	container.addChild(list);
-	container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to search • enter select • esc back"), 1, 0));
-	container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+	invalidate() { /* Rows are rendered directly from the current selection. */ }
 
-	return {
-		render(width: number) {
-			return container.render(width);
-		},
-		invalidate() {
-			container.invalidate();
-		},
-		handleInput(data: string) {
-			list.handleInput(data);
-		},
-	};
+	handleInput(data: string) {
+		if (matchesSelectionAction(data, "cancel")) return this.done();
+		const items = this.visibleItems();
+		if (matchesSelectionAction(data, "confirm")) {
+			const item = items[this.index];
+			if (item) this.done(item.value);
+			return;
+		}
+		if (matchesSelectionAction(data, "up")) this.index = wrapIndex(this.index - 1, items.length);
+		else if (matchesSelectionAction(data, "down")) this.index = wrapIndex(this.index + 1, items.length);
+		else if (matchesSelectionAction(data, "pageUp")) this.index = Math.max(0, this.index - MAX_MODEL_ROWS);
+		else if (matchesSelectionAction(data, "pageDown")) this.index = clamp(this.index + MAX_MODEL_ROWS, 0, Math.max(0, items.length - 1));
+		else {
+			const printable = getPrintableInput(data);
+			if (matchesKey(data, "backspace")) this.filter = Array.from(this.filter).slice(0, -1).join("");
+			else if (printable) this.filter += printable;
+			else return;
+			this.index = 0;
+		}
+	}
+
+	private visibleItems() {
+		return this.filter ? fuzzyFilter(this.items, this.filter, (item) => `${item.label} ${item.description}`) : this.items;
+	}
+
+	private hintRows(text: string, width: number) {
+		return wrapTextWithAnsi(text, Math.max(1, width - 2)).map((line) => this.theme.fg("dim", ` ${line}`));
+	}
+}
+
+export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTheme, done: (selectedValue?: string) => void): TerminalRows {
+	return new ModelSelector(candidates, theme, done);
 }
 
 export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string, options: { signal?: AbortSignal } = {}): Promise<Record<string, string>> {
@@ -1318,16 +1356,14 @@ function isTruthyConfigValue(value: string) {
 	return /^(1|true|yes|on)$/i.test(value);
 }
 
-function getShortcutInput(data: string) {
-	const parsed = parseKey(data);
-	if (parsed && parsed !== "enter" && parsed !== "escape" && parsed !== "esc") return parsed;
-	return decodeKittyPrintable(data) ?? getPrintableInput(data);
+function getShortcutInput(data: string, ui: ExtensionContext["ui"]) {
+	const parsed = parseShortcutKey(data, ui);
+	if (parsed === null) return null;
+	if (parsed && parsed !== "enter" && parsed !== "escape" && parsed !== "esc" && sanitizeTerminalText(parsed) === parsed) return parsed;
+	return getPrintableInput(data);
 }
 
 function getPrintableInput(data: string) {
-	if (!data || data.includes("\x1b")) return "";
-	if (matchesKey(data, Key.space)) return " ";
-	if (matchesKey(data, Key.enter) || matchesKey(data, Key.tab) || matchesKey(data, Key.backspace) || matchesKey(data, Key.delete)) return "";
-	if (/^[^\x00-\x1F\x7F]+$/u.test(data)) return data;
-	return "";
+	const text = decodeKittyPrintable(data) ?? data;
+	return text && !/[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(text) ? text : "";
 }

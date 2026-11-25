@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -138,6 +138,19 @@ function waitForAsyncWork() {
 	return new Promise((resolve) => setTimeout(resolve, 25));
 }
 
+test("the host can unmount settings without leaving discovery or input attached", async (t) => {
+	await withTempAgent(t, async (root) => {
+		const harness = createHarness(root);
+		const shown = showConfiguration(harness.ctx);
+		harness.component.dispose();
+		await shown;
+		assert.equal(harness.doneCount, 1);
+		harness.component.handleInput("\t");
+		assert.equal(harness.renderRequests, 0);
+		assert.deepEqual(harness.notifications, []);
+	});
+});
+
 test("showConfiguration warns outside interactive TUI mode", async () => {
 	const notifications = [];
 	const ctx = {
@@ -203,6 +216,33 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 		harness.component.handleInput("\x1b");
 		harness.component.handleInput("\x1b");
 		assert.equal(harness.doneCount, 1);
+	});
+});
+
+test("reactive settings decline ambiguous terminal bytes and still capture an unambiguous chord", async (t) => {
+	await withTempAgent(t, async (root) => {
+		const configPath = join(root, "micme.json");
+		await writeFile(configPath, '{"MICME_SHORTCUT":"f8"}');
+		const harness = createHarness(root);
+		harness.ctx.ui.composer = { addKeyHandler: () => () => undefined };
+		await showConfiguration(harness.ctx);
+		const { component } = harness;
+		component.handleInput("/");
+		typeText(component, "shortcut");
+		component.handleInput("\r");
+		for (const data of ["\x1bB", "\x1bF", "\x08"]) {
+			component.handleInput("\x1b[1;3D");
+			assert.match(component.render(110).join("\n"), /Captured alt\+left/);
+			component.handleInput(data);
+			assert.match(component.render(110).join("\n"), /Ambiguous terminal input/);
+			component.handleInput("\r");
+			assert.match(component.render(110).join("\n"), /Press a shortcut before confirming/);
+			assert.equal(JSON.parse(await readFile(configPath, "utf8")).MICME_SHORTCUT, "f8");
+		}
+		component.handleInput("\x1b[1;3D");
+		component.handleInput("\r");
+		await waitFor(async () => JSON.parse(await readFile(configPath, "utf8")).MICME_SHORTCUT === "alt+left", "unambiguous shortcut did not save");
+		component.close();
 	});
 });
 
@@ -738,4 +778,44 @@ test("model selector sanitizes labels and returns selected or cancelled values",
 	const cancelSelector = createModelSelector([], theme, (value) => cancelled.push(value));
 	cancelSelector.handleInput("\x1b");
 	assert.deepEqual(cancelled, [undefined]);
+});
+
+test("the Pi model selector honors remapped navigation, confirm, and cancel before filtering", (t) => {
+	const previous = getKeybindings();
+	t.after(() => setKeybindings(previous));
+	setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
+		"tui.select.down": "ctrl+n",
+		"tui.select.confirm": "y",
+		"tui.select.cancel": "n",
+	}));
+	const candidates = [
+		{ label: "Tiny", value: "tiny", description: "local", installed: true, kind: "model-name" },
+		{ label: "Base", value: "base", description: "local", installed: true, kind: "model-name" },
+	];
+	const selected = [];
+	const selector = createModelSelector(candidates, theme, (value) => selected.push(value));
+	selector.handleInput("\x0e");
+	selector.handleInput("\r");
+	assert.deepEqual(selected, [], "the old confirmation key must not select");
+	selector.handleInput("y");
+	assert.deepEqual(selected, ["base"]);
+	const second = createModelSelector(candidates, theme, (value) => selected.push(value));
+	second.handleInput("n");
+	assert.deepEqual(selected, ["base", undefined]);
+});
+
+test("model selector filters by keyboard without selecting a hidden model", () => {
+	const selected = [];
+	const selector = createModelSelector([
+		{ label: "Tiny", value: "tiny", description: "local", installed: true },
+		{ label: "Base", value: "base", description: "download", installed: false },
+	], theme, (value) => selected.push(value));
+	typeText(selector, "basx");
+	assert.match(selector.render(48).join("\n"), /No matching models/);
+	selector.handleInput("\r");
+	assert.deepEqual(selected, []);
+	selector.handleInput("\x7f");
+	assert.match(selector.render(48).join("\n"), /→ ○ Base/);
+	selector.handleInput("\r");
+	assert.deepEqual(selected, ["base"]);
 });

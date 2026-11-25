@@ -295,22 +295,22 @@ export function env(name: string) {
 	return process.env[name] ?? micmeConfigState.values[name];
 }
 
-export function getShortcutSettingValue() {
+export function getShortcutSettingValue(defaultShortcut = DEFAULT_SHORTCUT) {
 	const shortcut = env("MICME_SHORTCUT");
 	if (shortcut !== undefined) return shortcut;
 
 	const legacyPrintableShortcut = firstShortcutValue(env("MICME_PRINTABLE_SHORTCUTS"));
-	return legacyPrintableShortcut || DEFAULT_SHORTCUT;
+	return legacyPrintableShortcut || defaultShortcut;
 }
 
-export function getShortcut() {
-	return getShortcutSettingValue() || "not set";
+export function getShortcut(defaultShortcut = DEFAULT_SHORTCUT) {
+	return getShortcutSettingValue(defaultShortcut) || "not set";
 }
 
-export function getTerminalShortcut() {
+export function getTerminalShortcut(defaultShortcut = DEFAULT_SHORTCUT) {
 	const shortcut = env("MICME_SHORTCUT");
 	if (shortcut !== undefined) return isTerminalShortcut(shortcut) ? shortcut.trim() : undefined;
-	return DEFAULT_SHORTCUT;
+	return defaultShortcut;
 }
 
 const TRANSCRIPTION_MODES = ["clip", "stream"] as const;

@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import { addAbortSignal } from "node:stream";
@@ -7,6 +6,7 @@ import { AUDIO_VALIDATION_TIMEOUT_MS, LIVE_CAPTURE_RATE, MAX_CAPTURED_OUTPUT_CHA
 import { env, envFlag, getAudioFilter, getAudioInputConfigKey, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getConfiguredRecorderInput, getFlagSetting, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
 import { appendCapped, findExecutable, formatProcessOutput, formatRunExit, runProcess, shellCommand, shellQuote } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sliceByColumn, type TerminalRows, visibleWidth } from "./terminal-ui.ts";
 import type { AudioDeviceCandidate, AudioDiagnostics, AudioValidationOutcome, CommandSpec, RunResult } from "./types.ts";
 
 type DeviceBackend = "avfoundation" | "pulse" | "dshow" | "unsupported";
@@ -91,7 +91,7 @@ type DeviceMessageRendererOptions = {
 type DeviceMessageApi = {
 	registerMessageRenderer?: (
 		customType: string,
-		renderer: (message: DevicePanelMessage, options: DeviceMessageRendererOptions, theme: ExtensionContext["ui"]["theme"]) => Component,
+		renderer: (message: DevicePanelMessage, options: DeviceMessageRendererOptions, theme: ExtensionContext["ui"]["theme"]) => TerminalRows,
 	) => void;
 	sendMessage?: (message: DevicePanelMessage, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }) => void;
 };
@@ -406,7 +406,8 @@ function sendDevicePanelMessage(pi: ExtensionAPI | undefined, options: DevicePan
 	return true;
 }
 
-class DevicePanelMessageComponent implements Component {
+// Both hosts accept a width-aware rows renderer for custom transcript messages.
+class DevicePanelMessageComponent implements TerminalRows {
 	private readonly options: DevicePanelOptions;
 
 	constructor(options: DevicePanelOptions) {

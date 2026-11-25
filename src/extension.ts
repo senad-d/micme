@@ -33,6 +33,7 @@ import { showConfiguration } from "./settings.ts";
 import { buildLiveWorkerCommand, caughtUpForLivePreview, livePoll, LiveTranscript, LiveWorker, liveWorkerDiagnostics } from "./streaming.ts";
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import { sanitizeTerminalOutput } from "./terminal-text.ts";
+import { terminalDefaultShortcut } from "./terminal-ui.ts";
 import { transcribe } from "./transcription.ts";
 import type { ExitResult, OwnedProcess, Recording } from "./types.ts";
 
@@ -103,7 +104,7 @@ export function registerMicmeExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => handleMicmeCommand(owner, pi, args, ctx),
 	});
 
-	const terminalShortcut = getTerminalShortcut();
+	const terminalShortcut = getTerminalShortcut(terminalDefaultShortcut);
 	if (terminalShortcut) {
 		pi.registerShortcut(terminalShortcut as Parameters<ExtensionAPI["registerShortcut"]>[0], {
 			description: "Micme: toggle local voice recording",
@@ -128,6 +129,7 @@ export class MicmeSessionOwner {
 	private lastAudioDir = "";
 	private advisedLiveMigration = false;
 	private readonly pi: ExtensionAPI;
+	private removeEditorFallback: (() => void) | undefined;
 
 	constructor(pi: ExtensionAPI) {
 		this.pi = pi;
@@ -140,7 +142,8 @@ export class MicmeSessionOwner {
 
 	startSession(ctx: ExtensionContext) {
 		reloadMicmeConfig();
-		installMicmeEditorFallback(ctx, createMicmeEditorHandlers(this, ctx));
+		this.removeEditorFallback?.();
+		this.removeEditorFallback = installMicmeEditorFallback(ctx, createMicmeEditorHandlers(this, ctx));
 	}
 
 	async toggle(ctx: ExtensionContext) {
@@ -182,6 +185,8 @@ export class MicmeSessionOwner {
 	async shutdown(ctx: ExtensionContext) {
 		if (this.closed) return;
 		this.closed = true;
+		this.removeEditorFallback?.();
+		this.removeEditorFallback = undefined;
 		const active = this.current;
 		this.current = undefined;
 		this.sessionController.abort();
@@ -415,12 +420,12 @@ function formatOperationPhase(phase: MicmeOperation["phase"]) {
 }
 
 function getHelpText() {
-	const shortcut = sanitizeTerminalOutput(getShortcut()) || "not set";
+	const shortcut = sanitizeTerminalOutput(getShortcut(terminalDefaultShortcut)) || "not set";
 	const actions = MICME_ACTIONS.filter((action) => action !== "help").join("|");
 	return `Usage: /micme [${actions}]. Shortcut: ${shortcut} toggles recording; tap once to start, tap again to stop/transcribe. Toggles are rejected while Micme is starting, stopping, transcribing, or finalizing.`;
 }
 
-async function startRecording(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext, stopHint = getShortcut()) {
+async function startRecording(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext, stopHint = getShortcut(terminalDefaultShortcut)) {
 	if (getTranscriptionMode() === "stream") {
 		await startStreamingTranscription(owner, operation, ctx, stopHint);
 		return;

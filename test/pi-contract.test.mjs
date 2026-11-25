@@ -1,9 +1,11 @@
+import { discoverAndLoadExtensions, ExtensionRunner, SessionManager } from "@earendil-works/pi-coding-agent";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
+import { setTimeout as wait } from "node:timers/promises";
 
 const SUPPORTED_PI_VERSION = "1.6.0";
 
@@ -62,4 +64,80 @@ test("Pi's jiti loader registers the default Micme extension", async (t) => {
 			assert.equal(extension.handlers.has("session_shutdown"), true);
 		},
 	);
+});
+
+async function expectRows(screen, pattern) {
+	let rows;
+	const deadline = Date.now() + 2_000;
+	do {
+		rows = screen.render(100).join("\n");
+		if (pattern.test(rows)) return;
+		await wait(10);
+	} while (Date.now() < deadline);
+	assert.match(rows, pattern);
+}
+
+test("Pi-loaded /micme conf saves the local model selected by filtering and a remapped confirm key", { timeout: 8_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-pi-model-picker-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const models = join(root, "models");
+	const selected = join(models, "ggml-fixture-blue.bin");
+	const configPath = join(root, "micme.json");
+	await mkdir(models);
+	await Promise.all([
+		writeFile(join(models, "ggml-fixture-amber.bin"), ""),
+		writeFile(selected, ""),
+		writeFile(configPath, "{}"),
+	]);
+	const previousKeybindings = getKeybindings();
+	t.after(() => setKeybindings(previousKeybindings));
+	const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.confirm": "ctrl+g" });
+	setKeybindings(keybindings);
+
+	await withEnv({
+		PI_CODING_AGENT_DIR: root,
+		PATH: join(root, "bin"),
+		MICME_MODEL_DIR: models,
+		MICME_WHISPER_CPP_MODEL: undefined,
+		MICME_AUTO_DOWNLOAD_MODEL: "0",
+		MICME_TRANSCRIPTION_MODE: "clip",
+		MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+	}, async () => {
+		const entry = join(process.cwd(), "src", "extension.ts");
+		const { extensions, runtime, errors } = await discoverAndLoadExtensions([entry], root, root);
+		assert.deepEqual(errors, []);
+		const runner = new ExtensionRunner(extensions, runtime, root, SessionManager.inMemory(root), undefined);
+		let screen;
+		const mounted = Promise.withResolvers();
+		const notifications = [];
+		runner.setUIContext({
+			custom(factory) {
+				const theme = { fg: (_color, text) => text, bold: (text) => text };
+				const { promise, resolve } = Promise.withResolvers();
+				screen = factory({ requestRender() {} }, theme, keybindings, resolve);
+				mounted.resolve();
+				return promise;
+			},
+			notify(message) { notifications.push(message); },
+		}, "tui");
+		const command = runner.getCommand("micme");
+		assert.ok(command);
+		const closed = command.handler("conf", runner.createCommandContext());
+		try {
+			await Promise.race([mounted.promise, closed]);
+			assert.ok(screen, `Micme did not open its settings: ${notifications.join("; ")}`);
+			await expectRows(screen, /^(?![\s\S]*Loading )/);
+			for (const character of "/ASR model\r") screen.handleInput(character);
+			await expectRows(screen, /ggml-fixture-blue\.bin/);
+			for (const character of "fixture-blue") screen.handleInput(character);
+			await expectRows(screen, /→ ✓ ggml-fixture-blue\.bin/);
+			screen.handleInput("\x07");
+			await expectRows(screen, /ASR model \(Transcription\) +ggml-fixture-blue\.bin/);
+			assert.equal(JSON.parse(await readFile(configPath, "utf8")).MICME_WHISPER_CPP_MODEL, selected);
+		} finally {
+			screen?.close();
+			await closed;
+		}
+		assert.deepEqual(notifications, []);
+	});
 });
