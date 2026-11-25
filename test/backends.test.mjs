@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 
 const { resolveTranscriptionPlan } = await import("../src/backends.ts");
+const { resolveLivePlan } = await import("../src/live-plan.ts");
 const { expandEnvReferences, getPrintableShortcuts, getShortcutSettingValue, getTerminalShortcut, getTranscribeBackend, getTranslateToEnglishLanguage } = await import("../src/config.ts");
 const { getPythonWhisperModelName, getPythonWhisperModelQueryArgs, resolveWhisperCppModel } = await import("../src/models.ts");
 const { runProcess } = await import("../src/processes.ts");
@@ -274,12 +275,71 @@ test("explicit whisper.cpp model path overrides model name", () => {
 	);
 });
 
-test("stream mode rejects Python and custom backends", () => {
-	const python = resolveTranscriptionPlan({ requestedBackend: "python", transcriptionMode: "stream", pythonWhisperBinary: "/bin/whisper", whisperStreamBinary: "/bin/whisper-stream", whisperCppModel: fakeWhisperCppModel });
-	assert.equal(python.effectiveBackend, "none");
-	assert.match(python.reason, /Streaming mode requires whisper\.cpp/);
+test("stream mode projects the same unsupported-backend error as the live resolver", () => {
+	for (const backend of ["python", "custom"]) {
+		withEnv({ MICME_TRANSCRIBE_BACKEND: backend }, () => {
+			const plan = resolveTranscriptionPlan({ transcriptionMode: "stream" });
+			assert.equal(plan.requestedBackend, backend);
+			assert.equal(plan.effectiveBackend, "none");
+			assert.throws(resolveLivePlan, { message: plan.reason });
+		});
+	}
+});
 
-	const custom = resolveTranscriptionPlan({ requestedBackend: "custom", transcriptionMode: "stream", customCommand: "echo ok", whisperStreamBinary: "/bin/whisper-stream", whisperCppModel: fakeWhisperCppModel });
-	assert.equal(custom.effectiveBackend, "none");
-	assert.match(custom.reason, /Streaming mode requires whisper\.cpp/);
+for (const requestedBackend of ["auto", "whisper.cpp"]) {
+	test(`an explicit ${requestedBackend} stream request overrides configured Python`, () => {
+		withEnv({
+			MICME_TRANSCRIBE_BACKEND: "python",
+			MICME_LIVE_BIN: process.execPath,
+			MICME_WHISPER_CPP_MODEL: join(tmpdir(), "stream-override-model.bin"),
+		}, () => {
+			const plan = resolveTranscriptionPlan({ transcriptionMode: "stream", requestedBackend });
+			assert.equal(plan.requestedBackend, requestedBackend);
+			assert.equal(plan.effectiveBackend, "whisper.cpp", plan.reason);
+			assert.equal(plan.live?.binary, process.execPath);
+		});
+	});
+}
+
+test("an explicit clip-only backend is rejected even when the configured stream backend works", () => {
+	withEnv({ MICME_TRANSCRIBE_BACKEND: "auto", MICME_LIVE_BIN: process.execPath }, () => {
+		assert.equal(resolveTranscriptionPlan({ transcriptionMode: "stream" }).effectiveBackend, "whisper.cpp");
+		for (const requestedBackend of ["python", "custom"]) {
+			const plan = resolveTranscriptionPlan({ transcriptionMode: "stream", requestedBackend });
+			assert.equal(plan.requestedBackend, requestedBackend);
+			assert.equal(plan.effectiveBackend, "none");
+			assert.match(plan.reason, /choose clip mode/i);
+		}
+	});
+});
+
+test("stream selects the shared live plan instead of any of the installed clip backends", () => {
+	withEnv({
+		MICME_TRANSCRIBE_BACKEND: "auto",
+		MICME_LIVE_BIN: process.execPath,
+		MICME_WHISPER_CPP_MODEL: "/models/custom.bin",
+		MICME_VAD_MODEL: "/models/vad.bin",
+		MICME_TRANSLATE_TO_ENGLISH: "es",
+		MICME_STREAM_FINALIZE_WITH_CLIP: "1",
+	}, () => {
+		const live = resolveLivePlan();
+		const plan = resolveTranscriptionPlan({ transcriptionMode: "stream", customCommand: "echo clip", whisperCppBinary: "/bin/whisper-cli", pythonWhisperBinary: "/bin/whisper" });
+		assert.equal(plan.effectiveBackend, "whisper.cpp");
+		assert.equal(plan.binary, live.binary);
+		assert.equal(plan.modelPath, live.modelPath);
+		assert.deepEqual(plan.live, live);
+	});
+});
+
+test("an installed featherweight legacy SDL fixture does not make stream available", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-legacy-stream-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const legacy = join(root, "whisper-stream");
+	await writeFile(legacy, "#!/bin/sh\nexit 93\n", { mode: 0o755 });
+	withEnv({ PATH: root, MICME_LIVE_BIN: "", MICME_WHISPER_STREAM_BIN: legacy, MICME_TRANSCRIBE_BACKEND: "auto" }, () => {
+		const plan = resolveTranscriptionPlan({ transcriptionMode: "stream" });
+		assert.equal(plan.effectiveBackend, "none");
+		assert.match(plan.reason, /micme-live was not found.*choose clip mode/);
+		assert.throws(resolveLivePlan, { message: plan.reason });
+	});
 });

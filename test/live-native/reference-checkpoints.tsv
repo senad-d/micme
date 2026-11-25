@@ -1,0 +1,321 @@
+model	width	run	checkpoint_ms	last_write_ms	last_reference_word	last_reference_end_ms	visible_line	precision	tail_precision	recent_tail_match	pass
+base.en	40	1	4270	3884.73	delighted	4200	Live: …matter very much. My uncle...	1	1	true	true
+base.en	40	1	6270	6172.84	and	6010	Live: …was delighted. For myself.	1	1	true	true
+base.en	40	1	8270	7255.38	to	8140	Live: …was delighted. For myself,	1	1	true	true
+base.en	40	1	10270	9184.62	hamlet	10080	Live: …I appeared almost to expect a	1	1	true	true
+base.en	40	1	12270	11228.25	struck	12270	Live: …of the ghost of Hamlet. Mr.	0.8333333333333334	0.8333333333333334	true	true
+base.en	40	1	14270	13513.57	to	14100	Live: …struck with the account.	1	1	true	true
+base.en	40	1	16270	14473.96	my	16100	Live: …struck with the account of	1	1	true	true
+base.en	40	1	18270	17603.93	me	17920	Live: …visit to Donald Bean-Lean.	1	1	true	true
+base.en	40	1	20270	19651.78	knight	20180	Live: …and arms and wait for me here.	1	1	true	true
+base.en	40	1	22270	22178.89	will	22090	Live: quest of this night, and	0.8	0.8	true	true
+base.en	40	1	24270	24226.02	so	24250	Live: …I will make him keep his word	1	1	true	true
+base.en	40	1	26270	24226.02	upper	26260	Live: …I will make him keep his word	1	1	true	true
+base.en	40	1	28270	27348.88	canterbury	28090	Live: …It was written in the upper	1	1	true	true
+base.en	40	1	30270	29513.13	new	29930	Live: …district of the Canterbury	1	1	true	true
+base.en	40	1	32270	31677.29	the	32090	Live: …was of New Zealand and appeared	1	1	true	true
+base.en	40	1	34270	33720.45	thirteenth	33970	Live: …appeared at Christchurch in the	1	1	true	true
+base.en	40	2	4270	3880.95	delighted	4200	Live: …matter very much. My uncle...	1	1	true	true
+base.en	40	2	6270	5082.97	and	6010	Live: …My uncle was delighted. For...	1	1	true	true
+base.en	40	2	8270	7248.74	to	8140	Live: …was delighted. For myself,	1	1	true	true
+base.en	40	2	10270	9170.03	hamlet	10080	Live: …I appeared almost to expect a	1	1	true	true
+base.en	40	2	12270	11334.26	struck	12270	Live: …of the ghost of Hamlet. Mr.	0.8333333333333334	0.8333333333333334	true	true
+base.en	40	2	14270	13382.53	to	14100	Live: …struck with the account.	1	1	true	true
+base.en	40	2	16270	14465.24	my	16100	Live: …struck with the account of	1	1	true	true
+base.en	40	2	18270	17588.85	me	17920	Live: …visit to Donald Bean-Lean.	1	1	true	true
+base.en	40	2	20270	19635.89	knight	20180	Live: …and wait for me here. I will go	1	1	true	true
+base.en	40	2	22270	22162.89	will	22090	Live: quest of this night, and	0.8	0.8	true	true
+base.en	40	2	24270	23244.3	so	24250	Live: …this night, and dead or alive	0.8333333333333334	0.8333333333333334	true	true
+base.en	40	2	26270	24327.05	upper	26260	Live: …I will make him keep his word	1	1	true	true
+base.en	40	2	28270	27454.69	canterbury	28090	Live: …It was written in the upper	1	1	true	true
+base.en	40	2	30270	29500.42	new	29930	Live: …district of the Canterbury	1	1	true	true
+base.en	40	2	32270	31666.97	the	32090	Live: …was of New Zealand and appeared	1	1	true	true
+base.en	40	2	34270	33827.92	thirteenth	33970	Live: …appeared at Christchurch in the	1	1	true	true
+base.en	40	3	4270	3897.17	delighted	4200	Live: …to matter very much. My uncle.	1	1	true	true
+base.en	40	3	6270	6183.33	and	6010	Live: …was delighted. For myself.	1	1	true	true
+base.en	40	3	8270	8226.22	to	8140	Live: …For myself, Moody and	1	1	true	true
+base.en	40	3	10270	10267.77	hamlet	10080	Live: …to expect a glimpse of the	1	1	true	true
+base.en	40	3	12270	11350.73	struck	12270	Live: …of the ghost of Hamlet. Mr.	0.8333333333333334	0.8333333333333334	true	true
+base.en	40	3	14270	13394.77	to	14100	Live: …struck with the account.	1	1	true	true
+base.en	40	3	16270	14476.27	my	16100	Live: …struck with the account of	1	1	true	true
+base.en	40	3	18270	17486.51	me	17920	Live: …visit to Donald Bean-Lean.	1	1	true	true
+base.en	40	3	20270	19534.45	knight	20180	Live: …and arms and wait for me here.	1	1	true	true
+base.en	40	3	22270	22059.12	will	22090	Live: quest of this night.	0.75	0.75	true	true
+base.en	40	3	24270	23504.55	so	24250	Live: …are alive. I will make him keep	0.8571428571428571	0.8571428571428571	true	true
+base.en	40	3	26270	24587.04	upper	26260	Live: …I will make him keep his word	1	1	true	true
+base.en	40	3	28270	27717.38	canterbury	28090	Live: …It was written in the upper	1	1	true	true
+base.en	40	3	30270	29639.25	new	29930	Live: …district of the Canterbury	1	1	true	true
+base.en	40	3	32270	31924.25	the	32090	Live: …as it then was of New Zealand	1	1	true	true
+base.en	40	3	34270	33727.06	thirteenth	33970	Live: …in the press newspaper,	1	1	true	true
+base.en	40	4	4270	3773.51	delighted	4200	Live: …matter very much. My uncle...	1	1	true	true
+base.en	40	4	6270	6180.83	and	6010	Live: …was delighted. For myself.	1	1	true	true
+base.en	40	4	8270	7261	to	8140	Live: …was delighted. For myself,	1	1	true	true
+base.en	40	4	10270	10149	hamlet	10080	Live: …to expect a glimpse of the	1	1	true	true
+base.en	40	4	12270	11357.47	struck	12270	Live: …of the ghost of Hamlet. Mr.	0.8333333333333334	0.8333333333333334	true	true
+base.en	40	4	14270	13402.48	to	14100	Live: …particularly struck with the	1	1	true	true
+base.en	40	4	16270	14484.37	my	16100	Live: …struck with the account of	1	1	true	true
+base.en	40	4	18270	17488.66	me	17920	Live: …visit to Donald Bean-Lean.	1	1	true	true
+base.en	40	4	20270	19415.46	knight	20180	Live: …and arms and wait for me here.	1	1	true	true
+base.en	40	4	22270	21937.09	will	22090	Live: quest of this night.	0.75	0.75	true	true
+base.en	40	4	24270	23380.89	so	24250	Live: …this night, and dead or alive	0.8333333333333334	0.8333333333333334	true	true
+base.en	40	4	26270	24463.75	upper	26260	Live: …I will make him keep his word	1	1	true	true
+base.en	40	4	28270	27468.89	canterbury	28090	Live: …It was written in the upper	1	1	true	true
+base.en	40	4	30270	29631.64	new	29930	Live: …district of the Canterbury	1	1	true	true
+base.en	40	4	32270	31912.76	the	32090	Live: …as it then was of New Zealand	1	1	true	true
+base.en	40	4	34270	33838.81	thirteenth	33970	Live: …in the press newspaper.	1	1	true	true
+base.en	40	5	4270	3890.36	delighted	4200	Live: …to matter very much. My uncle.	1	1	true	true
+base.en	40	5	6270	6174.5	and	6010	Live: …was delighted. For myself.	1	1	true	true
+base.en	40	5	8270	7255.92	to	8140	Live: …was delighted. For myself,	1	1	true	true
+base.en	40	5	10270	10264.22	hamlet	10080	Live: …to expect a glimpse of the	1	1	true	true
+base.en	40	5	12270	11347.98	struck	12270	Live: …of the ghost of Hamlet. Mr.	0.8333333333333334	0.8333333333333334	true	true
+base.en	40	5	14270	13394.84	to	14100	Live: …struck with the account.	1	1	true	true
+base.en	40	5	16270	14476.77	my	16100	Live: …struck with the account of	1	1	true	true
+base.en	40	5	18270	17727.25	me	17920	Live: …visit to Donald Bean-Lean.	1	1	true	true
+base.en	40	5	20270	19410.07	knight	20180	Live: …and arms and wait for me here.	1	1	true	true
+base.en	40	5	22270	22056.58	will	22090	Live: quest of this night, and	0.8	0.8	true	true
+base.en	40	5	24270	24221.94	so	24250	Live: …I will make him keep his word	1	1	true	true
+base.en	40	5	26270	24221.94	upper	26260	Live: …I will make him keep his word	1	1	true	true
+base.en	40	5	28270	27346.76	canterbury	28090	Live: …It was written in the upper	1	1	true	true
+base.en	40	5	30270	29390.33	new	29930	Live: …district of the Canterbury	1	1	true	true
+base.en	40	5	32270	31676.35	the	32090	Live: …was of New Zealand and appeared	1	1	true	true
+base.en	40	5	34270	33840.66	thirteenth	33970	Live: …appeared at Christchurch in the	1	1	true	true
+base.en	80	1	4270	3899.17	delighted	4200	Live: But now it doesn't seem to matter very much. My uncle.	1	1	true	true
+base.en	80	1	6270	6185.36	and	6010	Live: …doesn't seem to matter very much. My uncle was delighted. For myself.	1	1	true	true
+base.en	80	1	8270	7268.55	to	8140	Live: …doesn't seem to matter very much. My uncle was delighted. For myself,	1	1	true	true
+base.en	80	1	10270	9193.05	hamlet	10080	Live: For myself, Moody and dissatisfied, I appeared almost to expect a	1	1	true	true
+base.en	80	1	12270	11597	struck	12270	Live: …I appeared almost to expect a glimpse of the ghost of Hamlet. Mr.	0.9230769230769231	0.875	true	true
+base.en	80	1	14270	13526.54	to	14100	Live: …of the ghost of Hamlet. Mr. Morton seemed particularly struck with the	0.9166666666666666	0.875	true	true
+base.en	80	1	16270	15570.48	my	16100	Live: …particularly struck with the account of way-release visit to Donald	0.8181818181818182	0.75	true	true
+base.en	80	1	18270	17613.18	me	17920	Live: …struck with the account of way-release visit to Donald Bean-Lean.	0.8333333333333334	0.75	true	true
+base.en	80	1	20270	19775.84	knight	20180	Live: …being lean. Give me my horse and arms and wait for me here. I will go	0.9375	1	true	true
+base.en	80	1	22270	22181.66	will	22090	Live: quest of this night, and	0.8	0.8	true	true
+base.en	80	1	24270	23261.53	so	24250	Live: quest of this night, and dead or alive	0.875	0.875	true	true
+base.en	80	1	26270	24467.46	upper	26260	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+base.en	80	1	28270	27474.95	canterbury	28090	Live: …keep his word plited to so great beauty. It was written in the upper	0.9285714285714286	1	true	true
+base.en	80	1	30270	29521.45	new	29930	Live: It was written in the upper Rangata district of the Canterbury	0.9090909090909091	0.875	true	true
+base.en	80	1	32270	31685.94	the	32090	Live: …of the Canterbury province as it then was of New Zealand and appeared	1	1	true	true
+base.en	80	1	34270	33731.29	thirteenth	33970	Live: …as it then was, of New Zealand, and appeared at Christchurch in the	1	1	true	true
+base.en	80	2	4270	3881.8	delighted	4200	Live: But now it doesn't seem to matter very much. My uncle...	1	1	true	true
+base.en	80	2	6270	6168.15	and	6010	Live: …doesn't seem to matter very much. My uncle was delighted. For myself.	1	1	true	true
+base.en	80	2	8270	7250.9	to	8140	Live: …doesn't seem to matter very much. My uncle was delighted. For myself,	1	1	true	true
+base.en	80	2	10270	9295.77	hamlet	10080	Live: For myself, Moody and dissatisfied, I appeared almost to expect a	1	1	true	true
+base.en	80	2	12270	11698.78	struck	12270	Live: …I appeared almost to expect a glimpse of the ghost of Hamlet. Mr.	0.9230769230769231	0.875	true	true
+base.en	80	2	14270	13502.23	to	14100	Live: …of Hamlet. Mr. Morton seemed particularly struck with the account.	0.9	0.875	true	true
+base.en	80	2	16270	15549.43	my	16100	Live: …of Hamlet. Mr. Morton seemed particularly struck with the account of	0.9090909090909091	1	true	true
+base.en	80	2	18270	17716.02	me	17920	Live: …struck with the account of way-release visit to Donald Bean-Lean.	0.8333333333333334	0.75	true	true
+base.en	80	2	20270	19760.96	knight	20180	Live: …Bean Lean. Give me my horse and arms and wait for me here. I will go	1	1	true	true
+base.en	80	2	22270	22045.67	will	22090	Live: quest of this night, and	0.8	0.8	true	true
+base.en	80	2	24270	24210.07	so	24250	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+base.en	80	2	26270	24210.07	upper	26260	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+base.en	80	2	28270	27456.88	canterbury	28090	Live: …keep his word plited to so great beauty. It was written in the upper	0.9285714285714286	1	true	true
+base.en	80	2	30270	29381.32	new	29930	Live: It was written in the upper Rangata district of the Canterbury	0.9090909090909091	0.875	true	true
+base.en	80	2	32270	31665.27	the	32090	Live: …district of the Canterbury province as it then was of New Zealand	1	1	true	true
+base.en	80	2	34270	33592.26	thirteenth	33970	Live: …as it then was, of New Zealand, and appeared at Christchurch in the	1	1	true	true
+base.en	80	3	4270	3889.31	delighted	4200	Live: But now it doesn't seem to matter very much. My uncle...	1	1	true	true
+base.en	80	3	6270	5209.25	and	6010	Live: …now it doesn't seem to matter very much. My uncle was delighted. For...	1	1	true	true
+base.en	80	3	8270	7253.61	to	8140	Live: …doesn't seem to matter very much. My uncle was delighted. For myself,	1	1	true	true
+base.en	80	3	10270	10258.01	hamlet	10080	Live: …Moody and dissatisfied, I appeared almost to expect a glimpse of the	1	1	true	true
+base.en	80	3	12270	11460.11	struck	12270	Live: …I appeared almost to expect a glimpse of the ghost of Hamlet. Mr.	0.9230769230769231	0.875	true	true
+base.en	80	3	14270	13383.84	to	14100	Live: …of Hamlet. Mr. Morton seemed particularly struck with the account.	0.9	0.875	true	true
+base.en	80	3	16270	14467.43	my	16100	Live: …of Hamlet. Mr. Morton seemed particularly struck with the account of	0.9090909090909091	1	true	true
+base.en	80	3	18270	17590.18	me	17920	Live: …struck with the account of way-release visit to Donald Bean-Lean.	0.8333333333333334	0.75	true	true
+base.en	80	3	20270	19510.92	knight	20180	Live: Give me my horse and arms and wait for me here.	1	1	true	true
+base.en	80	3	22270	20714.75	will	22090	Live: …horse and arms and wait for me here. I will go in quest of this night.	0.9375	0.875	true	true
+base.en	80	3	24270	24199.39	so	24250	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+base.en	80	3	26270	25279.16	upper	26260	Live: quest of this night, and dead or alive, I will make him keep his word	0.9333333333333333	1	true	true
+base.en	80	3	28270	27322.14	canterbury	28090	Live: …keep his word plited to so great beauty. It was written in the upper	0.9285714285714286	1	true	true
+base.en	80	3	30270	29606.66	new	29930	Live: …beauty. It was written in the upper Rangata district of the Canterbury	0.9166666666666666	0.875	true	true
+base.en	80	3	32270	31540.4	the	32090	Live: …upper Rangatata district of the Canterbury Province, as it then was,	0.9090909090909091	1	true	true
+base.en	80	3	34270	33949.79	thirteenth	33970	Live: …was of New Zealand and appeared at Christchurch in the press newspaper.	1	1	true	true
+base.en	80	4	4270	3918.24	delighted	4200	Live: But now it doesn't seem to matter very much. My uncle.	1	1	true	true
+base.en	80	4	6270	6084.63	and	6010	Live: …doesn't seem to matter very much. My uncle was delighted. For myself.	1	1	true	true
+base.en	80	4	8270	7164.66	to	8140	Live: …doesn't seem to matter very much. My uncle was delighted. For myself,	1	1	true	true
+base.en	80	4	10270	9210.29	hamlet	10080	Live: For myself, Moody and dissatisfied, I appeared almost to expect a	1	1	true	true
+base.en	80	4	12270	11257.53	struck	12270	Live: …I appeared almost to expect a glimpse of the ghost of Hamlet. Mr.	0.9230769230769231	0.875	true	true
+base.en	80	4	14270	13423.72	to	14100	Live: …of Hamlet. Mr. Morton seemed particularly struck with the account.	0.9	0.875	true	true
+base.en	80	4	16270	14385.78	my	16100	Live: …of Hamlet. Mr. Morton seemed particularly struck with the account of	0.9090909090909091	1	true	true
+base.en	80	4	18270	17515.4	me	17920	Live: …struck with the account of way-release visit to Donald Bean-Lean.	0.8333333333333334	0.75	true	true
+base.en	80	4	20270	19441.35	knight	20180	Live: Give me my horse and arms and wait for me here.	1	1	true	true
+base.en	80	4	22270	21965.81	will	22090	Live: quest of this night, and	0.8	0.8	true	true
+base.en	80	4	24270	24128.43	so	24250	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+base.en	80	4	26270	24128.43	upper	26260	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+base.en	80	4	28270	27252.19	canterbury	28090	Live: …keep his word plited to so great beauty. It was written in the upper	0.9285714285714286	1	true	true
+base.en	80	4	30270	29419.17	new	29930	Live: …It was written in the upper Rangatata district of the Canterbury	0.9090909090909091	0.875	true	true
+base.en	80	4	32270	31341.69	the	32090	Live: …district of the Canterbury Province as it then was of New Zealand,	1	1	true	true
+base.en	80	4	34270	33510.4	thirteenth	33970	Live: …was of New Zealand and appeared at Christchurch in the press newspaper.	1	1	true	true
+base.en	80	5	4270	3893.59	delighted	4200	Live: But now it doesn't seem to matter very much. My uncle.	1	1	true	true
+base.en	80	5	6270	6178.8	and	6010	Live: …doesn't seem to matter very much. My uncle was delighted. For myself.	1	1	true	true
+base.en	80	5	8270	8223.36	to	8140	Live: …seem to matter very much. My uncle was delighted. For myself, Moody and	1	1	true	true
+base.en	80	5	10270	10149.54	hamlet	10080	Live: …Moody and dissatisfied, I appeared almost to expect a glimpse of the	1	1	true	true
+base.en	80	5	12270	11352.37	struck	12270	Live: …I appeared almost to expect a glimpse of the ghost of Hamlet. Mr.	0.9230769230769231	0.875	true	true
+base.en	80	5	14270	13518.22	to	14100	Live: …of Hamlet. Mr. Morton seemed particularly struck with the account.	0.9	0.875	true	true
+base.en	80	5	16270	14481.92	my	16100	Live: …of Hamlet. Mr. Morton seemed particularly struck with the account of	0.9090909090909091	1	true	true
+base.en	80	5	18270	17605.71	me	17920	Live: …struck with the account of way-release visit to Donald Bean-Lean.	0.8333333333333334	0.75	true	true
+base.en	80	5	20270	19647.59	knight	20180	Live: Give me my horse and arms and wait for me here.	1	1	true	true
+base.en	80	5	22270	22172.88	will	22090	Live: quest of this night.	0.75	0.75	true	true
+base.en	80	5	24270	23493.91	so	24250	Live: quest of this night and dead or alive. I will make him keep his	0.9285714285714286	1	true	true
+base.en	80	5	26270	24696.18	upper	26260	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+base.en	80	5	28270	27701.03	canterbury	28090	Live: …keep his word plited to so great beauty. It was written in the upper	0.9285714285714286	1	true	true
+base.en	80	5	30270	29623.73	new	29930	Live: It was written in the upper Rangata district of the Canterbury	0.9090909090909091	0.875	true	true
+base.en	80	5	32270	32030.28	the	32090	Live: …the Canterbury province as it then was of New Zealand and appeared at	1	1	true	true
+base.en	80	5	34270	33715.26	thirteenth	33970	Live: …was of New Zealand, an appeared at Christchurch in the press newspaper,	0.9166666666666666	0.875	true	true
+small.en	40	1	4270	3764.87	delighted	4200	Live: …it doesn't seem to matter very	1	1	true	true
+small.en	40	1	6270	6046.48	and	6010	Live: …much. My uncle was delighted.	1	1	true	true
+small.en	40	1	8270	7367.91	to	8140	Live: …For myself, Moody and	1	1	true	true
+small.en	40	1	10270	9408.94	hamlet	10080	Live: matter very much.	1	1	false	false
+small.en	40	1	12270	10972.55	struck	12270	Live: …to expect a glimpse of the	1	1	true	true
+small.en	40	1	14270	13859.22	to	14100	Live: …seemed particularly struck	1	1	true	true
+small.en	40	1	16270	15179.75	my	16100	Live: …struck with the account of	1	1	true	true
+small.en	40	1	18270	16740.58	me	17920	Live: …Waverly's visit to Donald Bean	0.8	0.8	true	true
+small.en	40	1	20270	19622.49	knight	20180	Live: …and arms and wait for me here.	1	1	true	true
+small.en	40	1	22270	20945.56	will	22090	Live: …wait for me here. I will go in	1	1	true	true
+small.en	40	1	24270	20945.56	so	24250	Live: …wait for me here. I will go in	1	1	false	false
+small.en	40	1	26270	25151.25	upper	26260		0	0	false	false
+small.en	40	1	28270	27916.45	canterbury	28090	Live: …It was written in the upper	1	1	true	true
+small.en	40	1	30270	27916.45	new	29930	Live: …It was written in the upper	1	1	true	true
+small.en	40	1	32270	31882.17	the	32090	Live: …as it then was of New Zealand.	1	1	true	true
+small.en	40	1	34270	33328.75	thirteenth	33970	Live: …as it then was of New Zealand	1	1	true	true
+small.en	40	2	4270	3642.2	delighted	4200	Live: …it doesn't seem to matter very	1	1	true	true
+small.en	40	2	6270	5928.03	and	6010	Live: …much. My uncle was delighted.	1	1	true	true
+small.en	40	2	8270	7129.11	to	8140	Live: …delighted. For myself, Moody-	1	1	true	true
+small.en	40	2	10270	9532.63	hamlet	10080	Live: matter very much.	1	1	false	false
+small.en	40	2	12270	12180.32	struck	12270	Live: …ghost of Hamlet. Mr. Morton.	0.8	0.8	true	true
+small.en	40	2	14270	13743.24	to	14100	Live: …Mr. Morton seemed particularly	0.75	0.75	true	true
+small.en	40	2	16270	15063.67	my	16100	Live: …struck with the account of	1	1	true	true
+small.en	40	2	18270	16504.5	me	17920	Live: …of Waverly's visit to Donald	0.8	0.8	true	true
+small.en	40	2	20270	18311.15	knight	20180	Live: …visit to Donald Bean Lean.	1	1	true	true
+small.en	40	2	22270	20959.36	will	22090	Live: …me here. I will go in quest of	1	1	true	true
+small.en	40	2	24270	20959.36	so	24250	Live: …me here. I will go in quest of	1	1	true	true
+small.en	40	2	26270	25532.18	upper	26260		0	0	false	false
+small.en	40	2	28270	28177.5	canterbury	28090	Live: …It was written in the upper	1	1	true	true
+small.en	40	2	30270	29501.14	new	29930	Live: …district of the Canterbury	1	1	true	true
+small.en	40	2	32270	31906.08	the	32090	Live: great beauty.	1	1	false	false
+small.en	40	2	34270	33706.4	thirteenth	33970	Live: …of New Zealand and appeared at	1	1	true	true
+small.en	40	3	4270	3528.32	delighted	4200	Live: …now it doesn't seem to matter	1	1	true	true
+small.en	40	3	6270	6049.83	and	6010	Live: …much. My uncle was delighted.	1	1	true	true
+small.en	40	3	8270	7492.98	to	8140	Live: …was delighted. For myself,	1	1	true	true
+small.en	40	3	10270	9535.35	hamlet	10080	Live: matter very much.	1	1	false	false
+small.en	40	3	12270	11097.45	struck	12270	Live: …a glimpse of the ghost of	1	1	true	true
+small.en	40	3	14270	13744.2	to	14100	Live: …seemed particularly struck	1	1	true	true
+small.en	40	3	16270	14946.73	my	16100	Live: …struck with the account of	1	1	true	true
+small.en	40	3	18270	17713.19	me	17920	Live: …Waverly's visit to Donald Bean	0.8	0.8	true	true
+small.en	40	3	20270	19154.74	knight	20180	Live: …Lean. Give me my horse and arms	1	1	true	true
+small.en	40	3	22270	20481	will	22090	Live: …and arms and wait for me here.	1	1	true	true
+small.en	40	3	24270	20481	so	24250	Live: …and arms and wait for me here.	1	1	false	false
+small.en	40	3	26270	25769.54	upper	26260	Live: …I will make him keep his word	1	1	true	true
+small.en	40	3	28270	26976.73	canterbury	28090	Live: …plighted to so great beauty.	1	1	true	true
+small.en	40	3	30270	29501.18	new	29930	Live: …It was written in the upper	1	1	true	true
+small.en	40	3	32270	31903.74	the	32090	Live: great beauty.	1	1	false	false
+small.en	40	3	34270	33225.43	thirteenth	33970	Live: …of New Zealand and appeared at	1	1	true	true
+small.en	40	4	4270	3523.17	delighted	4200	Live: …now it doesn't seem to matter	1	1	true	true
+small.en	40	4	6270	6047.81	and	6010	Live: …much. My uncle was delighted.	1	1	true	true
+small.en	40	4	8270	7247.68	to	8140	Live: …For myself, Moody and	1	1	true	true
+small.en	40	4	10270	9409.1	hamlet	10080	Live: to matter very much.	1	1	false	false
+small.en	40	4	12270	11811.37	struck	12270	Live: …glimpse of the ghost of Hamlet.	1	1	true	true
+small.en	40	4	14270	13133.06	to	14100	Live: …of Hamlet. Mr. Morton seemed	0.8	0.8	true	true
+small.en	40	4	16270	15776.01	my	16100	Live: …of Waverly's visit to Don-	0.6	0.6	true	false
+small.en	40	4	18270	17097.65	me	17920	Live: …of Waverly's visit to Donald	0.8	0.8	true	true
+small.en	40	4	20270	19863.22	knight	20180	Live: …and arms and wait for me here.	1	1	true	true
+small.en	40	4	22270	21063.67	will	22090	Live: …I will go in quest of this	1	1	true	true
+small.en	40	4	24270	21063.67	so	24250	Live: …I will go in quest of this	1	1	true	true
+small.en	40	4	26270	26232.05	upper	26260	Live: …I will make him keep his word	1	1	true	true
+small.en	40	4	28270	27434.84	canterbury	28090	Live: …plighted to so great beauty.	1	1	true	true
+small.en	40	4	30270	30076.02	new	29930	Live: …district of the Canterbury	1	1	true	true
+small.en	40	4	32270	31520.02	the	32090	Live: …of the Canterbury Province	1	1	true	true
+small.en	40	4	34270	34165.92	thirteenth	33970	Live: …appeared at Christchurch in the	1	1	true	true
+small.en	40	5	4270	3641.12	delighted	4200	Live: …now it doesn't seem to matter	1	1	true	true
+small.en	40	5	6270	5929.14	and	6010	Live: …much. My uncle was delighted.	1	1	true	true
+small.en	40	5	8270	7249.7	to	8140	Live: …delighted. For myself, Moody-	1	1	true	true
+small.en	40	5	10270	9292.71	hamlet	10080	Live: to matter very much.	1	1	false	false
+small.en	40	5	12270	11935.51	struck	12270	Live: …glimpse of the ghost of Hamlet.	1	1	true	true
+small.en	40	5	14270	13139.71	to	14100	Live: …Mr. Morton seemed particularly-	0.75	0.75	true	true
+small.en	40	5	16270	15662.57	my	16100	Live: …account of Waverly's visit to	0.8	0.8	true	true
+small.en	40	5	18270	17102.59	me	17920	Live: …of Waverly's visit to Donald	0.8	0.8	true	true
+small.en	40	5	20270	19626.26	knight	20180	Live: …and arms and wait for me here.	1	1	true	true
+small.en	40	5	22270	21185.91	will	22090	Live: …wait for me here. I will go in	1	1	true	true
+small.en	40	5	24270	21185.91	so	24250	Live: …wait for me here. I will go in	1	1	false	false
+small.en	40	5	26270	25872.73	upper	26260		0	0	false	false
+small.en	40	5	28270	27314.76	canterbury	28090	Live: …this night, and dead or alive	0.8333333333333334	0.8333333333333334	false	false
+small.en	40	5	30270	29961.73	new	29930	Live: …It was written in the upper	1	1	true	true
+small.en	40	5	32270	31406.52	the	32090	Live: …district of the Canterbury	1	1	true	true
+small.en	40	5	34270	34052.44	thirteenth	33970	Live: …of New Zealand and appeared at	1	1	true	true
+small.en	80	1	4270	3641.33	delighted	4200	Live: But now it doesn't seem to matter	1	1	true	true
+small.en	80	1	6270	6045.99	and	6010	Live: But now it doesn't seem to matter very much. My uncle was delighted.	1	1	true	true
+small.en	80	1	8270	7248	to	8140	Live: …doesn't seem to matter very much. My uncle was delighted. For myself,	1	1	true	true
+small.en	80	1	10270	9289.1	hamlet	10080	Live: matter very much.	1	1	false	false
+small.en	80	1	12270	12173.24	struck	12270	Live: …appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton.	0.9230769230769231	0.875	true	true
+small.en	80	1	14270	13374.38	to	14100	Live: …expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly	0.9166666666666666	0.875	true	true
+small.en	80	1	16270	16015.58	my	16100	Live: …particularly struck with the account of Waverly's visit to Donald	0.9	0.875	true	true
+small.en	80	1	18270	16015.58	me	17920	Live: …particularly struck with the account of Waverly's visit to Donald	0.9	0.875	true	true
+small.en	80	1	20270	19862.25	knight	20180	Live: …to Donald Bean Lean. Give me my horse and arms and wait for me here.	1	1	true	true
+small.en	80	1	22270	21305.89	will	22090	Live: …me my horse and arms and wait for me here. I will go in quest of this	1	1	true	true
+small.en	80	1	24270	21305.89	so	24250	Live: …me my horse and arms and wait for me here. I will go in quest of this	1	1	true	true
+small.en	80	1	26270	25036.98	upper	26260		0	0	false	false
+small.en	80	1	28270	27923.23	canterbury	28090	Live: …his word plighted to so great beauty. It was written in the upper right	0.9285714285714286	0.875	true	true
+small.en	80	1	30270	29364.77	new	29930	Live: …keep his word plighted to so great beauty. It was written in the upper	1	1	true	true
+small.en	80	1	32270	32129.99	the	32090	Live: …district of the Canterbury province, as it then was of New Zealand.	1	1	true	true
+small.en	80	1	34270	33693.45	thirteenth	33970	Live: …the Canterbury province as it then was of New Zealand and appeared at	1	1	true	true
+small.en	80	2	4270	3648.26	delighted	4200	Live: But now it doesn't seem to matter very	1	1	true	true
+small.en	80	2	6270	6054.35	and	6010	Live: …it doesn't seem to matter very much. My uncle was delighted. For my-	0.9230769230769231	0.875	true	true
+small.en	80	2	8270	7376.43	to	8140	Live: …seem to matter very much. My uncle was delighted. For myself, Moody and	1	1	true	true
+small.en	80	2	10270	10145.25	hamlet	10080	Live: very much.	1	1	false	false
+small.en	80	2	12270	10145.25	struck	12270	Live: very much.	1	1	false	false
+small.en	80	2	14270	13996.33	to	14100	Live: …expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly	0.9166666666666666	0.875	true	true
+small.en	80	2	16270	15318.48	my	16100	Live: …Morton seemed particularly struck with the account of Waverly's visit.	0.9	0.875	true	true
+small.en	80	2	18270	18204.52	me	17920	Live: …struck with the account of Waverly's visit to Donald Bean Lean.	0.9090909090909091	0.875	true	true
+small.en	80	2	20270	19526.78	knight	20180	Live: …early struck with the account of Waverly's visit to Donald Bean Lean.	0.8333333333333334	0.875	true	true
+small.en	80	2	22270	20848.25	will	22090	Live: …Bean Lean. Give me my horse and arms and wait for me here. I will go in	1	1	true	true
+small.en	80	2	24270	20848.25	so	24250	Live: …Bean Lean. Give me my horse and arms and wait for me here. I will go in	1	1	false	false
+small.en	80	2	26270	26135.64	upper	26260	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+small.en	80	2	28270	27339.24	canterbury	28090	Live: of this night, and dead or alive	0.8571428571428571	0.8571428571428571	false	false
+small.en	80	2	30270	29864.03	new	29930	Live: …keep his word plighted to so great beauty. It was written in the upper	1	1	true	true
+small.en	80	2	32270	32147.08	the	32090	Live: beauty.	1	1	false	false
+small.en	80	2	34270	33587.25	thirteenth	33970	Live: …the Canterbury Province as it then was of New Zealand and appeared at	1	1	true	true
+small.en	80	3	4270	3529.41	delighted	4200	Live: But now it doesn't seem to matter	1	1	true	true
+small.en	80	3	6270	5935.32	and	6010	Live: But now it doesn't seem to matter very much. My uncle was delighted.	1	1	true	true
+small.en	80	3	8270	8218.96	to	8140	Live: Now it doesn't seem to matter very much.	1	1	false	false
+small.en	80	3	10270	9181.11	hamlet	10080	Live: to matter very much.	1	1	false	false
+small.en	80	3	12270	11944.79	struck	12270	Live: …I appeared almost to expect a glimpse of the ghost of Hamlet.	1	1	true	true
+small.en	80	3	14270	13147.25	to	14100	Live: …a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly-	0.9090909090909091	0.875	true	true
+small.en	80	3	16270	15791.4	my	16100	Live: …seemed particularly struck with the account of Waverly's visit to	0.9	0.875	true	true
+small.en	80	3	18270	17111.71	me	17920	Live: …particularly struck with the account of Waverly's visit to Donald	0.9	0.875	true	true
+small.en	80	3	20270	19755.83	knight	20180	Live: …to Donald Bean Lean. Give me my horse and arms and wait for me here.	1	1	true	true
+small.en	80	3	22270	20956.5	will	22090	Live: …Give me my horse and arms and wait for me here. I will go in quest of	1	1	true	true
+small.en	80	3	24270	20956.5	so	24250	Live: …Give me my horse and arms and wait for me here. I will go in quest of	1	1	true	true
+small.en	80	3	26270	24923.86	upper	26260		0	0	false	false
+small.en	80	3	28270	27687.52	canterbury	28090	Live: …him keep his word plighted to so great beauty. It was written in the	1	1	true	true
+small.en	80	3	30270	29129.36	new	29930	Live: alive I will make him keep his word plighted to so great beauty.	1	1	false	false
+small.en	80	3	32270	31888.87	the	32090	Live: …district of the Canterbury Province as it then was of New Zealand.	1	1	true	true
+small.en	80	3	34270	33573.23	thirteenth	33970	Live: …the Canterbury province as it then was of New Zealand and appeared at	1	1	true	true
+small.en	80	4	4270	3773.35	delighted	4200	Live: But now it doesn't seem to matter	1	1	true	true
+small.en	80	4	6270	6057.78	and	6010	Live: …it doesn't seem to matter very much. My uncle was delighted. For my-	0.9230769230769231	0.875	true	true
+small.en	80	4	8270	7380.24	to	8140	Live: …to matter very much. My uncle was delighted. For myself, Moody and-	1	1	true	true
+small.en	80	4	10270	9422.12	hamlet	10080	Live: matter very much.	1	1	false	false
+small.en	80	4	12270	11108.88	struck	12270	Live: …moody and dissatisfied, I appeared almost to expect a glimpse of the	1	1	true	true
+small.en	80	4	14270	12791.81	to	14100	Live: …I appeared almost to expect a glimpse of the ghost of Hamlet.	1	1	true	true
+small.en	80	4	16270	14837.8	my	16100	Live: …of the ghost of Hamlet. Mr. Morton seemed particularly struck with the	0.9166666666666666	0.875	true	true
+small.en	80	4	18270	16401.45	me	17920	Live: …particularly struck with the account of Waverly's visit to Donald	0.9	0.875	true	true
+small.en	80	4	20270	18933.84	knight	20180	Live: …particularly struck with the account of Waverly's visit to Donald Bean	0.9090909090909091	0.875	false	false
+small.en	80	4	22270	20494.94	will	22090	Live: …Bean Lean. Give me my horse and arms and wait for me here. I will	1	1	true	true
+small.en	80	4	24270	20494.94	so	24250	Live: …Bean Lean. Give me my horse and arms and wait for me here. I will	1	1	true	true
+small.en	80	4	26270	26025.19	upper	26260	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+small.en	80	4	28270	27467.19	canterbury	28090	Live: …make him keep his word plighted to so great beauty. It was written in	1	1	true	true
+small.en	80	4	30270	30114.16	new	29930	Live: …so great beauty. It was written in the upper Rangitada district of the	0.9230769230769231	0.875	true	true
+small.en	80	4	32270	31676.45	the	32090	Live: …It was written in the Upper Rangitada district of the Canterbury	0.9090909090909091	0.875	true	true
+small.en	80	4	34270	34199.27	thirteenth	33970	Live: …the Canterbury province as it then was of New Zealand and appeared at	1	1	true	true
+small.en	80	5	4270	3171.72	delighted	4200	Live: But now it doesn't-	1	1	true	true
+small.en	80	5	6270	5816.54	and	6010	Live: But now it doesn't seem to matter very much. My uncle was delighted.	1	1	true	true
+small.en	80	5	8270	7261.42	to	8140	Live: …doesn't seem to matter very much. My uncle was delighted. For myself,	1	1	true	true
+small.en	80	5	10270	9422.97	hamlet	10080	Live: matter very much.	1	1	false	false
+small.en	80	5	12270	12066.91	struck	12270	Live: …I appeared almost to expect a glimpse of the ghost of Hamlet.	1	1	true	true
+small.en	80	5	14270	13510.8	to	14100	Live: …expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly	0.9166666666666666	0.875	true	true
+small.en	80	5	16270	16154.95	my	16100	Live: …particularly struck with the account of Waverly's visit to Donald	0.9	0.875	true	true
+small.en	80	5	18270	16154.95	me	17920	Live: …particularly struck with the account of Waverly's visit to Donald	0.9	0.875	true	true
+small.en	80	5	20270	19038.61	knight	20180	Live: …of Waverly's visit to Donald Bean Lean. Give me my horse and arms	0.9230769230769231	1	true	true
+small.en	80	5	22270	20359.83	will	22090	Live: …Bean Lean. Give me my horse and arms and wait for me here. I will	1	1	true	true
+small.en	80	5	24270	20359.83	so	24250	Live: …Bean Lean. Give me my horse and arms and wait for me here. I will	1	1	true	true
+small.en	80	5	26270	25769.05	upper	26260	Live: quest of this night, and dead or alive I will make him keep his word	0.9333333333333333	1	true	true
+small.en	80	5	28270	27092.47	canterbury	28090	Live: quest of this night, and dead or alive	0.875	0.875	false	false
+small.en	80	5	30270	29737.53	new	29930	Live: …keep his word plighted to so great beauty. It was written in the upper	1	1	true	true
+small.en	80	5	32270	32145.65	the	32090	Live: beauty.	1	1	false	false
+small.en	80	5	34270	34071.65	thirteenth	33970	Live: …the Canterbury Province as it then was of New Zealand and appeared at	1	1	true	true

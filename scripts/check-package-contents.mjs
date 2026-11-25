@@ -4,6 +4,13 @@ import { readFileSync } from "node:fs";
 import { posix } from "node:path";
 
 const hiddenEnvironmentFilePattern = new RegExp(`^\\.${"env"}(?:$|\\.)`);
+const requiredWorkerSources = [
+  "native/live/CMakeLists.txt",
+  "native/live/main.cpp",
+  "native/live/decoder.cpp",
+  "native/live/decoder.hpp",
+];
+const allowedNativeFiles = new Set([...requiredWorkerSources, "native/live/README.md"]);
 
 const forbiddenChecks = [
   {
@@ -14,6 +21,8 @@ const forbiddenChecks = [
   { label: "generated Micme config", test: (path) => path === "micme.json" || path.endsWith("/micme.json") },
   { label: "node_modules", test: (path) => path.startsWith("node_modules/") || path.includes("/node_modules/") },
   { label: "planning specs", test: (path) => path.startsWith("specs/") },
+  { label: "unexpected native files", test: (path) => path.startsWith("native/") && !allowedNativeFiles.has(path) },
+  { label: "local build products", test: (path) => path.startsWith("build/") || /(^|\/)micme-live(\.exe)?$/i.test(path) },
   { label: "Micme cache", test: (path) => path.startsWith(".micme/") || path.includes("/.micme/") },
   { label: "Micme recordings", test: (path) => path.startsWith("micme-rec/") || path.includes("/micme-rec/") },
   { label: "token insight files", test: (path) => path.includes("token-insights") },
@@ -45,7 +54,8 @@ function readRequiredPaths() {
   const { pi, bin } = JSON.parse(readFileSync("package.json", "utf8"));
   const binTargets = typeof bin === "string" ? [bin] : Object.values(bin ?? {});
   // npm's manifest uses slash-separated paths without the leading "./".
-  return new Set([...(pi?.extensions ?? []), ...binTargets].map((path) => posix.normalize(path)));
+  const entrypoints = [...(pi?.extensions ?? []), ...binTargets].map((path) => posix.normalize(path));
+  return new Set([...entrypoints, ...requiredWorkerSources]);
 }
 
 const files = readPackFiles();
@@ -62,7 +72,7 @@ console.log(`Micme package dry-run contains ${files.length} file(s).`);
 for (const file of files) console.log(`- ${file}`);
 
 if (missing.length > 0) {
-  console.error("\nMissing required package entrypoints:");
+  console.error("\nMissing required package paths:");
   for (const path of missing) console.error(`- ${path}`);
   process.exitCode = 1;
 }

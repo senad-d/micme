@@ -1,598 +1,331 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
-import {
-	env,
-	envFlag,
-	getStreamCapture,
-	getTranslateToEnglishLanguage,
-	getStreamFlushMs,
-	getStreamKeepContext,
-	getStreamKeepMs,
-	getStreamLengthMs,
-	getStreamMaxTokens,
-	getStreamStepMs,
-	getStreamVadThreshold,
-	getStreamWordsPerChunk,
-} from "./config.ts";
-import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
-import { shellQuote } from "./processes.ts";
+import { setTimeout as delay } from "node:timers/promises";
+import { envFlag, getTranscribeTimeoutMs } from "./config.ts";
+import { LIVE_CAPTURE_RATE as RATE } from "./constants.ts";
+import { deferred, formatExit, formatProcessOutput, normalizeTranscript, runProcess } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
-import type { CommandSpec, Recording, StreamingState } from "./types.ts";
+import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
+import type { CommandSpec, LivePlan, OwnedProcess } from "./types.ts";
 
-export type StreamingFrameMode = "cumulative" | "incremental" | "rolling" | "duplicate" | "reset";
+const LINE_BYTES = 64 * 1024;
+const MAX_UPDATE_EVENTS = 64;
+const POLL_MS = 30;
 
-export type StreamingExtraction = {
-	mode: StreamingFrameMode;
-	newWords: string[];
-};
+export type LiveText = { type: "partial" | "final"; from: number; to: number; text: string };
+type Ready = { loadMs: number; asrLoads: number; vadLoads: number };
+type Done = { through: number; asrCalls: number; asrMs: number; vadFrames: number };
+type Phase = "ready" | "idle" | "feed" | "finish" | "done";
 
-type StreamingDiagnosticDetails = {
-	rawFrame?: string;
-	sanitizedText?: string;
-	frameWords?: string[];
-	extractionMode: StreamingFrameMode | "ignored" | "flush";
-	newWords?: string[];
-	reason?: string;
-};
+type WorkerTransport = Pick<OwnedProcess, "exitObserved" | "exitPromise"> & { process: Pick<OwnedProcess["process"], "stdin" | "stdout"> };
 
-export function buildWhisperStreamCommand(binary: string, modelPath: string, _tempDir: string): CommandSpec {
-	const args = [
-		"-m",
-		modelPath,
-		"--step",
-		String(getStreamStepMs()),
-		"--length",
-		String(getStreamLengthMs()),
-		"--keep",
-		String(getStreamKeepMs()),
-		"--max-tokens",
-		String(getStreamMaxTokens()),
-		"--vad-thold",
-		String(getStreamVadThreshold()),
-		"-nf",
-	];
+export function buildLiveWorkerCommand(plan: LivePlan): CommandSpec {
+	const args = ["--model", plan.modelPath, "--vad-model", plan.vadModelPath, "--language", plan.language];
+	if (plan.translate) args.push("--translate");
+	// Busy OpenMP waits can stall each decoder token when a terminal, capture,
+	// or another process also needs CPU. Scope the default to the live child.
+	const env = process.env.OMP_WAIT_POLICY ? undefined : { ...process.env, OMP_WAIT_POLICY: "PASSIVE" };
+	return { command: plan.binary, args, display: "micme-live", ...(env && { spawnOptions: { env } }) };
+}
 
-	if (getStreamKeepContext()) args.push("--keep-context");
-
-	args.push("--capture", String(getStreamCapture()));
-
-	const translateLanguage = getTranslateToEnglishLanguage();
-	if (translateLanguage) {
-		args.push("-tr", "-l", translateLanguage);
-	} else {
-		const language = env("MICME_LANGUAGE");
-		if (language?.trim()) args.push("-l", language.trim());
+export async function probeLiveWorker(binary: string) {
+	const probe = await runProcess(binary, ["--protocol-version"], Math.min(3_000, getTranscribeTimeoutMs()));
+	if (probe.code !== 0 || probe.timedOut || probe.stdoutTruncated || probe.stdout !== "1\n") {
+		throw new Error("micme-live did not report Worker v1. Rebuild it using native/live/README.md or correct MICME_LIVE_BIN.");
 	}
-
-	return { command: binary, args, display: `${binary} ${args.map(shellQuote).join(" ")}` };
 }
 
-export function handleStreamingOutput(ctx: ExtensionContext, active: Recording, chunk: string) {
-	drainStreamingOutput(ctx, active, false, chunk);
+function isCount(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-export function drainStreamingOutput(ctx: ExtensionContext, active: Recording, force: boolean, chunk = "") {
-	if (!active.streaming) return;
-	const state = active.streaming;
+function isDuration(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
 
-	for (const rawFrame of readStreamingOutputFrames(state, chunk, force)) {
-		const sanitizedText = sanitizeStreamingText(rawFrame);
-		const frameWords = splitStreamingWords(sanitizedText);
+function protocolError(reason: string): Error {
+	return new Error(`Micme live worker protocol: ${reason}.`);
+}
 
-		if (!sanitizedText) {
-			if (shouldResetStreamingPending(rawFrame)) {
-				clearStreamingFlush(state);
-				state.candidateWords = [];
-				state.lastHypothesisWords = [];
-				state.lastText = "";
-				renderStreamingPreview(ctx, state, false);
-				showStreamingFrameDiagnostics(ctx, state, {
-					rawFrame,
-					sanitizedText,
-					frameWords,
-					extractionMode: "reset",
-					newWords: [],
-					reason: "reset/hallucination frame",
-				});
-			} else {
-				showStreamingFrameDiagnostics(ctx, state, {
-					rawFrame,
-					sanitizedText,
-					frameWords,
-					extractionMode: "ignored",
-					newWords: [],
-					reason: "empty frame",
-				});
+export class LiveWorker {
+	readonly signal: AbortSignal;
+	readonly ready: Promise<Ready>;
+	readonly timeoutMs: number;
+	through = 0;
+	private readonly failed = new AbortController();
+	private readonly child: WorkerTransport;
+	private readonly onText: (update: LiveText) => void;
+	private readonly bytes = Buffer.alloc(LINE_BYTES - 1);
+	private readonly utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+	private readonly loaded = deferred<Ready>();
+	private phase: Phase = "ready";
+	private buffered = 0;
+	private inputThrough = 0;
+	private finalThrough = 0;
+	private draft: LiveText | undefined;
+	private updates: LiveText[] = [];
+	private previews = false;
+	private ack: ReturnType<typeof deferred<void>> | undefined;
+	private readonly done = deferred<Done>();
+
+	constructor(child: WorkerTransport, signal: AbortSignal, onText: (update: LiveText) => void, timeoutMs = getTranscribeTimeoutMs()) {
+		this.child = child;
+		this.signal = AbortSignal.any([signal, this.failed.signal]);
+		this.onText = onText;
+		this.timeoutMs = timeoutMs;
+		this.ready = this.wait(this.loaded.promise, "waiting for ready (model loading)");
+		const { stdin, stdout } = child.process;
+		if (!stdin || !stdout) this.fail(protocolError("worker pipes are unavailable"));
+		stdin?.on("error", () => this.fail(protocolError("could not write PCM to stdin")));
+		stdout?.on("data", this.read.bind(this));
+		stdout?.on("error", () => this.fail(protocolError("could not read worker stdout")));
+		stdout?.on("end", () => {
+			if (this.buffered || this.phase !== "done") this.fail(protocolError("stdout closed before a complete done event"));
+		});
+		void child.exitObserved.then((exit) => {
+			if ((this.phase !== "finish" && this.phase !== "done") || exit.code !== 0 || exit.signal || exit.error) {
+				const result = sanitizeTerminalText(formatExit(exit)).slice(0, 256) || "unknown exit";
+				this.fail(new Error(`Micme live worker exited unexpectedly (${result}). Check micme-live and its models.`));
 			}
-			continue;
-		}
-
-		clearStreamingFlush(state);
-		if (!state.firstOutputAt) state.firstOutputAt = Date.now();
-		const extraction = extractStreamingCandidate(state, frameWords);
-		state.lastText = sanitizedText;
-		active.audioLevel = () => 0.55;
-		queueStableStreamingWords(ctx, state, extraction.newWords, extraction.mode);
-		state.lastHypothesisWords = frameWords;
-		showStreamingFrameDiagnostics(ctx, state, {
-			rawFrame,
-			sanitizedText,
-			frameWords,
-			extractionMode: extraction.mode,
-			newWords: extraction.newWords,
 		});
 	}
-}
 
-export function readStreamingOutputFrames(state: StreamingState, chunk: string, force: boolean) {
-	// whisper-stream rewrites one terminal line with \r; wait for delimiters so split stdout chunks do not become words.
-	state.outputBuffer += chunk;
-	const frames: string[] = [];
-
-	while (true) {
-		const match = /[\r\n]/.exec(state.outputBuffer);
-		if (match?.index === undefined) break;
-		frames.push(state.outputBuffer.slice(0, match.index));
-		state.outputBuffer = state.outputBuffer.slice(match.index + 1).replace(/^[\r\n]+/, "");
+	get failure(): unknown {
+		return this.failed.signal.reason as unknown;
 	}
 
-	// Cap only the unfinished frame left after consuming complete ones.
-	state.outputBuffer = state.outputBuffer.slice(-MAX_CAPTURED_OUTPUT_CHARS);
-
-	if (force && state.outputBuffer.trim()) {
-		frames.push(state.outputBuffer);
-		state.outputBuffer = "";
+	fail(error: unknown) {
+		if (!this.signal.aborted) this.failed.abort(error);
 	}
 
-	return frames;
-}
-
-export function sanitizeStreamingText(text: string) {
-	const textWithoutTokens = stripWhisperControlTokens(stripStreamingControls(text));
-	const textWithoutHeading = removeTranscriptionEndHeading(textWithoutTokens);
-	const textWithoutBracketedSegments = stripStreamingDelimitedSegments(textWithoutHeading, "[", "]");
-	const textWithoutParenthesizedSegments = stripStreamingDelimitedSegments(textWithoutBracketedSegments, "(", ")");
-	const cleaned = textWithoutParenthesizedSegments.replace(/\s+/g, " ").trim();
-	return isLikelyStreamingHallucination(cleaned) ? "" : cleaned;
-}
-
-function stripStreamingDelimitedSegments(text: string, startDelimiter: string, endDelimiter: string) {
-	let cleaned = "";
-	let index = 0;
-
-	while (index < text.length) {
-		const startIndex = text.indexOf(startDelimiter, index);
-		if (startIndex === -1) return `${cleaned}${text.slice(index)}`;
-
-		const endIndex = text.indexOf(endDelimiter, startIndex + startDelimiter.length);
-		if (endIndex === -1) return `${cleaned}${text.slice(index)}`;
-
-		cleaned = `${cleaned}${text.slice(index, startIndex)} `;
-		index = endIndex + endDelimiter.length;
+	async send(pcm: Buffer, preview: boolean) {
+		this.signal.throwIfAborted();
+		if (this.phase !== "idle") throw protocolError("another worker request is already in flight");
+		if (!pcm.length || pcm.length > RATE * 2 || pcm.length % 2 !== 0) throw protocolError("invalid PCM buffer size");
+		const samples = pcm.length / 2;
+		const frame = Buffer.allocUnsafe(5 + pcm.length);
+		frame[0] = preview ? 1 : 2;
+		frame.writeUInt32LE(samples, 1);
+		pcm.copy(frame, 5);
+		this.previews = preview;
+		this.phase = "feed";
+		this.inputThrough = this.through + samples;
+		this.ack = deferred<void>();
+		const result = this.wait(this.ack.promise, "waiting for a PCM acknowledgment");
+		this.write(frame);
+		await result;
+		this.publishUpdates();
 	}
 
-	return cleaned;
-}
-
-export function stripStreamingControls(text: string) {
-	return sanitizeTerminalText(text);
-}
-
-function stripWhisperControlTokens(text: string) {
-	let cleaned = "";
-	let index = 0;
-
-	while (index < text.length) {
-		const startIndex = text.indexOf("<|", index);
-		if (startIndex === -1) return `${cleaned}${text.slice(index)}`;
-
-		const endIndex = text.indexOf("|>", startIndex + 2);
-		if (endIndex === -1) return `${cleaned}${text.slice(index)}`;
-
-		const tokenBody = text.slice(startIndex + 2, endIndex);
-		if (tokenBody.includes("|")) {
-			cleaned = `${cleaned}${text.slice(index, startIndex + 2)}`;
-			index = startIndex + 2;
-			continue;
-		}
-
-		cleaned = `${cleaned}${text.slice(index, startIndex)} `;
-		index = endIndex + 2;
+	async finish() {
+		this.signal.throwIfAborted();
+		if (this.phase !== "idle") throw protocolError("another worker request is already in flight");
+		this.phase = "finish";
+		this.previews = false;
+		const result = this.wait(Promise.all([this.done.promise, this.child.exitPromise]), "waiting for finish and worker exit");
+		this.write(Buffer.of(3), true);
+		const [done, exit] = await result;
+		this.signal.throwIfAborted();
+		if (exit.code !== 0 || exit.error || exit.signal || this.buffered) throw protocolError("finish did not end with a clean worker exit");
+		this.publishUpdates();
+		return done;
 	}
 
-	return cleaned;
-}
-
-function removeTranscriptionEndHeading(text: string) {
-	return isTranscriptionEndHeading(text) ? " " : text;
-}
-
-function isTranscriptionEndHeading(text: string) {
-	const trimmed = text.trim();
-	if (!trimmed.startsWith("#")) return false;
-
-	let index = 0;
-	while (trimmed.at(index) === "#") index++;
-	while (isWhitespaceCharacter(trimmed.at(index))) index++;
-
-	const words = trimmed.slice(index).split(/\s+/u);
-	return words.length === 3 && words[0].toLowerCase() === "transcription" && isAsciiDigits(words[1]) && words[2].toLowerCase() === "end";
-}
-
-function isAsciiDigits(value: string) {
-	if (!value) return false;
-	for (const character of value) {
-		if (character < "0" || character > "9") return false;
-	}
-	return true;
-}
-
-function isWhitespaceCharacter(character: string | undefined) {
-	return character?.trim() === "";
-}
-
-export function diffStreamingText(previous: string, current: string) {
-	const previousWords = splitStreamingWords(previous);
-	const currentWords = splitStreamingWords(current);
-	if (currentWords.length === 0) return "";
-	const overlap = streamingWordOverlap(previousWords, currentWords);
-	return currentWords.slice(overlap).join(" ");
-}
-
-export function extractStreamingCandidate(state: StreamingState, frameWords: string[]): StreamingExtraction {
-	const words = frameWords.filter(Boolean);
-	if (words.length === 0) return { mode: "reset", newWords: [] };
-
-	const emittedExtraction = extractEmittedStreamingCandidate(state, words);
-	if (emittedExtraction) return emittedExtraction;
-
-	const candidateExtraction = extractReferencedStreamingCandidate(state.candidateWords, words, words);
-	if (candidateExtraction) return candidateExtraction;
-
-	const hypothesisExtraction = extractReferencedStreamingCandidate(state.lastHypothesisWords, words, trimCommittedStreamingPrefix(state, words));
-	if (hypothesisExtraction) return hypothesisExtraction;
-
-	return { mode: isFirstStreamingHypothesis(state) ? "cumulative" : "incremental", newWords: words };
-}
-
-function extractEmittedStreamingCandidate(state: StreamingState, words: string[]): StreamingExtraction | undefined {
-	const emittedOverlap = streamingWordOverlap(state.emittedWords.slice(-160), words);
-	if (emittedOverlap === words.length) return { mode: "duplicate", newWords: [] };
-	if (emittedOverlap > 0) return { mode: "cumulative", newWords: words.slice(emittedOverlap) };
-	return undefined;
-}
-
-function extractReferencedStreamingCandidate(referenceWords: string[], words: string[], prefixWords: string[]): StreamingExtraction | undefined {
-	if (referenceWords.length === 0) return undefined;
-	if (streamingWordsEqual(referenceWords, words)) return { mode: "duplicate", newWords: words };
-	if (isStreamingWordsPrefix(referenceWords, words)) return { mode: "cumulative", newWords: prefixWords };
-	if (streamingWordOverlap(referenceWords, words) > 0) return { mode: "rolling", newWords: words };
-	if (looksLikeStreamingCorrection(referenceWords, words)) return { mode: "reset", newWords: words };
-	return undefined;
-}
-
-function isFirstStreamingHypothesis(state: StreamingState) {
-	return state.emittedWords.length === 0 && state.candidateWords.length === 0 && state.lastHypothesisWords.length === 0;
-}
-
-export function isLikelyStreamingHallucination(text: string) {
-	if (!text) return true;
-	const normalized = trimStreamingWordEdges(text.toLowerCase());
-	if (/^(?:start speaking|blank audio)$/i.test(normalized)) return true;
-	if (/^(?:you|yeah|okay|ok|uh|um|hmm)$/i.test(normalized)) return true;
-	if (/^(?:thank you|thanks for watching|thank you very much)$/i.test(normalized)) return true;
-	return false;
-}
-
-export function shouldResetStreamingPending(text: string) {
-	const cleaned = stripStreamingControls(text);
-	if (!cleaned) return false;
-	if (isLikelyStreamingHallucination(cleaned)) return true;
-	return isBracketedStreamingResetFrame(cleaned) || isParenthesizedStreamingResetFrame(cleaned);
-}
-
-function isBracketedStreamingResetFrame(text: string) {
-	if (text.length <= 2) return false;
-	return text.startsWith("[") && text.endsWith("]") && !text.slice(1, -1).includes("]");
-}
-
-function isParenthesizedStreamingResetFrame(text: string) {
-	if (text.length < 2) return false;
-	return text.startsWith("(") && text.endsWith(")") && !text.slice(1, -1).includes(")");
-}
-
-export function queueStableStreamingWords(ctx: ExtensionContext, state: StreamingState, currentWords: string[], mode: StreamingFrameMode = "cumulative") {
-	const words = currentWords.filter(Boolean);
-
-	if (mode === "reset") {
-		state.candidateWords = trimCommittedStreamingPrefix(state, words);
-		renderStreamingPreview(ctx, state, false);
-		scheduleStreamingFlush(ctx, state);
-		return;
-	}
-
-	if (mode === "incremental") {
-		commitStreamingCandidate(state);
-		state.candidateWords = trimCommittedStreamingPrefix(state, words);
-		renderStreamingPreview(ctx, state, false);
-		scheduleStreamingFlush(ctx, state);
-		return;
-	}
-
-	if (mode === "rolling") {
-		queueRollingStreamingWords(state, words);
-		renderStreamingPreview(ctx, state, false);
-		scheduleStreamingFlush(ctx, state);
-		return;
-	}
-
-	if (mode === "duplicate" && words.length === 0) {
-		renderStreamingPreview(ctx, state, false);
-		scheduleStreamingFlush(ctx, state);
-		return;
-	}
-
-	const stableCount = commonStreamingPrefixLength(state.candidateWords, words);
-	const confirmedCount = Math.min(stableCount, getStreamWordsPerChunk());
-	if (confirmedCount > 0) queueStreamingWords(state, words.slice(0, confirmedCount));
-	state.candidateWords = words.slice(confirmedCount);
-	renderStreamingPreview(ctx, state, false);
-	scheduleStreamingFlush(ctx, state);
-}
-
-export function flushPendingStreamingWords(ctx: ExtensionContext, state: StreamingState, trailingSpace = true) {
-	clearStreamingFlush(state);
-	commitStreamingCandidate(state);
-	renderStreamingPreview(ctx, state, trailingSpace);
-	showStreamingFrameDiagnostics(ctx, state, {
-		extractionMode: "flush",
-		newWords: [],
-		reason: trailingSpace ? "stop flush" : "pause flush",
-	});
-}
-
-export function scheduleStreamingFlush(ctx: ExtensionContext, state: StreamingState) {
-	clearStreamingFlush(state);
-	if (state.candidateWords.length === 0) return;
-	const delayMs = getStreamFlushMs();
-	state.flushTimer = setTimeout(() => {
-		state.flushTimer = undefined;
-		flushPendingStreamingWords(ctx, state, false);
-	}, delayMs);
-	unrefStreamingTimer(state.flushTimer);
-}
-
-export function queueStreamingWords(state: StreamingState, words: string[]) {
-	const nextWords = words.filter(Boolean);
-	if (nextWords.length === 0) return;
-	const overlap = streamingWordOverlap(state.emittedWords, nextWords);
-	const appendWords = nextWords.slice(overlap);
-	if (appendWords.length === 0) return;
-	state.emittedWords.push(...appendWords);
-}
-
-export function splitStreamingWords(text: string) {
-	return text.split(/\s+/).filter(Boolean);
-}
-
-export function streamingWordOverlap(previousWords: string[], currentWords: string[]) {
-	const maxOverlap = Math.min(previousWords.length, currentWords.length);
-	if (maxOverlap === 0) return 0;
-
-	// KMP: on a mismatch, reuse the longest shorter prefix that has already matched.
-	const prefix = currentWords.slice(0, maxOverlap).map(normalizeStreamingWord);
-	const fallback = [0];
-	for (let index = 1; index < maxOverlap; index++) {
-		fallback[index] = advanceStreamingOverlap(prefix, fallback, fallback[index - 1], prefix[index]);
-	}
-
-	// Only this tail can overlap, so a full prefix match can occur only at its end.
-	let matched = 0;
-	for (let index = previousWords.length - maxOverlap; index < previousWords.length; index++) {
-		matched = advanceStreamingOverlap(prefix, fallback, matched, normalizeStreamingWord(previousWords[index]));
-	}
-	return matched;
-}
-
-function advanceStreamingOverlap(prefix: string[], fallback: number[], matched: number, word: string) {
-	while (matched > 0 && prefix[matched] !== word) matched = fallback[matched - 1];
-	return prefix[matched] === word ? matched + 1 : 0;
-}
-
-export function commonStreamingPrefixLength(previousWords: string[], currentWords: string[]) {
-	const maxPrefix = Math.min(previousWords.length, currentWords.length);
-	let count = 0;
-	while (count < maxPrefix && normalizeStreamingWord(previousWords[count] ?? "") === normalizeStreamingWord(currentWords[count] ?? "")) {
-		count++;
-	}
-	return count;
-}
-
-export function commonStreamingSuffixLength(previousWords: string[], currentWords: string[]) {
-	const maxSuffix = Math.min(previousWords.length, currentWords.length);
-	let count = 0;
-	while (count < maxSuffix && normalizeStreamingWord(previousWords[previousWords.length - 1 - count] ?? "") === normalizeStreamingWord(currentWords[currentWords.length - 1 - count] ?? "")) {
-		count++;
-	}
-	return count;
-}
-
-export function streamingWordsEqual(left: string[], right: string[]) {
-	if (left.length !== right.length) return false;
-	return left.every((word, index) => normalizeStreamingWord(word) === normalizeStreamingWord(right[index] ?? ""));
-}
-
-export function normalizeStreamingWord(word: string) {
-	const normalized = trimStreamingWordEdges(word.toLowerCase());
-	return normalized || word.toLowerCase();
-}
-
-function trimStreamingWordEdges(text: string) {
-	const characters = Array.from(text);
-	let start = 0;
-	while (start < characters.length && !isStreamingWordCharacter(characters[start] ?? "")) start++;
-
-	let end = characters.length;
-	while (end > start && !isStreamingWordCharacter(characters[end - 1] ?? "")) end--;
-
-	return characters.slice(start, end).join("");
-}
-
-function isStreamingWordCharacter(character: string) {
-	return /[\p{L}\p{N}]/u.test(character);
-}
-
-export function getStreamingTranscript(state: StreamingState) {
-	return state.emittedWords.join(" ");
-}
-
-export function renderStreamingPreview(ctx: ExtensionContext, state: StreamingState, trailingSpace: boolean) {
-	const { emittedWords, renderedWordCount } = state;
-	if (renderedWordCount === emittedWords.length && (!trailingSpace || renderedWordCount === 0)) return;
-
-	const delta = emittedWords.slice(renderedWordCount).join(" ");
-	const editorText = ctx.ui.getEditorText();
-	noteInsertedEditorText(state, editorText);
-	// Keep spacing between stream words even when punctuation arrives in a later delta.
-	const separator = needsStreamingSeparator(editorText, delta, renderedWordCount > 0) ? " " : "";
-	const appendedText = `${editorText}${separator}${delta}`;
-	const nextText = trailingSpace && appendedText && !isWhitespaceCharacter(appendedText.at(-1)) ? `${appendedText} ` : appendedText;
-	if (nextText === editorText) return;
-	ctx.ui.setEditorText(nextText);
-	// Read back rather than store nextText: the editor normalizes line endings and tabs.
-	state.renderedEditorText = ctx.ui.getEditorText();
-	state.renderedWordCount = emittedWords.length;
-	if (delta && !state.firstPreviewAt) {
-		state.firstPreviewAt = Date.now();
-		if (envFlag("MICME_STREAM_DIAGNOSTICS")) {
-			ctx.ui.notify(`Micme stream first preview: ${state.firstPreviewAt - state.startedAt} ms`, "info");
+	private async wait<T>(value: Promise<T>, label: string) {
+		this.signal.throwIfAborted();
+		const interrupt = deferred<never>();
+		const abort = () => interrupt.reject(this.signal.reason as unknown);
+		const timer = setTimeout(() => this.fail(new Error(`Micme live worker timed out ${label}.`)), this.timeoutMs);
+		this.signal.addEventListener("abort", abort, { once: true });
+		try {
+			return await Promise.race([value, interrupt.promise]);
+		} finally {
+			clearTimeout(timer);
+			this.signal.removeEventListener("abort", abort);
 		}
 	}
-}
 
-export function showStreamingDiagnostics(ctx: ExtensionContext, state: StreamingState) {
-	if (!envFlag("MICME_STREAM_DIAGNOSTICS")) return;
-	const firstOutput = state.firstOutputAt ? `${state.firstOutputAt - state.startedAt} ms` : "none";
-	const firstPreview = state.firstPreviewAt ? `${state.firstPreviewAt - state.startedAt} ms` : "none";
-	ctx.ui.notify(`Micme stream timings: first output ${firstOutput}, first preview ${firstPreview}`, "info");
-}
-
-// Clearing the editor or trimming its end only removes text Micme can rebuild.
-// Anything else adds text (typed, or replayed with /micme last) that the final
-// transcript must not overwrite. Once seen, keep the flag for the whole stream.
-function noteInsertedEditorText(state: StreamingState, observed: string) {
-	if (!(state.renderedEditorText ?? state.baseText).startsWith(observed)) state.editorTextInserted = true;
-}
-
-export function keepEditedStreamingEditor(ctx: ExtensionContext, state: StreamingState) {
-	noteInsertedEditorText(state, ctx.ui.getEditorText());
-	if (!state.editorTextInserted) return false;
-	ctx.ui.notify("Micme left the editor unchanged because it was edited during dictation. Use /micme last to paste the transcript.", "warning");
-	return true;
-}
-
-export function pasteOrSubmitFinalStreamingTranscript(ctx: ExtensionContext, pi: ExtensionAPI, state: StreamingState, transcript: string) {
-	if (keepEditedStreamingEditor(ctx, state)) return;
-	if (envFlag("MICME_AUTO_SUBMIT")) {
-		ctx.ui.setEditorText(state.baseText);
-		pasteOrSubmitTranscript(ctx, pi, transcript);
-		return;
+	private write(frame: Buffer, end = false) {
+		const stdin = this.child.process.stdin;
+		try {
+			if (!stdin?.writable) throw protocolError("PCM input is closed");
+			if (end) stdin.end(frame);
+			else stdin.write(frame);
+		} catch (error) {
+			this.fail(error);
+		}
 	}
 
-	const nextText = appendTranscriptToBaseText(state.baseText, transcript, true);
-	ctx.ui.setEditorText(nextText);
-}
-
-export function clearStreamingFlush(state: StreamingState) {
-	if (!state.flushTimer) return;
-	clearTimeout(state.flushTimer);
-	state.flushTimer = undefined;
-}
-
-function appendTranscriptToBaseText(baseText: string, transcript: string, trailingSpace: boolean) {
-	if (!transcript) return baseText;
-	const separator = needsStreamingSeparator(baseText, transcript) ? " " : "";
-	const suffix = /\s$/.test(transcript) || !trailingSpace ? transcript : `${transcript} `;
-	return `${baseText}${separator}${suffix}`;
-}
-
-function needsStreamingSeparator(baseText: string, transcript: string, betweenStreamWords = false) {
-	if (!baseText || !transcript) return false;
-	return !isWhitespaceCharacter(baseText.at(-1)) && (betweenStreamWords || !isStreamingLeadingSeparator(transcript.at(0)));
-}
-
-function isStreamingLeadingSeparator(character: string | undefined) {
-	if (isWhitespaceCharacter(character)) return true;
-	return character !== undefined && ".,!?;:)}]".includes(character);
-}
-
-function queueRollingStreamingWords(state: StreamingState, words: string[]) {
-	const overlap = streamingWordOverlap(state.candidateWords, words);
-	if (overlap <= 0) {
-		commitStreamingCandidate(state);
-		state.candidateWords = trimCommittedStreamingPrefix(state, words);
-		return;
+	private read(chunk: Buffer) {
+		try {
+			for (let start = 0; start < chunk.length && !this.signal.aborted;) {
+				const lf = chunk.indexOf(0x0a, start);
+				const end = lf === -1 ? chunk.length : lf;
+				if (this.buffered + end - start > this.bytes.length) throw protocolError("event exceeds the 64 KiB limit");
+				chunk.copy(this.bytes, this.buffered, start, end);
+				this.buffered += end - start;
+				if (lf === -1) return;
+				const line = this.bytes.subarray(0, this.buffered);
+				this.buffered = 0;
+				this.consume(parseEvent(this.utf8, line));
+				start = end + 1;
+			}
+		} catch (error) {
+			this.fail(error);
+		}
 	}
 
-	const previousCandidatePrefix = state.candidateWords.slice(0, state.candidateWords.length - overlap);
-	queueStreamingWords(state, previousCandidatePrefix);
-	const confirmedOverlap = Math.min(overlap, getStreamWordsPerChunk());
-	queueStreamingWords(state, words.slice(0, confirmedOverlap));
-	state.candidateWords = trimCommittedStreamingPrefix(state, words.slice(confirmedOverlap));
+	private consume(event: Record<string, unknown>) {
+		switch (event.type) {
+			case "error": {
+				if (typeof event.message !== "string") throw protocolError("invalid error event");
+				const message = sanitizeTerminalText(event.message).slice(0, 500);
+				throw new Error(`Micme live worker failed: ${message || "decoder error"}`);
+			}
+			case "ready": {
+				const { version, rate, loadMs, asrLoads, vadLoads } = event;
+				if (this.phase !== "ready" || version !== 1 || rate !== RATE || !isDuration(loadMs) || asrLoads !== 1 || vadLoads !== 1) {
+					throw protocolError("invalid ready event (expected Worker v1, 16 kHz and one load per model)");
+				}
+				this.phase = "idle";
+				this.loaded.resolve({ loadMs, asrLoads, vadLoads });
+				return;
+			}
+			case "ack": {
+				if (this.phase !== "feed" || !this.ack || event.through !== this.inputThrough) throw protocolError("unexpected PCM acknowledgment or sample count");
+				this.through = this.inputThrough;
+				this.phase = "idle";
+				this.ack.resolve();
+				this.ack = undefined;
+				return;
+			}
+			case "done": {
+				const { through, asrCalls, asrMs, vadFrames } = event;
+				if (this.phase !== "finish" || !isCount(through) || through !== this.through || !isCount(asrCalls) || !isCount(vadFrames) || !isDuration(asrMs)) {
+					throw protocolError("unexpected done event or sample count");
+				}
+				this.phase = "done";
+				this.done.resolve({ through, asrCalls, asrMs, vadFrames });
+				return;
+			}
+			case "final":
+			case "partial":
+				this.stageText(event.type, event);
+				return;
+			default:
+				throw protocolError("unknown event type");
+		}
+	}
+
+	private stageText(type: LiveText["type"], { from, to, text }: Record<string, unknown>) {
+		if ((this.phase !== "feed" && this.phase !== "finish") || (type === "partial" && !this.previews) ||
+			!isCount(from) || !isCount(to) || from < this.finalThrough || to <= from || to > this.inputThrough ||
+			typeof text !== "string" || /[\uD800-\uDFFF]/u.test(text)) {
+			throw protocolError("invalid text event or sample range");
+		}
+		if (this.updates.length >= MAX_UPDATE_EVENTS) throw protocolError("too many text events without a response");
+		const update = { type, from, to, text: normalizeTranscript(text) };
+		if (type === "final") {
+			this.finalThrough = to;
+			this.draft = undefined;
+		} else {
+			if (this.draft && (from < this.draft.from || to <= this.draft.to)) throw protocolError("stale partial event");
+			this.draft = update;
+		}
+		this.updates.push(update);
+	}
+
+	private publishUpdates() {
+		this.signal.throwIfAborted();
+		const updates = this.updates;
+		this.updates = [];
+		for (const update of updates) this.onText(update);
+	}
+
 }
 
-function commitStreamingCandidate(state: StreamingState) {
-	if (state.candidateWords.length === 0) return;
-	queueStreamingWords(state, state.candidateWords);
-	state.candidateWords = [];
+function parseEvent(decoder: TextDecoder, line: Buffer): Record<string, unknown> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(decoder.decode(line));
+	} catch {
+		throw protocolError("invalid UTF-8 or JSON event");
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw protocolError("expected a JSON event object");
+	return parsed as Record<string, unknown>;
 }
 
-function trimCommittedStreamingPrefix(state: StreamingState, words: string[]) {
-	const overlap = streamingWordOverlap(state.emittedWords, words);
-	return words.slice(overlap);
+export function livePoll(signal: AbortSignal) {
+	return delay(POLL_MS, undefined, { signal });
 }
 
-function isStreamingWordsPrefix(prefixWords: string[], words: string[]) {
-	if (prefixWords.length === 0 || prefixWords.length > words.length) return false;
-	return streamingWordsEqual(prefixWords, words.slice(0, prefixWords.length));
+export function caughtUpForLivePreview(availableThrough: number, acknowledgedThrough: number) {
+	return availableThrough - acknowledgedThrough <= RATE;
 }
 
-function looksLikeStreamingCorrection(previousWords: string[], currentWords: string[]) {
-	if (previousWords.length === 0 || currentWords.length === 0) return false;
-	if (previousWords.length === 1 && currentWords.length === 1) return false;
-	if (commonStreamingPrefixLength(previousWords, currentWords) > 0) return true;
-	if (commonStreamingSuffixLength(previousWords, currentWords) > 0) return true;
-	const previousNormalized = new Set(previousWords.map(normalizeStreamingWord));
-	const sharedCount = currentWords.filter((word) => previousNormalized.has(normalizeStreamingWord(word))).length;
-	return previousWords.length > 1 && currentWords.length > 1 && sharedCount >= Math.ceil(Math.min(previousWords.length, currentWords.length) / 2);
+export function liveWorkerDiagnostics(process: OwnedProcess) {
+	return formatProcessOutput(process.stderr().slice(-2_000));
 }
 
-function showStreamingFrameDiagnostics(ctx: ExtensionContext, state: StreamingState, details: StreamingDiagnosticDetails) {
-	if (!envFlag("MICME_STREAM_DIAGNOSTICS")) return;
-	const payload = {
-		rawFrame: details.rawFrame === undefined ? undefined : truncateStreamingDiagnostic(stripStreamingControls(details.rawFrame)),
-		sanitizedText: details.sanitizedText === undefined ? undefined : truncateStreamingDiagnostic(details.sanitizedText),
-		frameWords: limitStreamingDiagnosticWords(details.frameWords ?? []),
-		emittedWords: limitStreamingDiagnosticWords(state.emittedWords),
-		candidateWords: limitStreamingDiagnosticWords(state.candidateWords),
-		previewText: truncateStreamingDiagnostic(getStreamingTranscript(state)),
-		extractionMode: details.extractionMode,
-		newWords: limitStreamingDiagnosticWords(details.newWords ?? []),
-		reason: details.reason,
-	};
-	ctx.ui.notify(`Micme stream frame: ${JSON.stringify(payload)}`, "info");
+export class LiveTranscript {
+	private readonly ctx: ExtensionContext;
+	private readonly baseText: string;
+	private renderedEditorText: string;
+	private editorTextInserted = false;
+	private readonly confirmed: string[] = [];
+
+	constructor(ctx: ExtensionContext) {
+		this.ctx = ctx;
+		this.baseText = ctx.mode === "rpc" ? "" : ctx.ui.getEditorText();
+		this.renderedEditorText = this.baseText;
+	}
+
+	commit(text: string) {
+		if (!text) return;
+		const betweenSpans = this.confirmed.length > 0;
+		this.confirmed.push(text);
+		if (this.ctx.mode === "rpc") return;
+		const observed = this.observeEditor();
+		this.ctx.ui.setEditorText(appendTranscript(observed, text, betweenSpans));
+		// Read back: Pi may normalize line endings or tabs.
+		this.renderedEditorText = this.ctx.ui.getEditorText();
+	}
+
+	get text() {
+		return this.confirmed.join(" ");
+	}
+
+	deliver(pi: ExtensionAPI, transcript: string, refined: boolean) {
+		const ctx = this.ctx;
+		const submit = envFlag("MICME_AUTO_SUBMIT");
+		if (ctx.mode === "rpc") {
+			ctx.ui.notify(submit
+				? "Micme saved the transcript. Explicit /micme last will send it or queue it as a follow-up; turn off auto-submit first if you want to review it."
+				: "Micme saved the transcript. Explicit /micme last will replace the RPC prompt; save the current prompt first.", "info");
+			return;
+		}
+		if (!refined && !submit) return;
+		this.observeEditor();
+		if (this.editorTextInserted) {
+			ctx.ui.notify("Micme did not replace or send the transcript because the editor was edited during dictation. Use /micme last to retrieve it.", "warning");
+			return;
+		}
+		if (submit) {
+			ctx.ui.setEditorText(this.baseText);
+			pasteOrSubmitTranscript(ctx, pi, transcript);
+		} else {
+			ctx.ui.setEditorText(appendTranscript(this.baseText, transcript));
+		}
+	}
+
+	private observeEditor() {
+		const observed = this.ctx.ui.getEditorText();
+		// Clearing or trimming Micme's suffix alone does not latch an insertion.
+		if (!this.renderedEditorText.startsWith(observed)) this.editorTextInserted = true;
+		return observed;
+	}
 }
 
-function limitStreamingDiagnosticWords(words: string[]) {
-	return words.slice(-16);
-}
-
-function truncateStreamingDiagnostic(value: string) {
-	return value.length > 160 ? `${value.slice(0, 157)}...` : value;
-}
-
-function unrefStreamingTimer(timer: ReturnType<typeof setTimeout>) {
-	if (typeof timer !== "object" || timer === null || !("unref" in timer)) return;
-	const unref = timer.unref;
-	if (typeof unref === "function") unref.call(timer);
+function appendTranscript(base: string, text: string, betweenSpans = false) {
+	const separator = base && !/\s$/.test(base) && (betweenSpans || !".,!?;:)}]".includes(text.charAt(0))) ? " " : "";
+	return `${base}${separator}${text} `;
 }

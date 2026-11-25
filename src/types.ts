@@ -27,7 +27,17 @@ export type ResolvedTranscriptionPlan = {
 	modelPath?: string;
 	modelSource?: TranscriptionModelSource;
 	modelDownloadable?: boolean;
+	live?: LivePlan;
 	warnings: string[];
+};
+
+export type LivePlan = {
+	binary: string;
+	modelPath: string;
+	vadModelPath: string;
+	language: string;
+	translate: boolean;
+	finalizeWithClip: boolean;
 };
 
 export type CommandSpec = {
@@ -66,34 +76,9 @@ export type AudioValidationOutcome =
 	| { status: "validated"; diagnostics: AudioDiagnostics }
 	| { status: "skipped"; reason: "disabled" | "ffmpeg-unavailable" };
 
-export type StreamingState = {
-	baseText: string;
-	renderedWordCount: number;
-	/** Editor text after Micme's last live write; undefined until the first write. */
-	renderedEditorText?: string;
-	/** Set once text Micme did not write appears in the editor during the stream. */
-	editorTextInserted?: boolean;
-	outputBuffer: string;
-	lastText: string;
-	emittedWords: string[];
-	candidateWords: string[];
-	lastHypothesisWords: string[];
-	startedAt: number;
-	firstOutputAt?: number;
-	firstPreviewAt?: number;
-	flushTimer?: ReturnType<typeof setTimeout>;
-};
-
-export type Recording = {
+export type OwnedProcess = {
 	process: ChildProcess;
-	audioPath: string;
-	tempDir: string;
-	directory?: RecordingDirectory;
-	startedAt: number;
 	command: CommandSpec;
-	audioLevel: () => number;
-	streaming?: StreamingState;
-	clipRecording?: Recording;
 	stopRequested?: boolean;
 	stopSignals?: Set<NodeJS.Signals>;
 	windowsTreeStopped?: boolean;
@@ -102,8 +87,19 @@ export type Recording = {
 	exitPromise: Promise<ExitResult>;
 	getExit: () => ExitResult;
 	isSettled: () => boolean;
-	stdout: () => string;
 	stderr: () => string;
+};
+
+export type Recording = OwnedProcess & {
+	audioPath: string;
+	tempDir: string;
+	directory?: RecordingDirectory;
+	startedAt: number;
+	audioLevel: () => number;
+	/** The meter is authoritative even at zero; never reopen the spool for a fallback. */
+	livePcmMeter?: true;
+	liveDraft?: string;
+	stdout: () => string;
 };
 
 export type MicmeConfigState = {

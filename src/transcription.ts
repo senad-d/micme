@@ -11,7 +11,8 @@ import { formatProcessOutput, formatRunExit, runProcess, runShell } from "./proc
 import type { RecordingDirectory } from "./recording-dir.ts";
 import type { RunResult } from "./types.ts";
 
-export { getWhisperCppBinary, getWhisperStreamBinary, resolveExecutableConfig } from "./backends.ts";
+export { getWhisperCppBinary, resolveExecutableConfig } from "./backends.ts";
+export { resolveLivePlan } from "./live-plan.ts";
 
 export async function transcribe(audioPath: string, tempDir: string, ctx?: ExtensionContext, signal?: AbortSignal, directory?: RecordingDirectory): Promise<string> {
 	const plan = resolveTranscriptionPlan({ transcriptionMode: "clip" });

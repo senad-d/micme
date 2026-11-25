@@ -13,20 +13,26 @@ import {
 	Text,
 	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { basename } from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
 	env,
+	envFlag,
 	expandConfigPath,
+	getAudioFilter,
+	getAudioInputConfigKey,
+	getFlagSetting,
 	getAutoDownloadModel,
+	getAvfoundationDropLateFrames,
+	getMeterGain,
+	getRecordMeter,
 	getRecordSampleRate,
 	getRecordSync,
 	getShortcutSettingValue,
-	getStreamCapture,
-	getStreamFlushMs,
-	getStreamVadThreshold,
-	getStreamWordsPerChunk,
+	getStreamFinalizeWithClip,
+	getTranslateToEnglishLanguage,
 	getTranscribeSampleRate,
 	getTranscriptionMode,
 	getTranscriptionModeProfile,
@@ -34,11 +40,12 @@ import {
 	requireValidMicmeConfig,
 	writeMicmeConfigValues,
 } from "./config.ts";
-import { discoverAudioDevices } from "./audio.ts";
+import { discoverAudioDevices, LIVE_CAPTURE_RATE } from "./audio.ts";
 import { formatBackendLabel, resolveTranscriptionPlan } from "./backends.ts";
-import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
-import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, resolveWhisperCppModel } from "./models.ts";
+import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
+import { fitTerminalTail } from "./recording-widget.ts";
+import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
@@ -59,13 +66,16 @@ interface ConfigurationItem extends SettingItem {
 	displayKind?: DisplayKind;
 	emptyLabel?: string;
 	valueLabels?: Record<string, string>;
+	details?: string[];
 	visibleWhen?: (plan: ResolvedTranscriptionPlan) => boolean;
 }
+
+type ConfigurationView = { items: ConfigurationItem[]; plan: ResolvedTranscriptionPlan };
 
 const CONFIGURATION_CATEGORIES: ConfigurationCategory[] = [
 	{ id: "general", label: "General", description: "Core defaults used by Micme." },
 	{ id: "transcription", label: "Transcription", description: "Backend model, mode, and transcription fallback settings." },
-	{ id: "streaming", label: "Streaming", description: "Low-latency live transcription behavior." },
+	{ id: "streaming", label: "Streaming", description: "Local decoder, speech detector, and optional final pass." },
 	{ id: "audio", label: "Audio", description: "Recording, preprocessing, and metering settings." },
 ];
 
@@ -122,8 +132,8 @@ export async function showConfiguration(ctx: ExtensionContext, sessionSignal?: A
 		const controller = new AbortController();
 		const closeScreen = () => screen.close();
 		const screen = new ConfigurationScreen({
-			configPath: sanitizeTerminalOutput(configState.path) || "micme.json",
-			items: buildConfigurationItems(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme),
+			configPath: sanitizeTerminalText(configState.path) || "micme.json",
+			view: buildConfigurationView(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme),
 			theme,
 			onDone: () => {
 				sessionSignal?.removeEventListener("abort", closeScreen);
@@ -133,7 +143,7 @@ export async function showConfiguration(ctx: ExtensionContext, sessionSignal?: A
 			onError: (error) => notifySanitized(ctx, error instanceof Error ? error.message : String(error), "error"),
 			onSave: (id, newValue) => {
 				pendingSave = saveConfigurationValue(ctx, id, newValue, { signal: controller.signal });
-				return pendingSave;
+				return pendingSave.then(() => buildConfigurationView(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme));
 			},
 			requestRender: () => tui.requestRender(),
 			statusText: canDiscover ? formatDiscoveryStatus(discovery.pending) : "Fix Micme config and reopen settings to run discovery.",
@@ -202,7 +212,7 @@ async function loadConfigurationDiscovery<T>(
 		options.discovery.pending.delete(key);
 		if (!options.signal.aborted) {
 			options.screen.updateDiscoveredItems(
-				buildConfigurationItems(options.discovery.modelCandidates, options.discovery.pythonModelCandidates, options.discovery.audioDevices, options.theme),
+				buildConfigurationView(options.discovery.modelCandidates, options.discovery.pythonModelCandidates, options.discovery.audioDevices, options.theme),
 				formatDiscoveryStatus(options.discovery.pending),
 			);
 		}
@@ -226,11 +236,11 @@ function notifySanitized(ctx: ExtensionContext, message: string, level: "warning
 
 class ConfigurationScreen implements Component {
 	private readonly configPath: string;
-	private items: ConfigurationItem[];
+	private view: ConfigurationView;
 	private readonly theme: MicmeTheme;
 	private readonly onDone: () => void;
 	private readonly onError: (error: unknown) => void;
-	private readonly onSave: (id: string, newValue: string) => Promise<Record<string, string>>;
+	private readonly onSave: (id: string, newValue: string) => Promise<ConfigurationView>;
 	private readonly requestRender: () => void;
 	private focusedPane: FocusedPane = "categories";
 	private categoryIndex = 0;
@@ -247,16 +257,16 @@ class ConfigurationScreen implements Component {
 
 	constructor(options: {
 		configPath: string;
-		items: ConfigurationItem[];
+		view: ConfigurationView;
 		theme: MicmeTheme;
 		onDone: () => void;
 		onError: (error: unknown) => void;
-		onSave: (id: string, newValue: string) => Promise<Record<string, string>>;
+		onSave: (id: string, newValue: string) => Promise<ConfigurationView>;
 		requestRender: () => void;
 		statusText?: string;
 	}) {
 		this.configPath = options.configPath;
-		this.items = options.items;
+		this.view = options.view;
 		this.theme = options.theme;
 		this.onDone = options.onDone;
 		this.onError = options.onError;
@@ -266,10 +276,9 @@ class ConfigurationScreen implements Component {
 		for (const category of CONFIGURATION_CATEGORIES) this.selectedByCategory.set(category.id, 0);
 	}
 
-	updateDiscoveredItems(items: ConfigurationItem[], statusText: string) {
+	updateDiscoveredItems(view: ConfigurationView, statusText: string) {
 		if (this.closed) return;
-		this.items = items;
-		this.refreshDerivedItems();
+		this.view = view;
 		this.clampSelections();
 		if (!this.saving && (!this.statusText || this.statusText.startsWith("Loading "))) {
 			this.statusText = statusText;
@@ -278,7 +287,6 @@ class ConfigurationScreen implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		this.refreshDerivedItems();
 		if (this.submenuComponent) return this.submenuComponent.render(width);
 		if (width < TWO_PANE_MIN_WIDTH) return this.renderNarrow(width);
 		return this.renderTwoPane(width);
@@ -388,7 +396,7 @@ class ConfigurationScreen implements Component {
 
 		lines.push(
 			this.renderTitleBorder(width, this.currentHeaderLabel()),
-			this.renderFullLine(width, this.renderConfigSourceText(width)),
+			...this.renderConfigSourceLines(width),
 			this.renderFullLine(width, "↑↓ move  Tab pane  Enter edit  / search  Esc back  q quit"),
 			this.renderPaneSeparator(width, leftWidth, rightWidth, "top"),
 		);
@@ -401,7 +409,7 @@ class ConfigurationScreen implements Component {
 
 		lines.push(
 			this.renderPaneSeparator(width, leftWidth, rightWidth, "bottom"),
-			this.renderFullLine(width, this.renderFooterText()),
+			...this.renderFooterLines(width),
 			this.colorBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`, width),
 		);
 		return lines.map((line) => truncateToWidth(line, width, ""));
@@ -413,18 +421,19 @@ class ConfigurationScreen implements Component {
 		const innerWidth = width - 2;
 		const showCategories = this.focusedPane === "categories" && !this.hasSearchQuery();
 		const bodyLines = showCategories ? this.renderCategoryPaneLines(innerWidth) : this.renderSettingsPaneLines(innerWidth);
+		const navigation = showCategories ? "↑↓ category  Enter open  / search  q quit" : "↑↓ move  Enter edit  Esc back  / search  q quit";
 		const lines: string[] = [];
 
 		lines.push(
 			this.renderTitleBorder(width, this.currentHeaderLabel()),
-			this.renderFullLine(width, this.renderConfigSourceText(width)),
-			this.renderFullLine(width, showCategories ? "↑↓ category  Enter open  / search  q quit" : "↑↓ move  Enter edit  Esc categories  / search  q quit"),
+			...this.renderConfigSourceLines(width),
+			...wrapTextWithAnsi(navigation, innerWidth).map((line) => this.renderFullLine(width, line)),
 			this.colorBorder(`├${"─".repeat(innerWidth)}┤`, width),
 		);
 		for (const line of bodyLines) lines.push(this.renderFullLine(width, line));
 		lines.push(
 			this.colorBorder(`├${"─".repeat(innerWidth)}┤`, width),
-			this.renderFullLine(width, this.renderFooterText()),
+			...this.renderFooterLines(width),
 			this.colorBorder(`╰${"─".repeat(innerWidth)}╯`, width),
 		);
 		return lines.map((line) => truncateToWidth(line, width, ""));
@@ -478,13 +487,8 @@ class ConfigurationScreen implements Component {
 		return this.theme.fg("accent", fitAnsi(line, width, ""));
 	}
 
-	private renderConfigSourceText(width: number) {
-		const innerWidth = Math.max(0, width - 2);
-		const prefix = "writes ";
-		const suffix = " • shell env overrides Micme settings";
-		const pathWidth = Math.max(0, innerWidth - visibleWidth(prefix) - visibleWidth(suffix));
-		const path = pathWidth > 0 ? fitPath(this.configPath, pathWidth) : "micme.json";
-		return `${prefix}${path}${suffix}`;
+	private renderConfigSourceLines(width: number) {
+		return wrapTextWithAnsi(`writes ${this.configPath} • shell env overrides Micme settings`, width - 2).map((line) => this.renderFullLine(width, line));
 	}
 
 	private renderCategoryPaneLines(width: number) {
@@ -539,18 +543,21 @@ class ConfigurationScreen implements Component {
 		return padRightAnsi(`${styledPrefix}${padRightAnsi(styledLabel, labelWidth)} ${padLeftAnsi(value, valueWidth)}`, width);
 	}
 
-	private renderFooterText() {
+	private renderFooterLines(width: number) {
 		const selected = this.getSelectedSetting();
-		const category = this.currentCategory();
 		const selection = this.getSelectionText();
 		if (this.editingShortcutItem) {
 			const hint = this.pendingShortcutValue ? `Captured ${this.pendingShortcutValue} • Enter save • Esc cancel` : "Press desired key or key combination • Enter save • Esc cancel";
-			return `${selection} • ${this.statusText || hint}`;
+			return [this.renderFullLine(width, `${selection} • ${this.statusText || hint}`)];
 		}
 		const search = this.searchActive ? `Search: ${this.searchQuery || "type to filter all settings"}` : "";
 		const lead = this.statusText || search;
-		const description = selected?.description ?? category.description;
-		return lead ? `${lead} • ${selection} • ${description}` : `${selection} • ${description}`;
+		const description = selected?.description ?? this.currentCategory().description;
+		const footer = lead ? `${lead} • ${selection} • ${description}` : `${selection} • ${description}`;
+		const lines = this.focusedPane === "settings" && selected?.details
+			? [footer, ...selected.details].filter(Boolean).flatMap((line) => wrapTextWithAnsi(sanitizeTerminalText(line), width - 2))
+			: [footer];
+		return lines.map((line) => this.renderFullLine(width, line));
 	}
 
 	private formatValue(item: ConfigurationItem, width: number) {
@@ -566,8 +573,9 @@ class ConfigurationScreen implements Component {
 
 		if (item.displayKind === "slider") return this.formatSlider(item, width);
 
-		const label = displayConfigurationValue(item.id, item.valueLabels?.[raw] ?? raw);
-		if (item.displayKind === "path" || item.displayKind === "model") return fitPath(label, width);
+		const value = item.valueLabels && Object.hasOwn(item.valueLabels, raw) ? item.valueLabels[raw] : raw;
+		const label = displayConfigurationValue(item.id, value ?? raw);
+		if (item.displayKind === "path" || item.displayKind === "model") return fitTerminalTail(label, width);
 		return fitAnsi(label, width);
 	}
 
@@ -576,7 +584,7 @@ class ConfigurationScreen implements Component {
 		const valueText = Number.isFinite(value) ? value.toFixed(2) : sanitizeTerminalText(item.rawValue);
 		if (width < valueText.length + 5) return fitAnsi(valueText, width);
 
-		const ratio = item.id === "MICME_STREAM_VAD_THRESHOLD" ? clamp(value, 0, 1) : clamp(value / 2, 0, 1);
+		const ratio = clamp(value / 2, 0, 1);
 		const barWidth = Math.max(3, Math.min(10, width - valueText.length - 4));
 		const filled = clamp(Math.round(ratio * barWidth), 0, barWidth);
 		const bar = `[${"█".repeat(filled)}${"░".repeat(barWidth - filled)}]`;
@@ -608,17 +616,15 @@ class ConfigurationScreen implements Component {
 	}
 
 	private getCategoryItems(categoryId = this.currentCategory().id) {
-		const plan = this.getCurrentPlan();
-		return this.items.filter((item) => item.categoryId === categoryId && this.isItemVisible(item, plan));
+		return this.view.items.filter((item) => item.categoryId === categoryId && this.isItemVisible(item));
 	}
 
 	private getVisibleItems() {
-		const plan = this.getCurrentPlan();
-		return this.items.filter((item) => this.isItemVisible(item, plan));
+		return this.view.items.filter((item) => this.isItemVisible(item));
 	}
 
-	private isItemVisible(item: ConfigurationItem, plan: ResolvedTranscriptionPlan) {
-		return item.visibleWhen ? item.visibleWhen(plan) : true;
+	private isItemVisible(item: ConfigurationItem) {
+		return item.visibleWhen ? item.visibleWhen(this.view.plan) : true;
 	}
 
 	private getDisplaySettings() {
@@ -735,10 +741,9 @@ class ConfigurationScreen implements Component {
 		this.requestRender();
 
 		void this.onSave(item.id, nextValue)
-			.then((updatedValues) => {
+			.then((view) => {
 				if (this.closed) return;
-				this.updateValues(updatedValues);
-				this.refreshDerivedItems();
+				this.view = view;
 				this.clampSelections();
 				this.statusText = formatSaveStatus(item.id, nextValue);
 			})
@@ -752,48 +757,6 @@ class ConfigurationScreen implements Component {
 				this.saving = false;
 				this.requestRender();
 			});
-	}
-
-	private updateValues(values: Record<string, string>) {
-		for (const [id, rawValue] of Object.entries(values)) {
-			const item = this.items.find((candidate) => candidate.id === id);
-			if (!item) continue;
-			item.rawValue = rawValue;
-			item.currentValue = displayConfigurationValue(id, rawValue);
-		}
-	}
-
-	private refreshDerivedItems() {
-		const plan = this.getCurrentPlan();
-		const backend = this.items.find((candidate) => candidate.id === "MICME_TRANSCRIBE_BACKEND");
-		if (backend && !["whisper.cpp", "python"].includes(backend.rawValue)) {
-			backend.rawValue = getUiBackendValue(plan);
-			backend.currentValue = displayConfigurationValue(backend.id, backend.rawValue);
-		}
-
-		const model = this.items.find((candidate) => candidate.id === "MICME_WHISPER_CPP_MODEL");
-		if (model) {
-			model.rawValue = getCurrentWhisperCppModelValue();
-			model.currentValue = displayConfigurationValue(model.id, model.rawValue);
-		}
-
-		const pythonModel = this.items.find((candidate) => candidate.id === "MICME_WHISPER_MODEL");
-		if (pythonModel) {
-			pythonModel.rawValue = getPythonWhisperModelName();
-			pythonModel.currentValue = pythonModel.rawValue;
-		}
-
-		const mode = this.items.find((candidate) => candidate.id === "MICME_TRANSCRIPTION_MODE");
-		if (mode) {
-			const base = "Changing this applies the matching profile: stable clip defaults or low-latency stream settings.";
-			mode.description = plan.requestedBackend === "python" || plan.requestedBackend === "custom"
-				? `${base} Streaming mode requires whisper.cpp. Switch to clip mode or choose auto/whisper.cpp.`
-				: base;
-		}
-	}
-
-	private getCurrentPlan() {
-		return resolveTranscriptionPlan({ transcriptionMode: getTranscriptionMode() });
 	}
 
 	private clampSelections() {
@@ -853,23 +816,33 @@ export function buildConfigurationItems(
 	const pythonModelCandidates = maybeTheme ? (pythonModelCandidatesOrAudioDevices as ModelCandidate[]) : [];
 	const audioDevices = maybeTheme ? (audioDevicesOrTheme as AudioDeviceCandidate[]) : (pythonModelCandidatesOrAudioDevices as AudioDeviceCandidate[]);
 	const theme = maybeTheme ?? (audioDevicesOrTheme as MicmeTheme);
-	const currentModelPath = getCurrentWhisperCppModelValue();
-	const usesDirectShow = process.platform === "win32";
-	const audioDeviceKey = usesDirectShow ? "MICME_DSHOW_AUDIO_DEVICE" : "MICME_AUDIO_DEVICE";
-	const defaultDeviceDescription = audioDevices.length > 0 ? "macOS avfoundation audio device id" : "Audio device id/source used by ffmpeg recorder.";
-	const currentDevice = env(audioDeviceKey) ?? (usesDirectShow ? "" : "0");
-	const audioValues = audioDevices.length > 0 ? audioDevices.map((device) => device.value) : [currentDevice];
-	if (!audioValues.includes(currentDevice)) audioValues.unshift(currentDevice);
-	const audioLabels = Object.fromEntries(audioDevices.map((device) => [device.value, device.label]));
+	return buildConfigurationView(modelCandidates, pythonModelCandidates, audioDevices, theme).items;
+}
+
+function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCandidates: ModelCandidate[], audioDevices: AudioDeviceCandidate[], theme: MicmeTheme): ConfigurationView {
+	const mode = getTranscriptionMode();
+	const plan = resolveTranscriptionPlan({ transcriptionMode: mode });
+	const streamPlan = mode === "stream" ? plan : resolveTranscriptionPlan({ transcriptionMode: "stream" });
+	const live = streamPlan.live;
+	const model = resolveWhisperCppModel({ transcriptionMode: mode });
+	const currentModelPath = plan.live?.modelPath ?? model.path;
+	const configuredWorker = env("MICME_LIVE_BIN")?.trim();
+	const workerPath = live?.binary ?? (configuredWorker ? expandConfigPath(configuredWorker) : "micme-live (PATH default)");
+	const vadPath = live?.vadModelPath ?? getWhisperVadModelPath();
+	const liveLanguage = mode === "stream" && live ? `Live language: ${live.language}${live.translate ? " (translate to English)" : ""}.` : "";
+	const finalize = flagValue(live?.finalizeWithClip ?? getStreamFinalizeWithClip());
+	const diagnostics = flagValue(envFlag("MICME_STREAM_DIAGNOSTICS"));
 	const whisperCppBinValues = uniqueStrings([env("MICME_WHISPER_CPP_BIN") ?? "", findExecutable(["whisper-cli"]) ?? "", findExecutable(["whisper-cpp"]) ?? "", "whisper-cli", "whisper-cpp"]);
-	const whisperStreamBinValues = uniqueStrings([env("MICME_WHISPER_STREAM_BIN") ?? "", findExecutable(["whisper-stream"]) ?? "", "whisper-stream"]);
-	const audioFilter = env("MICME_AUDIO_FILTER") ?? "highpass=f=80,lowpass=f=7600";
+	const audioFilter = getAudioFilter();
 	const shortcut = getShortcutSettingValue();
-	const translateToEnglish = env("MICME_TRANSLATE_TO_ENGLISH") ?? "off";
-	const plan = resolveTranscriptionPlan({ transcriptionMode: getTranscriptionMode() });
-	const backendValues = ["whisper.cpp", "python"] as const;
-	const backendLabels = Object.fromEntries(backendValues.map((value) => [value, formatBackendLabel(value)]));
-	const uiBackendValue = getUiBackendValue(plan);
+	const translateToEnglish = getTranslateToEnglishLanguage() ?? "off";
+	const backendValues = ["auto", "whisper.cpp", "python"];
+	const processing = flagValue(mode === "stream" ? getFlagSetting("MICME_PROCESS_AUDIO", true) : env("MICME_PROCESS_AUDIO") !== "0");
+	const validate = flagValue(env("MICME_VALIDATE_AUDIO") !== "0" && !envFlag("MICME_SKIP_AUDIO_VALIDATION"));
+	const keepAudio = flagValue(envFlag("MICME_KEEP_AUDIO"));
+	const recordMeter = flagValue(getRecordMeter());
+	const avfoundationDropLateFrames = flagValue(getAvfoundationDropLateFrames());
+	const meterGain = String(getMeterGain());
 	const whisperCppVisible = (candidate: ResolvedTranscriptionPlan) => getUiBackendValue(candidate) === "whisper.cpp";
 	const pythonVisible = (candidate: ResolvedTranscriptionPlan) => getUiBackendValue(candidate) === "python";
 	const currentPythonModel = getPythonWhisperModelName();
@@ -877,7 +850,7 @@ export function buildConfigurationItems(
 	const pythonModelLabels = Object.fromEntries(pythonModelCandidates.map((candidate) => [candidate.value, candidate.label]));
 	const modelPathCandidates = [{ label: "Use default model", value: "", description: "Clear explicit path override and use Micme's default whisper.cpp model path.", installed: true, kind: "path" as const }, ...modelCandidates];
 
-	return [
+	const items: ConfigurationItem[] = [
 		{
 			id: "MICME_AUTO_DOWNLOAD_MODEL",
 			categoryId: "general",
@@ -893,8 +866,9 @@ export function buildConfigurationItems(
 			categoryId: "general",
 			label: "Language",
 			description: "Transcription language when translation is off. Use auto for detection.",
-			rawValue: env("MICME_LANGUAGE") ?? "en",
-			currentValue: env("MICME_LANGUAGE") ?? "en",
+			rawValue: env("MICME_LANGUAGE")?.trim() || "en",
+			currentValue: env("MICME_LANGUAGE")?.trim() || "en",
+			details: liveLanguage ? [liveLanguage] : undefined,
 			values: [...TRANSCRIPTION_LANGUAGE_VALUES],
 			valueLabels: LANGUAGE_LABELS,
 			displayKind: "text",
@@ -906,6 +880,7 @@ export function buildConfigurationItems(
 			description: "Off by default. Choose the spoken source language to output English.",
 			rawValue: translateToEnglish,
 			currentValue: translateToEnglish,
+			details: liveLanguage ? [liveLanguage] : undefined,
 			values: ["off", ...TRANSLATION_SOURCE_LANGUAGE_VALUES],
 			valueLabels: TRANSLATE_FROM_VALUE_LABELS,
 			displayKind: "text",
@@ -914,9 +889,10 @@ export function buildConfigurationItems(
 			id: "MICME_TRANSCRIPTION_MODE",
 			categoryId: "transcription",
 			label: "Transcription mode",
-			description: "Changing this applies the matching profile: stable clip defaults or low-latency stream settings.",
-			rawValue: getTranscriptionMode(),
-			currentValue: getTranscriptionMode(),
+			description: "Resets the Stream final pass (off for stream, on for clip). Stream needs a local decoder and speech detector (see Streaming).",
+			details: mode === "stream" && !live ? [streamPlan.reason, "Choose clip mode or fix live setup, then reopen settings."] : [],
+			rawValue: mode,
+			currentValue: mode,
 			values: ["clip", "stream"],
 			displayKind: "text",
 		},
@@ -924,18 +900,24 @@ export function buildConfigurationItems(
 			id: "MICME_TRANSCRIBE_BACKEND",
 			categoryId: "transcription",
 			label: "Backend",
-			description: "Choose the transcription backend.",
-			rawValue: uiBackendValue,
-			currentValue: uiBackendValue,
-			values: [...backendValues],
-			valueLabels: backendLabels,
+			description: "Stream uses whisper.cpp; select Auto or whisper.cpp. Python and custom backends are clip-only.",
+			details: [plan.effectiveBackend === "none" ? plan.reason : `Effective backend: ${formatBackendLabel(plan.effectiveBackend)}.`],
+			rawValue: plan.requestedBackend,
+			currentValue: plan.requestedBackend,
+			values: backendValues,
+			valueLabels: { auto: "Auto", "whisper.cpp": "whisper.cpp", python: "Python Whisper", custom: "Custom command" },
 			displayKind: "text",
 		},
 		{
 			id: "MICME_WHISPER_CPP_MODEL",
 			categoryId: "transcription",
-			label: "Model",
-			description: "Whisper.cpp ggml/gguf model file.",
+			label: "ASR model",
+			description: "Whisper.cpp model for speech recognition in clip and live dictation.",
+			details: [
+				model.exists ? currentModelPath : `ASR model file is missing: ${currentModelPath}`,
+				shellOverrideHint("MICME_WHISPER_CPP_MODEL"),
+				liveLanguage,
+			],
 			rawValue: currentModelPath,
 			currentValue: displayConfigurationValue("MICME_WHISPER_CPP_MODEL", currentModelPath),
 			displayKind: "model",
@@ -946,8 +928,8 @@ export function buildConfigurationItems(
 		{
 			id: "MICME_WHISPER_CPP_BIN",
 			categoryId: "transcription",
-			label: "Binary",
-			description: "Command/path for whisper.cpp transcription. Leave unset to use whisper-cli/whisper-cpp from PATH.",
+			label: "Clip binary",
+			description: "Whisper.cpp CLI for clip transcription or final refinement. Stream uses the local decoder in Streaming.",
 			rawValue: env("MICME_WHISPER_CPP_BIN") ?? "",
 			currentValue: displayConfigurationValue("MICME_WHISPER_CPP_BIN", env("MICME_WHISPER_CPP_BIN") ?? ""),
 			values: whisperCppBinValues,
@@ -969,93 +951,48 @@ export function buildConfigurationItems(
 		},
 
 		{
-			id: "MICME_WHISPER_STREAM_BIN",
+			id: "MICME_LIVE_BIN",
 			categoryId: "streaming",
-			label: "Whisper-stream binary",
-			description: "Command/path for whisper-stream. Required when transcription mode is stream.",
-			rawValue: env("MICME_WHISPER_STREAM_BIN") ?? "",
-			currentValue: displayConfigurationValue("MICME_WHISPER_STREAM_BIN", env("MICME_WHISPER_STREAM_BIN") ?? ""),
-			values: whisperStreamBinValues,
+			label: "Live decoder",
+			description: configFileHelp("MICME_LIVE_BIN"),
+			details: [
+				shellOverrideHint("MICME_LIVE_BIN"),
+				live || !streamPlan.reason.includes(workerPath) ? workerPath : "",
+				live ? "" : streamPlan.reason,
+				`Uses the input in Audio: speech-gated ${LIVE_CAPTURE_RATE / 1000} kHz mono PCM.`,
+			],
+			rawValue: workerPath,
+			currentValue: displayConfigurationValue("MICME_LIVE_BIN", workerPath),
 			displayKind: "path",
-			emptyLabel: "not set",
 		},
 		{
-			id: "MICME_STREAM_CAPTURE",
+			id: "MICME_VAD_MODEL",
 			categoryId: "streaming",
-			label: "Stream capture device",
-			description: "whisper-stream/SDL capture id from -1 through 255. Use -1 for the system default; ffmpeg device ids may not match.",
-			rawValue: String(getStreamCapture()),
-			currentValue: String(getStreamCapture()),
-			values: ["-1", "0", "1", "2", "3", "4", "5"],
-			displayKind: "number",
-		},
-		{
-			id: "MICME_STREAM_KEEP_CONTEXT",
-			categoryId: "streaming",
-			label: "Stream context",
-			description: "Keep Whisper prompt context between chunks. Off by default for append-only dictation; turn on for more contextual correction.",
-			rawValue: env("MICME_STREAM_KEEP_CONTEXT") ?? "0",
-			currentValue: env("MICME_STREAM_KEEP_CONTEXT") ?? "0",
-			values: ["0", "1"],
-			displayKind: "boolean",
-		},
-		{
-			id: "MICME_STREAM_FLUSH_MS",
-			categoryId: "streaming",
-			label: "Stream flush delay",
-			description: "Quiet interval from 100 through 60000 ms before tentative stream words are committed append-only into the editor.",
-			rawValue: String(getStreamFlushMs()),
-			currentValue: String(getStreamFlushMs()),
-			values: ["400", "650", "700", "1000"],
-			displayKind: "number",
+			label: "Speech detector model",
+			description: configFileHelp("MICME_VAD_MODEL"),
+			details: [shellOverrideHint("MICME_VAD_MODEL"), vadModelStatus(vadPath)],
+			rawValue: vadPath,
+			currentValue: displayConfigurationValue("MICME_VAD_MODEL", vadPath),
+			displayKind: "path",
 		},
 		{
 			id: "MICME_STREAM_FINALIZE_WITH_CLIP",
 			categoryId: "streaming",
 			label: "Stream final pass",
-			description: "Opt in to replace the append-only live stream with a final clip-mode transcript on stop.",
-			rawValue: env("MICME_STREAM_FINALIZE_WITH_CLIP") ?? "0",
-			currentValue: env("MICME_STREAM_FINALIZE_WITH_CLIP") ?? "0",
+			description: "Refine the transcript on stop using the clip backend on the same capture, without re-filtering.",
+			details: [shellOverrideHint("MICME_STREAM_FINALIZE_WITH_CLIP")],
+			rawValue: finalize,
+			currentValue: finalize,
 			values: ["0", "1"],
 			displayKind: "boolean",
 		},
-		{
-			id: "MICME_STREAM_VAD_THRESHOLD",
-			categoryId: "streaming",
-			label: "Stream VAD threshold",
-			description: "Value from 0.01 through 0.99. Lower is more sensitive; raise it if background noise causes hallucinations.",
-			rawValue: String(getStreamVadThreshold()),
-			currentValue: String(getStreamVadThreshold()),
-			values: ["0.35", "0.45", "0.60", "0.75"],
-			displayKind: "slider",
-		},
-		{
-			id: "MICME_STREAM_WORDS_PER_CHUNK",
-			categoryId: "streaming",
-			label: "Stream word chunk",
-			description: "Maximum stable words from 1 through 10 committed per streaming update.",
-			rawValue: String(getStreamWordsPerChunk()),
-			currentValue: String(getStreamWordsPerChunk()),
-			values: ["3", "5", "8", "10"],
-			displayKind: "number",
-		},
-		{
-			id: audioDeviceKey,
-			categoryId: "audio",
-			label: "Microphone device",
-			description: usesDirectShow ? "Windows DirectShow audio input name." : defaultDeviceDescription,
-			rawValue: currentDevice,
-			currentValue: currentDevice,
-			values: audioValues,
-			displayKind: "text",
-			emptyLabel: usesDirectShow ? "Automatic" : undefined,
-			valueLabels: audioLabels,
-		},
+		buildMicrophoneItem(audioDevices),
 		{
 			id: "MICME_RECORD_SAMPLE_RATE",
 			categoryId: "audio",
 			label: "Sample rate override",
-			description: "Advanced. Leave auto so ffmpeg uses the selected input's native sample rate, or use 8000 through 384000 Hz.",
+			description: `Built-in clip recorder only. Auto keeps the input rate; live captures at ${LIVE_CAPTURE_RATE / 1000} kHz.`,
+			details: [],
 			rawValue: String(getRecordSampleRate() ?? "auto"),
 			currentValue: String(getRecordSampleRate() ?? "auto"),
 			values: ["auto", "48000", "44100", "16000", "96000"],
@@ -1065,7 +1002,8 @@ export function buildConfigurationItems(
 			id: "MICME_RECORD_SYNC",
 			categoryId: "audio",
 			label: "Record timing sync",
-			description: "Automatically preserve wall-clock recording duration from ffmpeg timestamps. Keep on unless debugging recorder timing.",
+			description: "Preserve wall-clock duration using FFmpeg timestamps in built-in clip and live capture.",
+			details: [],
 			rawValue: getRecordSync() ? "1" : "0",
 			currentValue: getRecordSync() ? "1" : "0",
 			values: ["1", "0"],
@@ -1075,7 +1013,8 @@ export function buildConfigurationItems(
 			id: "MICME_TRANSCRIBE_SAMPLE_RATE",
 			categoryId: "audio",
 			label: "Transcribe sample rate",
-			description: "Sample rate from 8000 through 384000 Hz for clip.wav sent to Whisper.",
+			description: "Clip preprocessing only: output rate for clip.wav. Live and its final pass use the captured PCM.",
+			details: [],
 			rawValue: String(getTranscribeSampleRate()),
 			currentValue: String(getTranscribeSampleRate()),
 			values: ["16000", "48000", "44100"],
@@ -1084,10 +1023,11 @@ export function buildConfigurationItems(
 		{
 			id: "MICME_RECORD_METER",
 			categoryId: "audio",
-			label: "Live meter pipe",
-			description: "Stream a second PCM branch from ffmpeg for the waveform meter. Leave off if recordings crackle or sound shortened.",
-			rawValue: env("MICME_RECORD_METER") ?? "0",
-			currentValue: env("MICME_RECORD_METER") ?? "0",
+			label: "Clip meter pipe",
+			description: "Optional FFmpeg meter branch for clip capture only. Live meters the decoder's actual PCM.",
+			details: [],
+			rawValue: recordMeter,
+			currentValue: recordMeter,
 			values: ["0", "1"],
 			displayKind: "boolean",
 		},
@@ -1097,9 +1037,9 @@ export function buildConfigurationItems(
 						id: "MICME_AVFOUNDATION_DROP_LATE_FRAMES",
 						categoryId: "audio" as const,
 						label: "AVF drop late frames",
-						description: "macOS only. Keep off to preserve audio timing when devices or virtual routes lag.",
-						rawValue: env("MICME_AVFOUNDATION_DROP_LATE_FRAMES") ?? "0",
-						currentValue: env("MICME_AVFOUNDATION_DROP_LATE_FRAMES") ?? "0",
+						description: "Built-in AVFoundation input. Keep off to preserve audio timing when devices or virtual routes lag.",
+						rawValue: avfoundationDropLateFrames,
+						currentValue: avfoundationDropLateFrames,
 						values: ["0", "1"],
 						displayKind: "boolean" as const,
 					},
@@ -1109,7 +1049,8 @@ export function buildConfigurationItems(
 			id: "MICME_AUDIO_FILTER",
 			categoryId: "audio",
 			label: "Audio filter",
-			description: "ffmpeg filter for preprocessing. Empty disables filtering while keeping conversion.",
+			description: "With preprocessing on, filter clip audio or apply once in built-in live capture. Empty means no filter.",
+			details: ["A custom live recorder supplies its own filtered or unfiltered PCM."],
 			rawValue: audioFilter,
 			currentValue: displayConfigurationValue("MICME_AUDIO_FILTER", audioFilter),
 			values: ["highpass=f=80,lowpass=f=7600", "", "highpass=f=80,lowpass=f=9000", "afftdn=nf=-25,highpass=f=80,lowpass=f=7600"],
@@ -1121,8 +1062,8 @@ export function buildConfigurationItems(
 			categoryId: "audio",
 			label: "Meter gain",
 			description: "Recording widget sensitivity. Increase if the bars feel too quiet.",
-			rawValue: env("MICME_METER_GAIN") ?? "1",
-			currentValue: env("MICME_METER_GAIN") ?? "1",
+			rawValue: meterGain,
+			currentValue: meterGain,
 			values: ["0.75", "1", "1.5", "2", "3"],
 			displayKind: "slider",
 		},
@@ -1130,9 +1071,10 @@ export function buildConfigurationItems(
 			id: "MICME_PROCESS_AUDIO",
 			categoryId: "audio",
 			label: "Preprocess audio",
-			description: "Create a clean 16 kHz clip.wav from raw.wav before transcription.",
-			rawValue: env("MICME_PROCESS_AUDIO") ?? "1",
-			currentValue: env("MICME_PROCESS_AUDIO") ?? "1",
+			description: "Convert/filter clips or enable the filter for built-in live capture. Live always uses fixed-rate PCM.",
+			details: ["Custom live recorders own all filtering. The live final pass never re-filters."],
+			rawValue: processing,
+			currentValue: processing,
 			values: ["1", "0"],
 			displayKind: "boolean",
 		},
@@ -1140,9 +1082,10 @@ export function buildConfigurationItems(
 			id: "MICME_VALIDATE_AUDIO",
 			categoryId: "audio",
 			label: "Silence guard",
-			description: "Reject near-silent or unverified clips before Whisper can hallucinate text.",
-			rawValue: env("MICME_VALIDATE_AUDIO") ?? "1",
-			currentValue: env("MICME_VALIDATE_AUDIO") ?? "1",
+			description: "Reject near-silent clips, including optional live refinement. During speech, the live decoder uses its speech detector instead.",
+			details: [],
+			rawValue: validate,
+			currentValue: validate,
 			values: ["1", "0"],
 			displayKind: "boolean",
 		},
@@ -1150,9 +1093,9 @@ export function buildConfigurationItems(
 			id: "MICME_KEEP_AUDIO",
 			categoryId: "audio",
 			label: "Keep audio",
-			description: "Keep raw.wav and clip.wav under ./micme-rec/rec-###/ after successful transcription for debugging.",
-			rawValue: env("MICME_KEEP_AUDIO") ?? "0",
-			currentValue: env("MICME_KEEP_AUDIO") ?? "0",
+			description: "Keep the recording under ./micme-rec/rec-###/ after transcription (not the live refinement copy).",
+			rawValue: keepAudio,
+			currentValue: keepAudio,
 			values: ["0", "1"],
 			displayKind: "boolean",
 		},
@@ -1170,13 +1113,68 @@ export function buildConfigurationItems(
 			id: "MICME_STREAM_DIAGNOSTICS",
 			categoryId: "general",
 			label: "Stream diagnostics",
-			description: "Show opt-in whisper-stream frame/state diagnostics and first-output timing notifications.",
-			rawValue: env("MICME_STREAM_DIAGNOSTICS") ?? "0",
-			currentValue: env("MICME_STREAM_DIAGNOSTICS") ?? "0",
+			description: "Show local decoder load/recognition timings and capture counts, not transcript text.",
+			details: [shellOverrideHint("MICME_STREAM_DIAGNOSTICS")],
+			rawValue: diagnostics,
+			currentValue: diagnostics,
 			values: ["0", "1"],
 			displayKind: "boolean",
 		},
 	];
+	return { plan, items };
+}
+
+function buildMicrophoneItem(audioDevices: AudioDeviceCandidate[]): ConfigurationItem {
+	const { platform } = process;
+	const id = getAudioInputConfigKey(platform);
+	const customRecorder = Boolean(env("MICME_RECORD_COMMAND")?.trim());
+	const avfoundationOverride = platform === "darwin" ? env("MICME_AVFOUNDATION_INPUT") : undefined;
+	const selected = env(id) || (platform === "linux" ? "default" : platform === "win32" ? "" : "0");
+	const current = customRecorder ? "Custom recorder" : avfoundationOverride || selected;
+	const values = audioDevices.map((device) => device.value);
+	if (!values.includes(selected)) values.unshift(selected);
+	let description = platform === "win32" ? "Windows DirectShow audio input name." : "macOS avfoundation audio device id";
+	let details = [shellOverrideHint(id)];
+	if (platform === "linux") {
+		description = `PulseAudio source. ${configFileHelp(id)}`;
+		details.push(`Input: ${selected}`);
+	}
+	if (customRecorder) {
+		description = "MICME_RECORD_COMMAND takes precedence over the microphone picker and built-in capture settings.";
+		details = [shellOverrideHint("MICME_RECORD_COMMAND"), `Custom live capture must write a growing ${LIVE_CAPTURE_RATE / 1000} kHz mono signed 16-bit PCM WAV.`];
+	} else if (avfoundationOverride) {
+		description = "MICME_AVFOUNDATION_INPUT overrides MICME_AUDIO_DEVICE.";
+		details = [shellOverrideHint("MICME_AVFOUNDATION_INPUT"), `Input: ${avfoundationOverride}`, configFileHelp("MICME_AVFOUNDATION_INPUT")];
+	}
+	return {
+		id,
+		categoryId: "audio",
+		label: "Microphone device",
+		description,
+		details,
+		rawValue: current,
+		currentValue: current,
+		values: customRecorder || avfoundationOverride ? undefined : values,
+		displayKind: "text",
+		emptyLabel: platform === "win32" ? "Automatic" : undefined,
+		valueLabels: customRecorder || avfoundationOverride ? undefined : Object.fromEntries(audioDevices.map((device) => [device.value, device.label])),
+	};
+}
+
+function configFileHelp(key: string) {
+	return `Set ${key} in micme.json or your shell; restart Pi.`;
+}
+
+function shellOverrideHint(key: string) {
+	return process.env[key] === undefined ? "" : `Shell override: ${key}.`;
+}
+
+function vadModelStatus(path: string) {
+	return isRegularFile(path) ? path : `Speech detector model file is missing or unavailable: ${path}`;
+}
+
+function flagValue(enabled: boolean) {
+	return enabled ? "1" : "0";
 }
 
 export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTheme, done: (selectedValue?: string) => void): Component {
@@ -1241,7 +1239,7 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 
 export function displayConfigurationValue(id: string, value: string) {
 	if (id === "MICME_WHISPER_CPP_MODEL") return value ? sanitizeTerminalText(basename(value)) || "model" : "not set";
-	if (id === "MICME_TRANSCRIBE_COMMAND") return value ? "configured" : "not set";
+	if (id === "MICME_TRANSCRIBE_COMMAND" || id === "MICME_RECORD_COMMAND") return value ? "configured" : "not set";
 	if (id === "MICME_AUDIO_FILTER") return sanitizeTerminalText(value) || "<empty>";
 	return sanitizeTerminalText(value) || "not set";
 }
@@ -1249,10 +1247,6 @@ export function displayConfigurationValue(id: string, value: string) {
 function getUiBackendValue(plan: ResolvedTranscriptionPlan): "whisper.cpp" | "python" {
 	if (plan.requestedBackend === "python" || plan.requestedBackend === "whisper.cpp") return plan.requestedBackend;
 	return plan.effectiveBackend === "python" ? "python" : "whisper.cpp";
-}
-
-function getCurrentWhisperCppModelValue() {
-	return resolveWhisperCppModel().path;
 }
 
 export function uniqueStrings(values: string[]) {
@@ -1293,14 +1287,6 @@ function getConfigurationReloadHint(id: string) {
 function fitAnsi(text: string, width: number, ellipsis = "…") {
 	if (width <= 0) return "";
 	return truncateToWidth(text, width, ellipsis);
-}
-
-function fitPath(text: string, width: number) {
-	if (width <= 0) return "";
-	if (visibleWidth(text) <= width) return text;
-	if (width <= 1) return fitAnsi(text, width);
-	const tail = Array.from(text).slice(-(width - 1)).join("");
-	return `…${tail}`;
 }
 
 function padRightAnsi(text: string, width: number) {

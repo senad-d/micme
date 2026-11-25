@@ -10,48 +10,32 @@ const {
 	getAvfoundationInputSampleRate,
 	getRecordSampleRate,
 	getRecordSync,
-	getStreamCapture,
-	getStreamFlushMs,
-	getStreamKeepMs,
-	getStreamLengthMs,
-	getStreamMaxTokens,
-	getStreamStepMs,
-	getStreamVadThreshold,
-	getStreamWordsPerChunk,
+	getLegacyStreamSettings,
+	getStreamFinalizeWithClip,
 	getTranscribeBackend,
 	getTranscribeSampleRate,
 	getTranscribeTimeoutMs,
 	getTranscriptionMode,
+	getTranscriptionModeProfile,
 	reloadMicmeConfig,
+	writeMicmeConfigValues,
 } = await import("../src/config.ts");
 const { buildAudioPreprocessingArgs, buildRecorderCommand } = await import("../src/audio.ts");
-const { buildWhisperStreamCommand } = await import("../src/streaming.ts");
-const { buildConfigurationItems } = await import("../src/settings.ts");
-
-const theme = {
-	fg(_color, text) {
-		return text;
-	},
-	bold(text) {
-		return text;
-	},
-};
+const { buildLiveWorkerCommand } = await import("../src/streaming.ts");
+const { resolveLivePlan } = await import("../src/live-plan.ts");
 
 const INTEGER_SETTINGS = [
 	{ key: "MICME_TRANSCRIBE_TIMEOUT_MS", getter: getTranscribeTimeoutMs, fallback: 120_000 },
-	{ key: "MICME_STREAM_CAPTURE", getter: getStreamCapture, fallback: -1 },
-	{ key: "MICME_STREAM_STEP_MS", getter: getStreamStepMs, fallback: 1_000 },
-	{ key: "MICME_STREAM_LENGTH_MS", getter: getStreamLengthMs, fallback: 5_000 },
-	{ key: "MICME_STREAM_KEEP_MS", getter: getStreamKeepMs, fallback: 500 },
-	{ key: "MICME_STREAM_MAX_TOKENS", getter: getStreamMaxTokens, fallback: 64 },
-	{ key: "MICME_STREAM_FLUSH_MS", getter: getStreamFlushMs, fallback: 700 },
-	{ key: "MICME_STREAM_WORDS_PER_CHUNK", getter: getStreamWordsPerChunk, fallback: 10 },
 	{ key: "MICME_RECORD_SAMPLE_RATE", getter: getRecordSampleRate, fallback: undefined },
 	{ key: "MICME_TRANSCRIBE_SAMPLE_RATE", getter: getTranscribeSampleRate, fallback: 16_000 },
 	{ key: "MICME_AVFOUNDATION_INPUT_SAMPLE_RATE", getter: getAvfoundationInputSampleRate, fallback: undefined },
 ];
 
-const CONFIG_KEYS = [...INTEGER_SETTINGS.map((setting) => setting.key), "MICME_STREAM_VAD_THRESHOLD", "MICME_AUTO_DOWNLOAD_MODEL", "MICME_RECORD_SYNC"];
+const CONFIG_KEYS = [...INTEGER_SETTINGS.map((setting) => setting.key), "MICME_AUTO_DOWNLOAD_MODEL", "MICME_RECORD_SYNC", "MICME_STREAM_FINALIZE_WITH_CLIP"];
+const LEGACY_KEYS = [
+	"MICME_WHISPER_STREAM_BIN", "MICME_STREAM_CAPTURE", "MICME_STREAM_STEP_MS", "MICME_STREAM_LENGTH_MS", "MICME_STREAM_KEEP_MS",
+	"MICME_STREAM_MAX_TOKENS", "MICME_STREAM_KEEP_CONTEXT", "MICME_STREAM_WORDS_PER_CHUNK", "MICME_STREAM_FLUSH_MS", "MICME_STREAM_VAD_THRESHOLD",
+];
 
 async function withEnvironment(values, fn) {
 	const previous = new Map();
@@ -137,22 +121,13 @@ test("flag and mode parsers use the same defaults for environment and JSON value
 	}
 });
 
-test("normalized fractions and VAD bounds cannot produce invalid sink values", async (t) => {
+test("fractional settings cannot produce invalid audio sample rates", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-config-fractions-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 
 	for (const source of ["environment", "json"]) {
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_STEP_MS", 0.1, getStreamStepMs), 1_000);
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_FLUSH_MS", 0.1, getStreamFlushMs), 700);
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_WORDS_PER_CHUNK", 0.1, getStreamWordsPerChunk), 10);
 		assert.equal(await readFromSource(root, source, "MICME_RECORD_SAMPLE_RATE", 0.1, getRecordSampleRate), undefined);
 		assert.equal(await readFromSource(root, source, "MICME_TRANSCRIBE_SAMPLE_RATE", 0.1, getTranscribeSampleRate), 16_000);
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_WORDS_PER_CHUNK", 0.6, getStreamWordsPerChunk), 1);
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_VAD_THRESHOLD", 0, getStreamVadThreshold), 0.45);
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_VAD_THRESHOLD", 0.01, getStreamVadThreshold), 0.01);
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_VAD_THRESHOLD", 0.99, getStreamVadThreshold), 0.99);
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_VAD_THRESHOLD", 1, getStreamVadThreshold), 0.45);
-		assert.equal(await readFromSource(root, source, "MICME_STREAM_VAD_THRESHOLD", "Infinity", getStreamVadThreshold), 0.45);
 	}
 });
 
@@ -173,16 +148,18 @@ test("schema, example, flags, and runtime defaults remain aligned", async (t) =>
 		assert.equal(getAutoDownloadModel(), true);
 		assert.equal(getRecordSync(), true);
 
-		const items = buildConfigurationItems([], [], [], theme);
-		const uiValues = Object.fromEntries(items.map((item) => [item.id, item.currentValue]));
-		assert.equal(uiValues.MICME_AUTO_DOWNLOAD_MODEL, "1");
-		assert.equal(uiValues.MICME_RECORD_SYNC, "1");
-		assert.equal(uiValues.MICME_STREAM_CAPTURE, "-1");
-		assert.equal(uiValues.MICME_STREAM_FLUSH_MS, "700");
-		assert.equal(uiValues.MICME_STREAM_WORDS_PER_CHUNK, "10");
-		assert.equal(uiValues.MICME_STREAM_VAD_THRESHOLD, "0.45");
-		assert.equal(uiValues.MICME_RECORD_SAMPLE_RATE, "auto");
-		assert.equal(uiValues.MICME_TRANSCRIBE_SAMPLE_RATE, "16000");
+		assert.equal(getStreamFinalizeWithClip(), false);
+		assert.equal(schema.properties.MICME_STREAM_FINALIZE_WITH_CLIP.default, "0");
+		assert.equal(example.MICME_STREAM_FINALIZE_WITH_CLIP, "0");
+		for (const key of ["MICME_LIVE_BIN", "MICME_VAD_MODEL"]) {
+			assert.equal(schema.properties[key].type, "string");
+			assert.equal(example[key], "", "optional overrides in the example must not mask automatic resolution");
+		}
+		for (const key of LEGACY_KEYS) {
+			const property = schema.properties[key];
+			assert.equal(property.deprecated, true, key);
+			assert.equal(Object.hasOwn(example, key), false, `${key} removed from example`);
+		}
 
 		for (const setting of INTEGER_SETTINGS) {
 			const bounds = NUMERIC_CONFIG_BOUNDS[setting.key];
@@ -193,14 +170,28 @@ test("schema, example, flags, and runtime defaults remain aligned", async (t) =>
 			if (example[setting.key] !== undefined && property.default !== undefined) assert.equal(String(example[setting.key]), String(property.default), `${setting.key} example default`);
 		}
 
-		assert.equal(schema.properties.MICME_STREAM_VAD_THRESHOLD.minimum, NUMERIC_CONFIG_BOUNDS.MICME_STREAM_VAD_THRESHOLD.minimum);
-		assert.equal(schema.properties.MICME_STREAM_VAD_THRESHOLD.maximum, NUMERIC_CONFIG_BOUNDS.MICME_STREAM_VAD_THRESHOLD.maximum);
-		assert.equal(String(getStreamVadThreshold()), schema.properties.MICME_STREAM_VAD_THRESHOLD.default);
-		assert.equal(example.MICME_STREAM_VAD_THRESHOLD, schema.properties.MICME_STREAM_VAD_THRESHOLD.default);
 	});
 });
 
-test("normalized values are the only values emitted in recorder, preprocessing, and stream arguments", async (t) => {
+test("mode profiles reset the final-pass flag but preserve shell precedence and other saved settings", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-config-mode-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "micme.json");
+	const saved = { $schema: "./micme.schema.json", MICME_STREAM_FINALIZE_WITH_CLIP: "1", MICME_LIVE_BIN: "custom-worker", MICME_STREAM_CAPTURE: "4" };
+	await writeFile(path, JSON.stringify(saved));
+	await withEnvironment({ PI_CODING_AGENT_DIR: root, MICME_STREAM_FINALIZE_WITH_CLIP: "0" }, async () => {
+		for (const [mode, finalize] of [["stream", "0"], ["clip", "1"]]) {
+			const profile = getTranscriptionModeProfile(mode);
+			assert.deepEqual(profile, { MICME_TRANSCRIPTION_MODE: mode, MICME_STREAM_FINALIZE_WITH_CLIP: finalize });
+			await writeMicmeConfigValues(profile);
+			const stored = JSON.parse(await readFile(path, "utf8"));
+			assert.deepEqual(stored, { ...saved, ...profile });
+			assert.equal(getStreamFinalizeWithClip(), false);
+		}
+	});
+});
+
+test("clip arguments use normalized rates while Worker v1 argv ignores old SDL tuning", async (t) => {
 	if (process.platform === "win32") {
 		t.skip("POSIX executable fixtures are not portable to Windows");
 		return;
@@ -218,6 +209,12 @@ test("normalized values are the only values emitted in recorder, preprocessing, 
 			PATH: `${root}:${process.env.PATH ?? ""}`,
 			MICME_RECORD_SAMPLE_RATE: "0.1",
 			MICME_TRANSCRIBE_SAMPLE_RATE: "0.1",
+			MICME_TRANSCRIBE_BACKEND: "auto",
+			MICME_LIVE_BIN: process.execPath,
+			MICME_WHISPER_CPP_MODEL: join(root, "asr.bin"),
+			MICME_VAD_MODEL: join(root, "vad.bin"),
+			MICME_LANGUAGE: "de",
+			MICME_TRANSLATE_TO_ENGLISH: "off",
 			MICME_STREAM_CAPTURE: "999999",
 			MICME_STREAM_STEP_MS: "0.1",
 			MICME_STREAM_LENGTH_MS: "Infinity",
@@ -230,13 +227,9 @@ test("normalized values are the only values emitted in recorder, preprocessing, 
 			assert.equal(recorder.args.includes("-ar"), false);
 			const preprocess = buildAudioPreprocessingArgs(join(root, "raw.wav"), join(root, "clip.wav"), "");
 			assert.equal(getArgumentValue(preprocess, "-ar"), "16000");
-			const stream = buildWhisperStreamCommand("whisper-stream", join(root, "model.bin"), root);
-			assert.equal(getArgumentValue(stream.args, "--capture"), "-1");
-			assert.equal(getArgumentValue(stream.args, "--step"), "1000");
-			assert.equal(getArgumentValue(stream.args, "--length"), "5000");
-			assert.equal(getArgumentValue(stream.args, "--keep"), "500");
-			assert.equal(getArgumentValue(stream.args, "--max-tokens"), "64");
-			assert.equal(getArgumentValue(stream.args, "--vad-thold"), "0.45");
+			const stream = buildLiveWorkerCommand(resolveLivePlan());
+			assert.deepEqual(stream.args, ["--model", join(root, "asr.bin"), "--vad-model", join(root, "vad.bin"), "--language", "de"]);
+			assert.ok(getLegacyStreamSettings().includes("MICME_STREAM_CAPTURE"));
 		},
 	);
 });
