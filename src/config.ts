@@ -246,6 +246,21 @@ export function getTranscriptionModeProfile(mode: TranscriptionMode): Record<str
 	return { MICME_TRANSCRIPTION_MODE: mode };
 }
 
+export function getAudioInputConfigKey(platform: NodeJS.Platform) {
+	if (platform === "linux") return "MICME_PULSE_SOURCE";
+	if (platform === "win32") return "MICME_DSHOW_AUDIO_DEVICE";
+	return "MICME_AUDIO_DEVICE";
+}
+
+// The configured FFmpeg input, without running device discovery. On Windows an
+// empty value leaves device selection to DirectShow discovery at capture time.
+export function getConfiguredRecorderInput(platform: NodeJS.Platform) {
+	const selected = env(getAudioInputConfigKey(platform));
+	if (platform === "darwin") return env("MICME_AVFOUNDATION_INPUT") || `:${selected || "0"}`;
+	if (platform === "linux") return selected || "default";
+	return platform === "win32" ? selected || "" : "";
+}
+
 export function getLegacyStreamSettings() {
 	return [
 		"MICME_WHISPER_STREAM_BIN",
@@ -482,7 +497,7 @@ export function envFlag(name: string) {
 	return getFlagSetting(name, false);
 }
 
-function getFlagSetting(name: string, fallback: boolean) {
+export function getFlagSetting(name: string, fallback: boolean) {
 	const value = env(name)?.trim();
 	if (/^(1|true|yes|on)$/i.test(value ?? "")) return true;
 	if (/^(0|false|no|off)$/i.test(value ?? "")) return false;

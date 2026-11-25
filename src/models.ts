@@ -320,10 +320,10 @@ export async function ensureWhisperVadModel(modelPath: string, ctx?: ExtensionCo
 		return;
 	}
 	if (!standardPath) {
-		throw new Error(`Micme VAD model is missing: ${modelPath}. Set MICME_VAD_MODEL to an existing VAD file or unset it to use the standard model.`);
+		throw new Error(`Micme VAD model is missing: ${modelPath}. Set MICME_VAD_MODEL to an existing VAD file, unset it to use the standard model, or choose clip mode.`);
 	}
 	if (!getAutoDownloadModel()) {
-		throw new Error(`Micme VAD model is missing and auto-download is disabled: ${modelPath}. Install the standard VAD model there or enable MICME_AUTO_DOWNLOAD_MODEL.`);
+		throw new Error(`Micme VAD model is missing and auto-download is disabled: ${modelPath}. Install the standard VAD model there, enable MICME_AUTO_DOWNLOAD_MODEL, or choose clip mode.`);
 	}
 	await ensureSharedModelDownload(WHISPER_VAD_MODEL.url, modelPath, ctx, { ...options, integrity: WHISPER_VAD_MODEL.integrity });
 }
@@ -638,7 +638,7 @@ function safeBasename(path: string) {
 	return sanitizeTerminalText(basename(path)) || "model";
 }
 
-function isRegularFile(path: string) {
+export function isRegularFile(path: string) {
 	try {
 		return statSync(path).isFile();
 	} catch {

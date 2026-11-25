@@ -2,7 +2,30 @@
 
 See the [replay procedure](README.md) and the [gate definitions](../../docs/specs/local-dictation-hardening.md#proof).
 
-## Merged-checkout recheck: final year formatting
+## Independent rerun: `base.en` passes during continuous speech
+
+On the four-core i5-7500, `base.en` passed every timed checkpoint while speech was still in progress, with refinement off. Two separate Release builds produced the same worker (SHA-256 `e624c8d1c4594b61367afa30ac8ef60a2c2a89433af38c6bb2a386b9a65a10fe`); both full matrices passed with `base.en`. The decoder now reuses an acoustic boundary for lighter-model draft windows and waits for more speech or agreement before displaying an uncertain suffix. The audio, references, timed scorer and thresholds did not change. The separate final-year check rejects “eighteen sixty four. Three.”
+
+The table and [all 320 visible checkpoints](reference-checkpoints.tsv) are from the independent rerun. The latency is from speech onset to the first correct pair of visible words, not to an endpoint or editor write.
+
+| Model | Columns | Hits out of 16, in run order | Passing runs | First correct draft, median / p95 |
+| --- | ---: | --- | ---: | ---: |
+| `base.en` | 80 | 16, 16, 16, 16, 16 | 5/5 | 1.459 / 1.480 s |
+| `base.en` | 40 | 16, 16, 16, 16, 16 | 5/5 | 1.455 / 1.568 s |
+| `small.en` | 80 | 14, 11, 12, 14, 13 | 3/5 | 2.182 / 2.902 s |
+| `small.en` | 40 | 13, 13, 13, 14, 12 | 3/5 | 2.172 / 2.293 s |
+
+- **While speaking:** `base.en` spent 0.45–0.61 seconds on ASR per second of continuous audio. The first editor commit came at 21.65–22.64 seconds from capture, well after the first visible draft. `small.en` took 1.07–1.15 seconds of ASR per second of audio and missed 31 checkpoints. Use `base.en` for English feedback on a similar CPU; the `small.en` default has not changed.
+- **At stop:** continuous clip → live word error rate was 53.57% → 8.93% for `base.en` and 51.79% → 6.25% for `small.en`. Both captured the final year without a duplicated rollover phrase. JFK, short, quiet and paused speech had 0% live WER for both. Only `base.en` kept the deliberate “but now, but now” repeat. The French control with multilingual `base` returned “Paris.”
+- **Audio and delivery:** all 41 live runs matched the input PCM byte for byte and passed the editor delivery checks. Silence, rain and immediate stop produced no visible or committed words and made no ASR calls. These are comparisons against matched clip decoding on recorded speech, not measurements of a physical mic, legacy SDL capture or an accelerator.
+
+## Before the acoustic-window correction: live drafts still failed during speech
+
+The earlier merged worker (`437fb87`, worker SHA-256 `32293e554d87e53a4622435e7e4e282d83238d00149a0917a8f79bea90b378ef`) was tested on the same four-core i5-7500 with the unchanged corpus and thresholds. No model passed all five sustained-draft runs at both widths. With `base.en`, 5/5 passed at 80 columns and 3/5 at 40; with `small.en`, 3/5 and 2/5 passed. In the first narrow `base.en` run the visible endings “way-release visit to Donald” and “Give me my horse an arm.” both scored 0.67 tail precision, at 16.27 and 18.27 seconds. In the second wide `small.en` run, the drafts were stale at 24.27 and 26.27 seconds. These failures start in decoder output, not in audio capture or editor delivery.
+
+First-correct-draft median/p95 stayed below 3/5 seconds at both widths. Continuous clip → live final WER was 53.57% → 8.93% (`base.en`) and 51.79% → 6.25% (`small.en`). Both now transcribe the JFK and mid-phrase pause controls with 0% final WER; no rollover duplicated a boundary phrase. The smaller weight preserved the deliberate repetition; `small.en` omitted it in both clip and live. All 41 live runs preserved the matched PCM and met the delivery checks; silence and recorded noise produced no words or ASR calls. These improvements do not fix sustained draft relevance. This was paced public audio, not a microphone or matched legacy SDL run.
+
+## Earlier merged-checkout recheck: final year formatting
 
 Rebuilt the CPU worker from `57178a0` and reran the full matrix with the fixture accepting either `1863` or `eighteen sixty three` **only** for the continuous final keyword check. Both forms require the same ordered onset `but now it`. The scorer regression rejects a missing, wrong or out-of-order year and a missing onset. The PCM, timed word reference, visible-relevance scorer and WER calculation and thresholds are unchanged.
 
@@ -25,7 +48,7 @@ Linux x86_64 `7.0.0-44-generic`, Intel Core i5-7500 at 3.40 GHz, four logical/av
 
 The input is a paced, growing WAV from fixed public audio, not a physical microphone. For the continuous case, the clip receives the exact same 580,640 samples as the worker; the timed speech has a 270 ms onset and lasts 35.000 s. The corpus provenance, edit operations, and how to recreate it are in the [recipe](README.md#corpus-attribution-and-frozen-reference). Each activation loads a new worker/model. The kernel page cache was not cleared; `loadMs` measures the native load, not a cold-disk benchmark.
 
-## Measured outcome: neither English configuration passed
+## Original measured outcome: neither English configuration passed
 
 The reference run exited **1**, with 20 timed continuous runs, 18 other English runs, two separate refinement runs, and one French run. Neither model met the combined native gates. Both passed first-correct-preview latency and showed multiple changing, relevant prefixes before any final. Neither passed the independent sustained visible-relevance gate. There was no capture/ACK, editor delivery, silence or synthetic-overload coverage failure. A second full matrix reproduced the pilot's decisive `base.en` JFK failure and `small.en` freshness failure without changing the corpus or numeric gates. Rollover ownership was checked on the recorded raw finals.
 
@@ -98,11 +121,11 @@ Ran [legacy-replay.mjs](legacy-replay.mjs) against baseline `f31e3680215b1f10fd2
 | “The ocean is blue” then ANSI-only silence | Empty redraw is `ignored`; the four-word candidate survives without an editor write | `The ocean is blue`; stop promotes the guess and `/micme last` pastes it |
 | “The ocean is blue” then literal `[BLANK_AUDIO]` | Literal sentinel resets the pending candidate | Empty; nothing saved or sent |
 
-This confirms the difference between an empty ANSI redraw and a literal sentinel at the parser/lifecycle boundary. It does not reproduce model output on the original SDL audio path. The current Worker v1 path does not parse either legacy frame; its real silence and short-speech results are shown above and do not waive its draft-relevance failures.
+This confirms the difference between an empty ANSI redraw and a literal sentinel at the parser/lifecycle boundary. It does not reproduce model output on the original SDL audio path. The current Worker v1 path does not parse either legacy frame; its silence, short-speech and during-speech controls are measured separately above.
 
 ## Boundaries of the evidence
 
 - Deterministic scorer tests check a growing correct prefix with eleven unrelated trailing words (fails despite 2 s first preview and perfect final), a tolerated isolated correction, no look-ahead, optimal-tail freshness, visible progress through clipping, and word error accounting. These are not recognition measurements.
 - The timed matrix drives Micme lifecycle, POSIX verified live capture, resolver, real worker, and post-clipping Pi view. The widget observer does not replace ASR or use screen scrape timing.
 - Journey: `pi -e .` (Pi 1.6.0) — with an existing editor prompt, started a public WAV replay with Alt+M and saw `Live: But now it doesn't…` grow before a pause. Resized from 80 to 40 columns, saw narrower drafts and resumed JFK words, stopped and saw the draft clear, then cleared the editor and recovered the saved text with `/micme last` (visible on the next cursor movement). The replay also showed the repeated JFK tokens; no provider login or submission was required. This is an interaction check, not another timing sample.
-- No physical mic was available to this process (Pulse could not list sources; ALSA exposed no capture source and `hw:0,0` failed to open). No private audio was recorded. No matched legacy SDL/loopback run, native Windows run or hardware-accelerated benchmark. The original SDL baseline remains source-only; these numbers are matched **current live vs current clip**, not before/after legacy benchmarks.
+- No physical mic was available to this process (Pulse could not list sources; ALSA exposed no capture source and `hw:0,0` failed to open). No private audio was recorded. No matched legacy SDL/loopback run, native Windows run or hardware-accelerated benchmark. The legacy parser replay measures text handling, not recognition on the original SDL audio. These numbers are matched **current live vs current clip**, not before/after legacy benchmarks.

@@ -36,7 +36,7 @@ void whisper_free(whisper_context *ctx) { delete ctx; }
 int whisper_lang_id(const char *code) { return std::string_view(code) == "en" ? 0 : -1; }
 const char *whisper_lang_str(int id) { return id == 0 ? "en" : nullptr; }
 int whisper_is_multilingual(whisper_context *) { return 0; }
-int whisper_model_n_audio_layer(whisper_context *) { return 12; }
+int whisper_model_n_audio_layer(whisper_context *ctx) { return ctx->fixture == "light-anchor" ? 6 : 12; }
 int whisper_model_n_text_layer(whisper_context *) { return 12; }
 int whisper_n_audio_ctx(whisper_context *) { return 1500; }
 
@@ -81,7 +81,8 @@ whisper_token_data whisper_full_get_token_data(whisper_context *ctx, int, int in
     token.t0 = ctx->words[index].from;
     token.t1 = ctx->words[index].to;
     const std::string_view word(ctx->words[index].text);
-    token.p = ctx->fixture == "draft-agreement" && (word == " encore" || word == " invented") ? 0.25f : 1.0f;
+    const bool weak = ctx->fixture == "draft-agreement" || ctx->fixture == "draft-edge";
+    token.p = weak && (word == " encore" || word == " invented") ? 0.25f : 1.0f;
     return token;
 }
 

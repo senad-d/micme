@@ -54,6 +54,7 @@ export const DEFAULT_TRANSCRIBE_BACKEND = "auto";
 export const DEFAULT_WHISPER_CPP_MODEL_NAME = "small.en";
 export const DEFAULT_PYTHON_WHISPER_MODEL_NAME = "base.en";
 export const WHISPER_CPP_MODEL_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+export const LIVE_CAPTURE_RATE = 16_000; // Worker v1 wire format, independent of the clip sample rate.
 // ggml-org/whisper-vad release artifact and its upstream LFS identity at this revision.
 export const WHISPER_VAD_MODEL = {
 	file: "ggml-silero-v5.1.2.bin",

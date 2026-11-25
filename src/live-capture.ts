@@ -8,7 +8,7 @@ import type { RecordingDirectory, VerifiedRecordingFile } from "./recording-dir.
 import type { CommandSpec } from "./types.ts";
 
 const SAMPLE_BYTES = 2;
-const MAX_READ_BYTES = 16_000 * SAMPLE_BYTES;
+const MAX_READ_BYTES = LIVE_CAPTURE_RATE * SAMPLE_BYTES;
 const MAX_HEADER_BYTES = 1024 * 1024;
 const MAX_HEADER_CHUNKS = 256;
 const RIFF_PLACEHOLDER = 0xffffffff;

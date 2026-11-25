@@ -187,6 +187,14 @@ test("a weak draft suffix is deferred until the same words recur at the same tim
 	assert.equal(events.find(({ type }) => type === "final").text.trim(), "Grüß Okay. encore");
 });
 
+test("a confident newer word doesn't validate an uncertain interior word at the draft edge", () => {
+	const pcm = voiced(4 * 16_000, [[0.25, 2000], [0.55, 3000], [1.3, 4000], [1.7, 5000]]);
+	const events = invokeStub("draft-edge", Buffer.concat([...frames(pcm), finish]), true);
+	assert.deepEqual(events.filter(({ type }) => type === "partial").slice(0, 3).map(({ text }) => text.trim()),
+		["Grüß Okay.", "Grüß Okay.", "Grüß Okay. encore here"]);
+	assert.equal(events.find(({ type }) => type === "final").text.trim(), "Grüß Okay. encore here");
+});
+
 test("a brief pause can anchor a preview without splitting or truncating the final span", () => {
 	const pcm = voiced(11.5 * 16_000, [[5.6, 2000], [9.27, 3000]]);
 	const quietFrom = 155 * 512;
@@ -195,6 +203,20 @@ test("a brief pause can anchor a preview without splitting or truncating the fin
 	const events = invokeStub("timed", Buffer.concat([...frames(pcm), finish]), true);
 	assert.ok(events.some(({ type, from, text }) => type === "partial" && quietFrom < from && from < quietTo && text.trim() === "Grüß Okay."));
 	assert.deepEqual(events.filter(({ type }) => type === "final").map(({ text }) => text.trim()), ["Grüß Okay."]);
+});
+
+test("light previews keep their acoustic start across updates without losing earlier words from the final", () => {
+	const pcm = voiced(11 * 16_000, [[0.55, 2000], [8.5, 3000], [9.5, 4000]]);
+	const quietFrom = 96 * 512;
+	const quietTo = quietFrom + 4 * 512;
+	pcm.fill(0, 2 * quietFrom, 2 * quietTo);
+	const events = invokeStub("light-anchor", Buffer.concat([...frames(pcm), finish]), true);
+	const anchored = events.filter(({ type, from }) => type === "partial" && from > quietFrom && from < quietTo);
+	assert.ok(anchored.length >= 2);
+	assert.equal(new Set(anchored.map(({ from }) => from)).size, 1);
+	assert.ok(anchored.some(({ text }) => text.trim() === "Okay. encore"));
+	assert.deepEqual(events.filter(({ type }) => type === "final").map(({ text }) => text.trim()), ["Grüß Okay. encore"]);
+	assert.equal(events.at(-1).through, pcm.length / 2);
 });
 
 test("a resumed endpoint uses the previous final as context without replaying it", () => {

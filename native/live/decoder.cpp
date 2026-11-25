@@ -187,10 +187,13 @@ public:
 
     std::string update(const Hypothesis &draft, std::size_t first, Sample end) {
         auto stop = draft.pieces.size();
-        // Only trim the speculative right edge. Keep an uncertain interior
-        // word in context and don't put a lower-confidence tail back merely
-        // because it appeared in another part of the recording.
-        while (stop > first + 1 && !established(draft.pieces[stop - 1], end)) --stop;
+        // A confident completion doesn't validate the low-confidence word
+        // immediately before it. Hold a contiguous suffix at the first such
+        // word near the acoustic edge, until another window agrees or supplies
+        // right context. Never withhold older speech or change a final.
+        for (auto i = first + 1; i < stop; ++i) {
+            if (!established(draft.pieces[i], end)) { stop = i; break; }
+        }
         previous_.clear();
         for (auto i = first; i < draft.pieces.size(); ++i) {
             const auto &word = draft.pieces[i];
@@ -412,17 +415,44 @@ private:
         whisper_vad_reset_state(vad_.get());
     }
 
-    Sample preview_limit() const { return heavy_encoder_ ? 13 * rate / 2 : 10 * rate; }
+    Sample preview_limit() const { return heavy_encoder_ ? 13 * rate / 2 : 8 * rate; }
+
+    // Keep the left edge stable between drafts. Once the budget is spent,
+    // restart at a brief acoustic break with enough earlier context, instead
+    // of re-decoding a different mid-word cut every second. This spends the
+    // smaller encoder's budget on new speech and leaves time for rollover.
+    Sample light_preview_start(Sample end) const {
+        const auto earliest = std::max(decode_from_, end - preview_limit());
+        if (preview_start_ >= earliest) return preview_start_;
+        if (earliest == decode_from_) return earliest;
+        const auto latest = end - preview_limit() / 2;
+        const auto gap = std::upper_bound(pauses_.begin(), pauses_.end(), latest);
+        if (gap != pauses_.begin() && *(gap - 1) >= earliest) return *(gap - 1);
+        // VAD can remain open across a word boundary. Prefer a quiet frame
+        // between words even then; do not change VAD, endpoints or the PCM.
+        double best_energy = -1;
+        auto best = earliest;
+        for (auto frame = earliest; frame + vad_frame <= latest; frame += vad_frame) {
+            double energy = 0;
+            for (int i = 0; i < vad_frame; ++i) {
+                const float sample = audio_[frame - audio_start_ + i];
+                energy += sample * sample;
+            }
+            if (best_energy < 0 || energy < best_energy) { best_energy = energy; best = frame + vad_frame / 2; }
+        }
+        return best;
+    }
 
     void preview(Sample end) {
         preview_at_ = end;
         // Prefer a nearby acoustic boundary to starting mid-word. This does
         // not wait for a pause or extend the preview's inference budget.
-        auto start = std::max(decode_from_, end - preview_limit());
-        if (start > decode_from_) {
+        auto start = heavy_encoder_ ? std::max(decode_from_, end - preview_limit()) : light_preview_start(end);
+        if (heavy_encoder_ && start > decode_from_) {
             const auto gap = std::lower_bound(pauses_.begin(), pauses_.end(), start);
             if (gap != pauses_.end() && *gap - start <= rate / 2) start = *gap;
         }
+        preview_start_ = start;
         const auto from = std::max(start, frontier_);
         const bool has_overlap = start < frontier_;
         const auto window = decode_window(start, end, has_overlap || !translate_, Decode::Preview);
@@ -646,6 +676,7 @@ private:
     Sample quiet_since_ = -1;
     Sample voiced_ = 0;
     Sample preview_at_ = 0;
+    Sample preview_start_ = 0;
     bool heavy_encoder_ = false;
     bool active_ = false;
     std::int64_t vad_frames_ = 0;

@@ -38,11 +38,11 @@ export async function ensureLiveModels(plan: ReturnType<typeof resolveLivePlan>,
 
 function resolveLiveBinary() {
 	const configured = env("MICME_LIVE_BIN")?.trim();
-	const binary = configured ? resolveExecutableConfig(configured, "MICME_LIVE_BIN") : findExecutable([process.platform === "win32" ? "micme-live.exe" : "micme-live"]);
+	const binary = configured ? resolveExecutableConfig(configured, "MICME_LIVE_BIN", ". Set it to the installed micme-live executable or choose clip mode.") : findExecutable([process.platform === "win32" ? "micme-live.exe" : "micme-live"]);
 	if (!binary) throw new Error("micme-live was not found on PATH. Build and install it (native/live/README.md), set MICME_LIVE_BIN, or choose clip mode.");
 	const path = resolve(binary);
 	if (isLegacySdlExecutable(path) || isLegacySdlExecutable(realpathSync(path))) {
-		throw new Error("whisper-stream is the legacy SDL executable, not the live worker. Install micme-live and point MICME_LIVE_BIN to it.");
+		throw new Error("whisper-stream is the legacy SDL executable, not the live worker. Install micme-live and point MICME_LIVE_BIN to it, or choose clip mode.");
 	}
 	return path;
 }

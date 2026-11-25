@@ -86,8 +86,13 @@ export function nearestRank(values, p) {
 
 export function hasKeywords(text, keywords) {
 	const recognized = tokens(text);
-	const alternatives = Array.isArray(keywords) ? keywords : [keywords];
-	return alternatives.some((sequence) => containsInOrder(recognized, tokens(sequence)));
+	if (typeof keywords === "string") return containsInOrder(recognized, tokens(keywords));
+	const onset = tokens(keywords.onset);
+	return keywords.terminalPhrases.some((phrase) => {
+		const ending = tokens(phrase);
+		const start = recognized.length - ending.length;
+		return start >= 0 && ending.every((word, i) => recognized[start + i] === word) && containsInOrder(recognized.slice(0, start), onset);
+	});
 }
 
 function containsInOrder(recognized, wanted) {

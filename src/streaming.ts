@@ -1,12 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { setTimeout as delay } from "node:timers/promises";
 import { envFlag, getTranscribeTimeoutMs } from "./config.ts";
+import { LIVE_CAPTURE_RATE as RATE } from "./constants.ts";
 import { deferred, formatExit, formatProcessOutput, normalizeTranscript, runProcess } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import type { CommandSpec, LivePlan, OwnedProcess } from "./types.ts";
 
-const RATE = 16_000;
 const LINE_BYTES = 64 * 1024;
 const MAX_UPDATE_EVENTS = 64;
 const POLL_MS = 30;

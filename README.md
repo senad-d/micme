@@ -213,6 +213,8 @@ See [`micme.example.json`](micme.example.json) for the full JSON template.
 
 ## Live Dictation
 
+For English live dictation on a four-core CPU, try `base.en`. In a paced speech test, it showed the first relevant words in about 1.5 seconds and kept the visible draft relevant throughout all five runs at both terminal widths. The default `small.en` produced more accurate final text on that recording but fell behind while speech was in progress. Stream mode is experimental: these measurements used recorded speech, not a microphone. See [Models and Backends](#models-and-backends) to select a weight.
+
 ### Set up or migrate
 
 1. [Build and install `micme-live`](native/live/README.md). Installing Micme does not build the worker. `whisper-stream` is not a substitute, and `whisper-cli` is not needed for live decoding itself.

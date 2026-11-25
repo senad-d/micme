@@ -3,8 +3,8 @@ import { sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import { addAbortSignal } from "node:stream";
-import { AUDIO_VALIDATION_TIMEOUT_MS, MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
-import { env, envFlag, getAudioFilter, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
+import { AUDIO_VALIDATION_TIMEOUT_MS, LIVE_CAPTURE_RATE, MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
+import { env, envFlag, getAudioFilter, getAudioInputConfigKey, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getConfiguredRecorderInput, getFlagSetting, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
 import { appendCapped, findExecutable, formatProcessOutput, formatRunExit, runProcess, shellCommand, shellQuote } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { AudioDeviceCandidate, AudioDiagnostics, AudioValidationOutcome, CommandSpec, RunResult } from "./types.ts";
@@ -65,9 +65,8 @@ const DEVICE_PANEL_DEFAULT_WIDTH = 92;
 const DEVICE_PANEL_MAX_WIDTH = 100;
 const DEVICE_PANEL_MIN_WIDTH = 36;
 const RECORD_TIMING_SYNC_FILTER = "aresample=async=1:first_pts=0";
-export const LIVE_CAPTURE_RATE = 16_000;
+export { LIVE_CAPTURE_RATE };
 const FFMPEG_SIGNAL_STOP_EXIT_CODE = 255;
-const PULSE_SOURCE_KEY = "MICME_PULSE_SOURCE";
 const FFMPEG_CONTEXT_PREFIX_PATTERN = /^\[[^[\]]+ @ 0x[\da-f]+\]\s*/i;
 const AVFOUNDATION_DEVICE_PREFIX_PATTERN = /^\[(\d+)]\s+/;
 const DIRECT_SHOW_FULL_DEVICE_NAME_PATTERN = /^"(.+)"$/;
@@ -770,12 +769,6 @@ export async function validateRecordedAudio(audioPath: string, signal?: AbortSig
 	return { status: "validated", diagnostics };
 }
 
-function getAudioInputConfigKey(platform: NodeJS.Platform) {
-	if (platform === "linux") return PULSE_SOURCE_KEY;
-	if (platform === "win32") return "MICME_DSHOW_AUDIO_DEVICE";
-	return "MICME_AUDIO_DEVICE";
-}
-
 function audioValidationOutputReachedLimit(result: RunResult) {
 	return (
 		result.stdout.length >= MAX_CAPTURED_OUTPUT_CHARS ||
@@ -827,7 +820,7 @@ async function buildSelectedRecorderCommand(audioPath: string, tempDir: string, 
 
 	const recordSampleRate = live ? String(LIVE_CAPTURE_RATE) : getRecordSampleRate()?.toString();
 	const recordMeter = !live && getRecordMeter();
-	const filter = live && env("MICME_PROCESS_AUDIO") !== "0" ? getAudioFilter() : "";
+	const filter = live && getFlagSetting("MICME_PROCESS_AUDIO", true) ? getAudioFilter() : "";
 	const { format, input, inputOptions, timingFilters } = await selectRecorderInput(ffmpeg, getRecordSync(), signal);
 	signal?.throwIfAborted();
 	const args = buildFfmpegRecorderArgs(format, input, audioPath, recordSampleRate, {
@@ -843,17 +836,18 @@ type RecorderInput = { format: string; input: string; inputOptions?: string[]; t
 
 async function selectRecorderInput(ffmpeg: string, recordSync: boolean, signal?: AbortSignal): Promise<RecorderInput> {
 	const timingFilters = recordSync ? [RECORD_TIMING_SYNC_FILTER] : [];
+	const configured = getConfiguredRecorderInput(process.platform);
 	if (process.platform === "darwin") {
 		return {
 			format: "avfoundation",
-			input: env("MICME_AVFOUNDATION_INPUT") || `:${env("MICME_AUDIO_DEVICE") || "0"}`,
+			input: configured,
 			inputOptions: ["-drop_late_frames", getAvfoundationDropLateFrames() ? "true" : "false"],
 			timingFilters: getAvfoundationAudioFilters(recordSync, getAvfoundationInputSampleRate()),
 		};
 	}
-	if (process.platform === "linux") return { format: "pulse", input: env(PULSE_SOURCE_KEY) || "default", timingFilters };
+	if (process.platform === "linux") return { format: "pulse", input: configured, timingFilters };
 	if (process.platform === "win32") {
-		const deviceName = env("MICME_DSHOW_AUDIO_DEVICE") || await findDefaultDshowAudioDevice(ffmpeg, signal) || "default";
+		const deviceName = configured || await findDefaultDshowAudioDevice(ffmpeg, signal) || "default";
 		return { format: "dshow", input: `audio=${deviceName}`, timingFilters };
 	}
 	throw new Error(`Micme has no default recorder for ${process.platform}. Set MICME_RECORD_COMMAND.`);

@@ -69,15 +69,15 @@ export function getPythonWhisperBinary() {
 	return findExecutable(["whisper"]);
 }
 
-export function resolveExecutableConfig(value: string, configName: string) {
+export function resolveExecutableConfig(value: string, configName: string, recovery = "") {
 	const expanded = expandConfigPath(value);
 	if (/[/\\]/.test(expanded)) {
-		if (!existsSync(expanded)) throw new Error(`${configName} is set but not found: ${expanded}`);
-		if (!isExecutableFile(expanded)) throw new Error(`${configName} is set but is not an executable file: ${expanded}`);
+		if (!existsSync(expanded)) throw new Error(`${configName} is set but not found: ${expanded}${recovery}`);
+		if (!isExecutableFile(expanded)) throw new Error(`${configName} is set but is not an executable file: ${expanded}${recovery}`);
 		return expanded;
 	}
 	const executable = findExecutable([expanded]);
-	if (!executable) throw new Error(`${configName} is set but not found on PATH: ${expanded}`);
+	if (!executable) throw new Error(`${configName} is set but not found on PATH: ${expanded}${recovery}`);
 	return executable;
 }
 

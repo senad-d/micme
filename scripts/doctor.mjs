@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { getPythonWhisperBinary, getWhisperCppBinary, resolveTranscriptionPlan } from "../src/backends.ts";
-import { env, getAutoDownloadModel, getLegacyStreamSettings, getTranscriptionMode, getTranslateToEnglishLanguage, reloadMicmeConfig } from "../src/config.ts";
-import { resolveWhisperCppModel } from "../src/models.ts";
+import { env, getAutoDownloadModel, getConfiguredRecorderInput, getLegacyStreamSettings, getTranscriptionMode, getTranslateToEnglishLanguage, reloadMicmeConfig } from "../src/config.ts";
+import { isRegularFile, resolveWhisperCppModel } from "../src/models.ts";
 import { findExecutable } from "../src/processes.ts";
 import { probeLiveWorker } from "../src/streaming.ts";
 import { sanitizeTerminalOutput } from "../src/terminal-text.ts";
@@ -54,6 +54,8 @@ function printWhisperCppModelDiagnostics(model) {
 }
 
 async function printLiveDiagnostics(plan) {
+  const input = getConfiguredRecorderInput(process.platform);
+  info("live audio input", env("MICME_RECORD_COMMAND")?.trim() ? "custom recorder (MICME_RECORD_COMMAND)" : input || (process.platform === "win32" ? "automatic DirectShow device at capture time" : "no built-in recorder"));
   const legacy = getLegacyStreamSettings();
   if (legacy.length) info("ignored legacy stream settings", `${legacy.join(", ")}; stream uses micme-live and the Audio input`);
   const live = plan.live;
@@ -62,8 +64,7 @@ async function printLiveDiagnostics(plan) {
   info("live language", live.language);
   info("live VAD model path", live.vadModelPath);
   info("live final clip refinement", live.finalizeWithClip ? "on" : "off");
-  const vad = resolveDoctorBinary(() => statSync(live.vadModelPath, { throwIfNoEntry: false })?.isFile() ? live.vadModelPath : undefined);
-  if (!vad.path) warn("live VAD weights not present as a regular file", live.vadModelPath);
+  if (!isRegularFile(live.vadModelPath)) warn("live VAD weights not present as a regular file", live.vadModelPath);
   if (micmeConfig.error) return;
   try {
     await probeLiveWorker(live.binary);

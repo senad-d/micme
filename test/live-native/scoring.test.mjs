@@ -67,6 +67,8 @@ test("continuous final keywords require the onset in order and the exact year in
 		[`${start} ${end}.`, false],
 		[`${start} ${end}, 1864.`, false],
 		[`${start} ${end}, eighteen sixty four.`, false],
+		[`${start} ${end}, eighteen sixty four. Three.`, false],
+		[`${start} ${end}, 1863 was wrong, 1864.`, false],
 		[`${end}, 1863.`, false],
 		[`${end}, 1863. ${start}`, false],
 	];

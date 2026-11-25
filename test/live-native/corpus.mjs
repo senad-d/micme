@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 export const RATE = 16_000;
 // Only the continuous final-tail check accepts equivalent renderings of the frozen year.
-export const CONTINUOUS_KEYWORDS = ["but now it eighteen sixty three", "but now it 1863"];
+export const CONTINUOUS_KEYWORDS = { onset: "but now it", terminalPhrases: ["eighteen sixty three", "1863"] };
 const bytesPerMs = RATE * 2 / 1_000;
 const hashes = {
 	"jfk.wav": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",

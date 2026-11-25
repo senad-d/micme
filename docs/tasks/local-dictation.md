@@ -49,7 +49,7 @@
 
 ### 1. Make the offline worker buildable and installable
 
-- [ ] Supply the build/pack scaffold and an explicit local setup route for `micme-live` without changing how a clip-only install starts.
+- [x] Supply the build/pack scaffold and an explicit local setup route for `micme-live` without changing how a clip-only install starts.
 
 #### Why
 
@@ -84,7 +84,7 @@ Depends on: none. Create the `native/live/` skeleton (CMake manifest, entry poin
 
 ### 2. Recognize speech with a resident decoder
 
-- [ ] Decode the incoming PCM locally and produce replaceable text during continuous speech, not only after a pause.
+- [x] Decode the incoming PCM locally and produce replaceable text during continuous speech, not only after a pause.
 
 #### Why
 
@@ -198,7 +198,7 @@ Depends on: none. Implement the additive **Resolution** API for **Worker v1** in
 
 ### 5. Switch recording and doctor to the worker protocol together
 
-- [ ] Replace SDL spawning/ANSI parsing with one owned worker, one configured recorder and a guarded draft/commit lifecycle.
+- [x] Replace SDL spawning/ANSI parsing with one owned worker, one configured recorder and a guarded draft/commit lifecycle.
 
 #### Why
 
@@ -314,7 +314,7 @@ Depends on: Task 5. Build against **Pi view** and **Resolution**: the widget is 
 
 ### 7. Measure recognition and live latency on matched audio
 
-- [ ] Deliver and run a reproducible, opt-in native quality experiment; record what this host can actually recognize in time to be useful.
+- [x] Deliver and run a reproducible, opt-in native quality experiment; [record what this host can actually recognize in time to be useful](../../test/live-native/results.md).
 
 #### Why
 

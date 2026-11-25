@@ -15,7 +15,6 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { statSync } from "node:fs";
 import { basename } from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
@@ -23,6 +22,8 @@ import {
 	envFlag,
 	expandConfigPath,
 	getAudioFilter,
+	getAudioInputConfigKey,
+	getFlagSetting,
 	getAutoDownloadModel,
 	getAvfoundationDropLateFrames,
 	getMeterGain,
@@ -41,7 +42,7 @@ import {
 } from "./config.ts";
 import { discoverAudioDevices, LIVE_CAPTURE_RATE } from "./audio.ts";
 import { formatBackendLabel, resolveTranscriptionPlan } from "./backends.ts";
-import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, getWhisperVadModelPath, resolveWhisperCppModel } from "./models.ts";
+import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
 import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
@@ -836,7 +837,7 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 	const shortcut = getShortcutSettingValue();
 	const translateToEnglish = getTranslateToEnglishLanguage() ?? "off";
 	const backendValues = ["auto", "whisper.cpp", "python"];
-	const processing = flagValue(env("MICME_PROCESS_AUDIO") !== "0");
+	const processing = flagValue(mode === "stream" ? getFlagSetting("MICME_PROCESS_AUDIO", true) : env("MICME_PROCESS_AUDIO") !== "0");
 	const validate = flagValue(env("MICME_VALIDATE_AUDIO") !== "0" && !envFlag("MICME_SKIP_AUDIO_VALIDATION"));
 	const keepAudio = flagValue(envFlag("MICME_KEEP_AUDIO"));
 	const recordMeter = flagValue(getRecordMeter());
@@ -1081,7 +1082,7 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 			id: "MICME_VALIDATE_AUDIO",
 			categoryId: "audio",
 			label: "Silence guard",
-			description: "Reject near-silent standalone clips. Streaming uses its speech detector instead.",
+			description: "Reject near-silent clips, including optional live refinement. During speech, the live decoder uses its speech detector instead.",
 			details: [],
 			rawValue: validate,
 			currentValue: validate,
@@ -1125,7 +1126,7 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 
 function buildMicrophoneItem(audioDevices: AudioDeviceCandidate[]): ConfigurationItem {
 	const { platform } = process;
-	const id = platform === "linux" ? "MICME_PULSE_SOURCE" : platform === "win32" ? "MICME_DSHOW_AUDIO_DEVICE" : "MICME_AUDIO_DEVICE";
+	const id = getAudioInputConfigKey(platform);
 	const customRecorder = Boolean(env("MICME_RECORD_COMMAND")?.trim());
 	const avfoundationOverride = platform === "darwin" ? env("MICME_AVFOUNDATION_INPUT") : undefined;
 	const selected = env(id) || (platform === "linux" ? "default" : platform === "win32" ? "" : "0");
@@ -1169,10 +1170,7 @@ function shellOverrideHint(key: string) {
 }
 
 function vadModelStatus(path: string) {
-	try {
-		if (statSync(path).isFile()) return path;
-	} catch { /* absent or inaccessible */ }
-	return `Speech detector model file is missing or unavailable: ${path}`;
+	return isRegularFile(path) ? path : `Speech detector model file is missing or unavailable: ${path}`;
 }
 
 function flagValue(enabled: boolean) {
