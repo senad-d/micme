@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extraBoundaryRepeats, previewProgress, scoreCheckpoint, scoreDraftTrace, wordErrors } from "./scoring.mjs";
+import { CONTINUOUS_KEYWORDS } from "./corpus.mjs";
+import { extraBoundaryRepeats, hasKeywords, previewProgress, scoreCheckpoint, scoreDraftTrace, wordErrors } from "./scoring.mjs";
 
 const words = "one two three four five six seven eight nine ten eleven twelve".split(" ")
 	.map((word, i) => ({ word, endMs: (i + 1) * 900 }));
@@ -55,6 +56,22 @@ test("a decoder boundary must not repeat words that were spoken once", () => {
 	const replayed = extraBoundaryRepeats("wait here i will go in quest of this knight", ["Wait here. I will go in", "Here, I will go in quest of this night."]);
 	assert.deepEqual(replayed, [{ betweenFinals: [0, 1], words: ["here", "i", "will", "go", "in"] }]);
 	assert.deepEqual(extraBoundaryRepeats("but now but now we're here", ["But now", "but now we're here"]), []);
+});
+
+test("continuous final keywords require the onset in order and the exact year in either rendering", () => {
+	const start = "But now it doesn't seem to matter very much.";
+	const end = "It appeared in the Press newspaper June 13";
+	const cases = [
+		[`${start} ${end}, 1863.`, true],
+		[`${start} ${end}, eighteen sixty three.`, true],
+		[`${start} ${end}.`, false],
+		[`${start} ${end}, 1864.`, false],
+		[`${start} ${end}, eighteen sixty four.`, false],
+		[`${end}, 1863.`, false],
+		[`${end}, 1863. ${start}`, false],
+	];
+	for (const [final, pass] of cases) assert.equal(hasKeywords(final, CONTINUOUS_KEYWORDS), pass, final);
+	assert.equal(hasKeywords(`${start} ${end}, 1863.`, "but now it eighteen sixty three"), false);
 });
 
 test("word errors preserve repetitions and use the spoken words as denominator", () => {
