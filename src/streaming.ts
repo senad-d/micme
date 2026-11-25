@@ -21,7 +21,10 @@ type WorkerTransport = Pick<OwnedProcess, "exitObserved" | "exitPromise"> & { pr
 export function buildLiveWorkerCommand(plan: LivePlan): CommandSpec {
 	const args = ["--model", plan.modelPath, "--vad-model", plan.vadModelPath, "--language", plan.language];
 	if (plan.translate) args.push("--translate");
-	return { command: plan.binary, args, display: "micme-live" };
+	// Busy OpenMP waits can stall each decoder token when a terminal, capture,
+	// or another process also needs CPU. Scope the default to the live child.
+	const env = process.env.OMP_WAIT_POLICY ? undefined : { ...process.env, OMP_WAIT_POLICY: "PASSIVE" };
+	return { command: plan.binary, args, display: "micme-live", ...(env && { spawnOptions: { env } }) };
 }
 
 export async function probeLiveWorker(binary: string) {

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -32,6 +33,7 @@ constexpr int release = rate / 2;
 constexpr int tail = rate / 5;
 constexpr int rollover = 20 * rate;
 constexpr int overlap = rate;
+constexpr int preview_step = ((rate + vad_frame - 1) / vad_frame) * vad_frame;
 constexpr std::size_t max_line = 64 * 1024;
 
 struct Diagnostics {
@@ -137,6 +139,7 @@ struct Piece {
     Sample from;
     Sample to;
     std::string text;
+    float confidence = 0; // weakest lexical token; punctuation does not determine word confidence
 
     Sample midpoint() const { return from + (to - from) / 2; }
 };
@@ -146,14 +149,129 @@ struct Hypothesis {
     std::vector<Piece> pieces;
     bool placeable = true;
 
-    std::string owned(Sample from, Sample to) const {
+    std::size_t first_owned(Sample from) const {
+        return std::lower_bound(pieces.begin(), pieces.end(), from, [](const Piece &piece, Sample time) {
+            return piece.midpoint() < time;
+        }) - pieces.begin();
+    }
+
+    std::string owned(std::size_t first, Sample to) const {
         std::string result;
-        for (const auto &piece : pieces) {
-            const auto time = piece.midpoint();
-            if (from <= time && time < to) result += piece.text;
-        }
+        for (; first < pieces.size() && pieces[first].midpoint() < to; ++first) result += pieces[first].text;
         return result;
     }
+};
+
+bool punctuation(unsigned char ch) {
+    return ch <= ' ' || (ch >= '!' && ch <= '/') || (ch >= ':' && ch <= '@') ||
+           (ch >= '[' && ch <= '`') || (ch >= '{' && ch <= '~');
+}
+
+std::string seam_word(std::string_view text) {
+    while (!text.empty() && punctuation(text.front())) text.remove_prefix(1);
+    while (!text.empty() && punctuation(text.back())) text.remove_suffix(1);
+    if (text.find_first_of(" \t\r\n") != std::string_view::npos) return {}; // A segment, not a timed word.
+    std::string key(text);
+    for (auto &ch : key) if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+    return key;
+}
+
+// A weak word at the newest edge may be a cut-off word or a guess. Earlier
+// agreement at the same audio position can confirm it without another decode.
+class DraftAgreement {
+public:
+    void clear() { previous_.clear(); }
+
+    std::string update(const Hypothesis &draft, std::size_t first, Sample end) {
+        auto stop = draft.pieces.size();
+        // Only trim the speculative right edge. Keep an uncertain interior
+        // word in context and don't put a lower-confidence tail back merely
+        // because it appeared in another part of the recording.
+        while (stop > first + 1 && !established(draft.pieces[stop - 1], end)) --stop;
+        previous_.clear();
+        for (auto i = first; i < draft.pieces.size(); ++i) {
+            const auto &word = draft.pieces[i];
+            if (word.midpoint() >= end - history) previous_.push_back({word.midpoint(), seam_word(word.text)});
+        }
+        std::string text;
+        for (auto i = first; i < stop; ++i) text += draft.pieces[i].text;
+        return text;
+    }
+
+private:
+    static constexpr Sample history = 4 * rate;
+    static constexpr Sample drift = rate / 2;
+    struct Word { Sample at; std::string key; };
+
+    bool established(const Piece &piece, Sample end) const {
+        const auto age = end - piece.to;
+        if (age >= 3 * rate / 2 || piece.confidence >= (age >= 3 * rate / 4 ? 0.55f : 0.75f)) return true;
+        const auto key = seam_word(piece.text);
+        return !key.empty() && std::any_of(previous_.begin(), previous_.end(), [&](const Word &old) {
+            return key == old.key && std::abs(piece.midpoint() - old.at) <= drift;
+        });
+    }
+
+    std::vector<Word> previous_;
+};
+
+class Seam {
+public:
+    void clear() { words_.clear(); }
+
+    void remember(const Hypothesis &left, Sample from, Sample cut, Sample through) {
+        words_.clear();
+        for (const auto &piece : left.pieces) {
+            if (piece.midpoint() < from || piece.midpoint() >= through) continue;
+            words_.push_back({piece.midpoint(), seam_word(piece.text)});
+        }
+        cut_ = cut;
+    }
+
+    std::size_t first_owned(const Hypothesis &right, Sample cut) const {
+        const auto by_time = right.first_owned(cut);
+        if (words_.empty() || cut != cut_) return by_time;
+        // Independently decoded token times can drift in either direction.
+        // A short matching sequence, at nearby times in the *same* overlap,
+        // transfers ownership at the old boundary, including the first new
+        // word if its estimated time moved left. Ties prefer closest times.
+        constexpr Sample drift = rate * 3 / 5;
+        std::size_t best_length = 1;
+        Sample best_error = 0;
+        std::size_t first = by_time;
+        const auto split = std::lower_bound(words_.begin(), words_.end(), cut, [](const Word &word, Sample time) {
+            return word.at < time;
+        }) - words_.begin();
+        std::vector<std::string> keys;
+        for (const auto &piece : right.pieces) {
+            if (piece.midpoint() >= words_.back().at + drift) break;
+            keys.push_back(seam_word(piece.text));
+        }
+        for (std::size_t l = 0; l < static_cast<std::size_t>(split); ++l) {
+            for (std::size_t r = 0; r < keys.size(); ++r) {
+                Sample error = 0;
+                std::size_t length = 0;
+                while (l + length < words_.size() && r + length < keys.size()) {
+                    const auto &word = words_[l + length];
+                    const auto distance = std::abs(word.at - right.pieces[r + length].midpoint());
+                    if (word.key.empty() || word.key != keys[r + length] || distance > drift) break;
+                    error += distance;
+                    ++length;
+                }
+                if (l + length < static_cast<std::size_t>(split) || length < 2 ||
+                    (length < best_length || (length == best_length && error >= best_error))) continue;
+                best_length = length;
+                best_error = error;
+                first = r + split - l;
+            }
+        }
+        return first;
+    }
+
+private:
+    struct Word { Sample at; std::string key; };
+    std::vector<Word> words_;
+    Sample cut_ = 0;
 };
 
 // Use word-sized groups, not individual UTF-8/BPE fragments, at a cut. If
@@ -169,16 +287,19 @@ std::vector<Piece> timed_words(whisper_context *ctx, int segment, Sample start, 
         if (token.t0 < 0 || token.t1 < token.t0 || token.t0 >= (end - start + 159) / 160) return {};
         const auto from = start + token.t0 * 160;
         const auto to = start + std::min<Sample>(token.t1, (end - start + 159) / 160) * 160;
+        const auto lexical = !std::all_of(text.begin(), text.end(), punctuation);
         if (!words.empty() && text.front() != ' ') {
             if (from < words.back().from || to < words.back().to) return {};
             words.back().to = std::min(to, end);
             words.back().text += text;
+            if (lexical) words.back().confidence = std::min(words.back().confidence, token.p);
         } else {
             if (!words.empty() && from < words.back().to) return {};
-            words.push_back({from, std::min(to, end), std::string(text)});
+            words.push_back({from, std::min(to, end), std::string(text), lexical ? token.p : 1.0f});
         }
     }
-    for (const auto &word : words) if (word.from >= word.to) return {};
+    // Time quantization can put an entire short word on one tick. Its
+    // position is still usable for midpoint ownership.
     return words;
 }
 
@@ -205,6 +326,8 @@ Hypothesis collect(whisper_context *ctx, Sample start, Sample end, bool need_tim
     return result;
 }
 
+enum class Decode { Preview, Endpoint, Rollover };
+
 class Decoder {
 public:
     Decoder(const Options &options, Diagnostics &diagnostics)
@@ -217,6 +340,7 @@ public:
         const auto start = Clock::now();
         asr_.reset(whisper_init_from_file_with_params(options.model, whisper_context_default_params()));
         if (!asr_) throw std::runtime_error("Could not load the Whisper ASR model. Check MICME_WHISPER_CPP_MODEL or choose clip mode.");
+        heavy_encoder_ = whisper_model_n_audio_layer(asr_.get()) > 6;
         if (!whisper_is_multilingual(asr_.get())) {
             if (translate_ || (!automatic && id != whisper_lang_id("en"))) {
                 throw std::runtime_error("The English-only ASR model cannot recognize or translate the selected language.");
@@ -254,13 +378,10 @@ public:
                 audio_.push_back((value >= 32768 ? value - 65536 : value) / 32768.0f);
             }
             received_ += count;
-            detect((received_ - scanned_) / vad_frame * vad_frame, false);
-            if (type == 1 && active_ && quiet_since_ < 0 && voiced_ >= rate && scanned_ - preview_at_ >= rate) {
-                preview_at_ = scanned_;
-                const auto window = decode_window(scanned_, decode_from_ < frontier_);
-                text_event("partial", frontier_, scanned_, decode_from_ == frontier_ ? window.text :
-                           window.placeable ? window.owned(frontier_, scanned_) : "");
-            }
+            const bool previews = type == 1;
+            detect((received_ - scanned_) / vad_frame * vad_frame, false, previews);
+            const auto end = quiet_since_ < 0 ? scanned_ : std::min(scanned_, quiet_since_ + tail);
+            if (previews && active_ && voiced_ >= rate && end - preview_at_ >= preview_step) preview(end);
             trim_idle_audio();
             emit("{\"type\":\"ack\",\"through\":" + std::to_string(received_) + "}");
         }
@@ -288,9 +409,33 @@ private:
         whisper_vad_reset_state(vad_.get());
     }
 
-    Hypothesis decode_window(Sample end, bool need_times) {
-        const auto length = end - decode_from_;
+    Sample preview_limit() const { return heavy_encoder_ ? 13 * rate / 2 : 10 * rate; }
+
+    void preview(Sample end) {
+        preview_at_ = end;
+        // Prefer a nearby acoustic boundary to starting mid-word. This does
+        // not wait for a pause or extend the preview's inference budget.
+        auto start = std::max(decode_from_, end - preview_limit());
+        if (start > decode_from_) {
+            const auto gap = std::lower_bound(pauses_.begin(), pauses_.end(), start);
+            if (gap != pauses_.end() && *gap - start <= rate / 2) start = *gap;
+        }
+        const auto from = std::max(start, frontier_);
+        const bool has_overlap = start < frontier_;
+        const auto window = decode_window(start, end, has_overlap || !translate_, Decode::Preview);
+        if (!window.placeable || window.pieces.empty()) {
+            draft_.clear();
+            text_event("partial", from, end, has_overlap ? "" : window.text);
+            return;
+        }
+        const auto first = has_overlap ? seam_.first_owned(window, from) : std::size_t{0};
+        text_event("partial", from, end, translate_ ? window.owned(first, end) : draft_.update(window, first, end));
+    }
+
+    Hypothesis decode_window(Sample start_sample, Sample end, bool need_times, Decode mode) {
+        const auto length = end - start_sample;
         if (length <= 0 || length > 28 * rate) throw std::runtime_error("Live ASR window outside its allowed bounds.");
+        const bool drafting = mode == Decode::Preview;
         auto params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
         params.n_threads = static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 4u));
         params.greedy.best_of = 1;
@@ -301,11 +446,25 @@ private:
         params.print_progress = params.print_realtime = params.print_timestamps = params.print_special = false;
         params.language = language_.c_str();
         params.translate = translate_;
-        // Keep the encoder proportional to the audio plus right padding,
-        // instead of encoding a 30-second context for every short preview.
-        params.audio_ctx = std::min(whisper_n_audio_ctx(asr_.get()),
-                                    std::max(250, static_cast<int>((length + 319) / 320) + 100));
-        const float *pcm = audio_.data() + (decode_from_ - audio_start_);
+        // A shortened encoder can change recognition on brief VAD spans.
+        // Keep native context there. Drafts have a fixed budget; rollover
+        // already has a long voiced window and needs to unblock the next draft.
+        if (drafting && heavy_encoder_) {
+            // Avoid serial re-encodes of the same draft on deeper models.
+            params.audio_ctx = std::min(whisper_n_audio_ctx(asr_.get()), 420);
+            params.single_segment = true;
+            params.max_tokens = 80;
+        } else if (drafting) {
+            params.audio_ctx = std::min(whisper_n_audio_ctx(asr_.get()),
+                                        std::max(384, static_cast<int>((length + 319) / 320) + 100));
+            params.single_segment = true;
+            params.max_tokens = 72;
+        } else if (mode == Decode::Rollover && heavy_encoder_) {
+            params.audio_ctx = std::min(whisper_n_audio_ctx(asr_.get()), static_cast<int>((length + 319) / 320) + 100);
+            params.single_segment = true;
+        }
+        params.no_timestamps = mode == Decode::Endpoint && !need_times;
+        const float *pcm = audio_.data() + (start_sample - audio_start_);
         std::array<float, rate / 10> short_window{};
         if (length < static_cast<Sample>(short_window.size())) {
             std::copy_n(pcm, length, short_window.begin());
@@ -323,10 +482,10 @@ private:
             if (!detected) throw std::runtime_error("Whisper could not determine a language from speech.");
             language_ = detected;
         }
-        return collect(asr_.get(), decode_from_, end, need_times);
+        return collect(asr_.get(), start_sample, end, need_times);
     }
 
-    void detect(Sample length, bool finish) {
+    void detect(Sample length, bool finish, bool previews = false) {
         if (length == 0) return;
         diagnostics_.failed = false;
         const auto frames = (length + vad_frame - 1) / vad_frame;
@@ -343,11 +502,11 @@ private:
             }
             scanned_ += size;
             ++vad_frames_;
-            gate(probs[i], size);
+            gate(probs[i], size, previews);
         }
     }
 
-    void gate(float probability, Sample size) {
+    void gate(float probability, Sample size, bool previews) {
         if (!active_) {
             if (probability < 0.5f) {
                 rising_ = 0;
@@ -357,12 +516,20 @@ private:
             if (rising_ < onset) return;
             frontier_ = std::max({frontier_, audio_start_, scanned_ - rising_ - preroll});
             decode_from_ = frontier_;
+            seam_.clear();
+            draft_.clear();
+            pauses_.clear();
             preview_at_ = scanned_ - rising_;
             voiced_ = rising_;
             rising_ = 0;
             quiet_since_ = -1;
             active_ = true;
         } else if (probability >= 0.35f) {
+            const auto gap = scanned_ - size - quiet_since_;
+            if (quiet_since_ >= 0 && gap >= 2 * vad_frame) {
+                pauses_.push_back(quiet_since_ + gap / 2);
+                while (pauses_.front() < scanned_ - preview_limit() - rate) pauses_.pop_front();
+            }
             voiced_ += size;
             quiet_since_ = -1;
         } else {
@@ -372,7 +539,7 @@ private:
                 return;
             }
         }
-        if (scanned_ - frontier_ >= rollover) cut_span();
+        if (scanned_ - frontier_ >= rollover) cut_span(previews);
     }
 
     void trim_before(Sample position) {
@@ -389,21 +556,24 @@ private:
         active_ = false;
         if (end <= frontier_) return; // An empty rollover may already cover the endpoint's tail.
         const bool overlap_present = decode_from_ < frontier_;
-        const auto result = decode_window(end, overlap_present);
+        const auto result = decode_window(decode_from_, end, overlap_present, Decode::Endpoint);
         if (!result.placeable) throw std::runtime_error("Could not place final words after a live window boundary.");
-        text_event("final", frontier_, end, overlap_present ? result.owned(frontier_, end) : result.text);
+        text_event("final", frontier_, end, overlap_present ? result.owned(seam_.first_owned(result, frontier_), end) : result.text);
         frontier_ = end;
     }
 
-    void cut_span() {
-        const auto result = decode_window(scanned_, true);
+    void cut_span(bool previews) {
+        const auto result = decode_window(decode_from_, scanned_, true, Decode::Rollover);
         if (!result.placeable) throw std::runtime_error("Could not place words at the live window limit.");
         // An empty window advances by exactly 20 seconds and must not leave
         // old overlap to be decoded again. This also applies while catching up.
         Sample cut = frontier_ + rollover;
-        if (result.text.empty() || result.owned(frontier_, scanned_).empty()) {
+        const auto first = seam_.first_owned(result, frontier_);
+        bool drafted = false;
+        if (first == result.pieces.size()) {
             text_event("final", frontier_, cut, "");
             decode_from_ = cut;
+            seam_.clear();
         } else {
             // Leave right context for words near the cut. Prefer the closest
             // timestamp boundary to the target if a word straddles it.
@@ -415,11 +585,23 @@ private:
                     break;
                 }
             }
-            text_event("final", frontier_, cut, result.owned(frontier_, cut));
+            text_event("final", frontier_, cut, result.owned(first, cut));
             decode_from_ = std::max(decode_from_, cut - overlap);
+            seam_.remember(result, decode_from_, cut, scanned_);
+            // The fresh rollover decode already saw the right context. In a
+            // preview-enabled feed use it instead of immediately decoding it
+            // twice, or leaving the new span blank until the next preview.
+            if (previews && cut < scanned_) {
+                const auto draft = result.owned(result.first_owned(cut), scanned_);
+                if (!draft.empty()) {
+                    text_event("partial", cut, scanned_, draft);
+                    drafted = true;
+                }
+            }
         }
         frontier_ = cut;
-        preview_at_ = cut;
+        draft_.clear();
+        preview_at_ = drafted ? scanned_ : cut;
         voiced_ = std::max<Sample>(0, (quiet_since_ < 0 ? scanned_ : quiet_since_) - cut);
         trim_before(decode_from_);
     }
@@ -430,6 +612,9 @@ private:
     std::unique_ptr<whisper_context, decltype(&whisper_free)> asr_{nullptr, whisper_free};
     std::unique_ptr<whisper_vad_context, decltype(&whisper_vad_free)> vad_{nullptr, whisper_vad_free};
     std::vector<float> audio_;
+    Seam seam_;
+    DraftAgreement draft_;
+    std::deque<Sample> pauses_;
     Sample audio_start_ = 0;
     Sample received_ = 0;
     Sample scanned_ = 0;
@@ -439,6 +624,7 @@ private:
     Sample quiet_since_ = -1;
     Sample voiced_ = 0;
     Sample preview_at_ = 0;
+    bool heavy_encoder_ = false;
     bool active_ = false;
     std::int64_t vad_frames_ = 0;
     std::int64_t asr_calls_ = 0;

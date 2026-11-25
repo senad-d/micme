@@ -9,6 +9,7 @@ const cleanExit = { code: 0, signal: null };
 const shortPcm = Buffer.from([13, 10, 128, 255, 0, 0, 3, 0]);
 const textEvent = (type, from, to, text) => ({ type, from, to, text });
 const done = (through) => ({ type: "done", through, asrCalls: 1, asrMs: 5, vadFrames: 1 });
+const plan = { binary: "/path/micme-live", modelPath: "/path/asr weight.bin", vadModelPath: "/path/vad.bin", language: "es", translate: true };
 
 function protocolHarness(t, timeoutMs = 1000) {
 	const controller = new AbortController();
@@ -25,11 +26,23 @@ function protocolHarness(t, timeoutMs = 1000) {
 }
 
 test("launch uses only Worker v1 argv; backlog preserves data while suppressing speculative decode", () => {
-	const plan = { binary: "/path/micme-live", modelPath: "/path/asr weight.bin", vadModelPath: "/path/vad.bin", language: "es", translate: true };
 	assert.equal(buildLiveWorkerCommand(plan).command, plan.binary);
 	assert.deepEqual(buildLiveWorkerCommand(plan).args, ["--model", plan.modelPath, "--vad-model", plan.vadModelPath, "--language", "es", "--translate"]);
 	assert.equal(caughtUpForLivePreview(16002, 1), false);
 	assert.equal(caughtUpForLivePreview(16002, 2), true);
+});
+
+test("passive OpenMP waits default only in the live child without overriding an explicit policy", (t) => {
+	const saved = process.env.OMP_WAIT_POLICY;
+	t.after(() => {
+		if (saved === undefined) delete process.env.OMP_WAIT_POLICY;
+		else process.env.OMP_WAIT_POLICY = saved;
+	});
+	delete process.env.OMP_WAIT_POLICY;
+	assert.equal(buildLiveWorkerCommand(plan).spawnOptions.env.OMP_WAIT_POLICY, "PASSIVE");
+	assert.equal(process.env.OMP_WAIT_POLICY, undefined);
+	process.env.OMP_WAIT_POLICY = "ACTIVE";
+	assert.equal(buildLiveWorkerCommand(plan).spawnOptions, undefined);
 });
 
 test("Worker v1 reassembles split UTF-8, bounds the PCM exchange, and publishes finals only after matching responses", async (t) => {

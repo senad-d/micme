@@ -127,16 +127,22 @@ function decoderWithStub() {
 	return stub;
 }
 
-function speak(fixture, success = true) {
-	const pcm = Buffer.alloc(2 * (success ? 21 * 16_000 + 7 : 20 * 16_000));
+function voiced(samples, markers) {
+	const pcm = Buffer.alloc(2 * samples);
 	for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(1000, i);
-	for (const [seconds, marker] of [[0.55, 2000], [1.45, 3000], [18.7, 4000], [19.1, 4000]]) {
-		pcm.writeInt16LE(marker, Math.round(seconds * 16_000) * 2);
-	}
+	for (const [seconds, marker] of markers) pcm.writeInt16LE(marker, Math.round(seconds * 16_000) * 2);
+	return pcm;
+}
+
+function frames(pcm, kind) {
 	const chunks = [];
-	for (let i = 0; i < pcm.length; i += 8_000) chunks.push(feed(pcm.subarray(i, i + 8_000)));
-	if (success) chunks.push(finish);
-	return invokeStub(fixture, Buffer.concat(chunks), success);
+	for (let i = 0; i < pcm.length; i += 8_000) chunks.push(feed(pcm.subarray(i, i + 8_000), kind));
+	return chunks;
+}
+
+function speak(fixture, success = true) {
+	const pcm = voiced(success ? 21 * 16_000 + 7 : 20 * 16_000, [[0.55, 2000], [1.45, 3000], [18.7, 4000], [19.1, 4000]]);
+	return invokeStub(fixture, Buffer.concat([...frames(pcm), ...(success ? [finish] : [])]), success);
 }
 
 test("timed words preview during uninterrupted speech and each side owns its repeated boundary word", () => {
@@ -146,10 +152,62 @@ test("timed words preview during uninterrupted speech and each side owns its rep
 	assert.deepEqual(previews.slice(0, 2).map(({ text }) => text.trim()), ["Grüß", "Grüß Okay."]);
 	const finals = events.filter(({ type }) => type === "final");
 	assert.equal(finals[0].to, 19 * 16_000);
+	assert.deepEqual(events[firstFinalIndex + 1], { type: "partial", from: finals[0].to, to: 20 * 16_000, text: " encore" });
 	assert.equal(finals[1].from, finals[0].to);
 	assert.equal(finals[1].to, 21 * 16_000 + 7);
 	assert.deepEqual(finals.map(({ text }) => text.trim()), ["Grüß Okay. encore", "encore"]);
 	assert.equal(events.at(-1).through, finals[1].to);
+});
+
+test("a short endpoint uses native encoder context even when no preview ran", () => {
+	const pcm = voiced(16_000, [[0.55, 2000]]);
+	const events = invokeStub("endpoint", Buffer.concat([...frames(pcm, 2), finish]), true);
+	assert.equal(events.some(({ type }) => type === "partial"), false);
+	assert.equal(events.find(({ type }) => type === "final").text.trim(), "Grüß");
+	assert.equal(events.at(-1).through, 16_000);
+});
+
+test("the first preview after backlog uses recent audio without discarding the onset from finals", () => {
+	const pcm = voiced(15 * 16_000, [[0.55, 2000], [14.6, 3000]]);
+	const input = Buffer.concat([...frames(pcm.subarray(0, -8000), 2), feed(pcm.subarray(-8000)), finish]);
+	const events = invokeStub("timed", input, true);
+	const partials = events.filter(({ type }) => type === "partial");
+	assert.equal(partials.length, 1);
+	assert.ok(partials[0].from > 0);
+	assert.equal(partials[0].text.trim(), "Okay.");
+	assert.equal(events.find(({ type }) => type === "final").text.trim(), "Grüß Okay.");
+	assert.equal(events.at(-1).through, 15 * 16_000);
+});
+
+test("a weak draft suffix is deferred until the same words recur at the same times", () => {
+	const pcm = voiced(4 * 16_000, [[0.25, 2000], [0.55, 3000], [2.25, 4000]]);
+	const events = invokeStub("draft-agreement", Buffer.concat([...frames(pcm), finish]), true);
+	const drafts = events.filter(({ type }) => type === "partial");
+	assert.deepEqual(drafts.slice(0, 3).map(({ text }) => text.trim()), ["Grüß Okay.", "Grüß Okay.", "Grüß Okay. encore"]);
+	assert.equal(events.find(({ type }) => type === "final").text.trim(), "Grüß Okay. encore");
+});
+
+test("a brief pause can anchor a preview without splitting or truncating the final span", () => {
+	const pcm = voiced(11.5 * 16_000, [[5.6, 2000], [9.27, 3000]]);
+	const quietFrom = 155 * 512;
+	const quietTo = quietFrom + 7 * 512;
+	pcm.fill(0, 2 * quietFrom, 2 * quietTo);
+	const events = invokeStub("timed", Buffer.concat([...frames(pcm), finish]), true);
+	assert.ok(events.some(({ type, from, text }) => type === "partial" && quietFrom < from && from < quietTo && text.trim() === "Grüß Okay."));
+	assert.deepEqual(events.filter(({ type }) => type === "final").map(({ text }) => text.trim()), ["Grüß Okay."]);
+});
+
+test("rollover reconciles shifted word times without removing a real repeated phrase", () => {
+	const pcm = voiced(20.75 * 16_000, [[18.45, 5000], [18.65, 6000], [18.91, 7000], [19.05, 8000],
+		[19.45, 5000], [19.65, 6000], [19.91, 7000]]);
+	const input = Buffer.concat([...frames(pcm, 2), finish]);
+	for (const fixture of ["seam-earlier", "seam-later"]) {
+		const events = invokeStub(fixture, input, true);
+		const finals = events.filter(({ type }) => type === "final");
+		assert.deepEqual(finals.map(({ text }) => text.trim()), ["here we go", "again here we go"], fixture);
+		assert.equal(finals[1].from, finals[0].to);
+		assert.equal(events.at(-1).through, pcm.length / 2);
+	}
 });
 
 test("nonempty untimed output cannot be finalized as an invented rollover partition", () => {
