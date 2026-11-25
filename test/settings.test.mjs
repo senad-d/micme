@@ -21,7 +21,7 @@ test("configuration display values strip terminal control sequences", () => {
 	assert.equal(displayConfigurationValue("MICME_WHISPER_CPP_MODEL", "/tmp/\x1b[31mggml-small.en.bin\x1b[0m"), "ggml-small.en.bin");
 });
 
-test("changing the mode only writes the mode and preserves the local capture and model choices", async (t) => {
+test("changing the mode resets the final-pass default without changing local capture and model choices", async (t) => {
 	const agentDir = await mkdtemp(join(tmpdir(), "micme-settings-test-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -47,8 +47,17 @@ test("changing the mode only writes the mode and preserves the local capture and
 	await writeFile(configPath, JSON.stringify(initial));
 	reloadMicmeConfig();
 
-	await saveConfigurationValue(createCtx(), "MICME_TRANSCRIPTION_MODE", "stream");
-	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { ...initial, MICME_TRANSCRIPTION_MODE: "stream" });
+	const ctx = createCtx();
+	await saveConfigurationValue(ctx, "MICME_TRANSCRIPTION_MODE", "stream");
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { ...initial, MICME_TRANSCRIPTION_MODE: "stream", MICME_STREAM_FINALIZE_WITH_CLIP: "0" });
+
+	await saveConfigurationValue(ctx, "MICME_STREAM_FINALIZE_WITH_CLIP", "1");
+	await saveConfigurationValue(ctx, "MICME_STREAM_DIAGNOSTICS", "0");
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { ...initial, MICME_TRANSCRIPTION_MODE: "stream", MICME_STREAM_DIAGNOSTICS: "0" });
+
+	await saveConfigurationValue(ctx, "MICME_STREAM_FINALIZE_WITH_CLIP", "0");
+	await saveConfigurationValue(ctx, "MICME_TRANSCRIPTION_MODE", "clip");
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { ...initial, MICME_STREAM_DIAGNOSTICS: "0" });
 });
 
 test("saving a missing model rechecks config and rejects malformed JSON before fetching", async (t) => {

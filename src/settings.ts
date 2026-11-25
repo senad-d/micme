@@ -889,7 +889,7 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 			id: "MICME_TRANSCRIPTION_MODE",
 			categoryId: "transcription",
 			label: "Transcription mode",
-			description: "Changes mode only. Stream needs a local decoder and speech detector (see Streaming).",
+			description: "Resets the Stream final pass (off for stream, on for clip). Stream needs a local decoder and speech detector (see Streaming).",
 			details: mode === "stream" && !live ? [streamPlan.reason, "Choose clip mode or fix live setup, then reopen settings."] : [],
 			rawValue: mode,
 			currentValue: mode,

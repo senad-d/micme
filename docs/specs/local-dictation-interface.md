@@ -22,7 +22,7 @@ Capture names and observations are preserved in the [running-checkout record](..
 | Screen | Layout | Order of elements | Changes | Stays |
 | --- | --- | --- | --- | --- |
 | Recording | Existing status and recording widget; a separate draft line below its waveform, outside the editor | Status/time/meter, `Live:` draft, confirmed prompt in editor | Replace the draft on each partial. It must appear before pause; clear on final, empty, stop, error and shutdown. The confirmed editor text described here is TUI only; live RPC never edits or sends automatically. No notification per word. | Toggle, review-before-send, last transcript, editor interaction |
-| General / Transcription | Existing panes, same categories | Existing fields | Mode selects mode only; explain live requires local worker + speech detector, and keep backend/model controls for clip/C++. General diagnostics describe timings, not raw terminal frames. | Language/translation, model selection, shortcuts and shell precedence |
+| General / Transcription | Existing panes, same categories | Existing fields | Explain the mode switch's [final-pass reset](local-dictation-feature.md#compatibility) and live's local worker + speech detector requirement; keep backend/model controls for clip/C++. General diagnostics describe timings, not raw terminal frames. | Language/translation, model selection, shortcuts and shell precedence |
 | Streaming | Existing settings list | Live decoder executable, speech detector model, optional final clip pass | Replace SDL, flush, VAD-slider, context and word-chunk rows. Explain fixed speech-gated format and refer to Audio for input. No pretend slider or inferred “accuracy” score. | Existing list display and default path indications; show effective paths and config-file/env keys, not a text editor |
 | Audio | Existing list | Microphone first, remaining fields in existing order | Linux binds the Pulse source, macOS AVFoundation, Windows exact DirectShow name. Describe which controls are clip-only and any env input/custom-hook override. | Same device inventory/selection flow and true capture values |
 
@@ -50,7 +50,7 @@ Capture names and observations are preserved in the [running-checkout record](..
 
 ### Configure live dictation
 
-1. Open `/micme conf`, choose Transcription → stream. Only the mode changes; choose an appropriate C++ model and source language.
+1. Open `/micme conf`, choose Transcription → stream. Then opt in to Stream final pass if wanted, and choose an appropriate C++ model and source language.
 2. Streaming shows the effective `MICME_LIVE_BIN` and `MICME_VAD_MODEL` or their defaults. Audio cycles through discovered/current inputs. These are not arbitrary text fields (`src/settings.ts:activateSelectedSetting`); Linux discovery currently offers only `default` (`src/audio.ts:discoverAudioDevices`).
 3. For an unlisted source or either non-default path, edit the `micme.json` whose path appears in the settings header. Set `MICME_PULSE_SOURCE` to the exact Pulse source name and the two path keys to the installed executable and VAD file. Alternatively set those three shell variables before starting Pi; shell overrides win. Restart Pi for a fresh config, reopen settings and verify the effective values. No new discovery or text-entry control.
 4. Toggle; the same input feeds live and final. If a component is missing, the error names the remedy and clip alternative. Doctor gives the effective plan without starting capture or sending samples anywhere.

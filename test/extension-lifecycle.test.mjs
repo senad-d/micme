@@ -2721,15 +2721,37 @@ test("shutdown while waiting for done cancels finish without replaying an incomp
 	});
 });
 
-test("invalid done does not auto-submit an otherwise confirmed live transcript", { skip: process.platform === "win32" }, async (t) => {
-	await withLiveFixture(t, { worker: { wrongDone: true }, env: { MICME_AUTO_SUBMIT: "1" } }, async ({ log, harness, micme }) => {
+test("invalid done saves only previously confirmed live words for explicit replay", { skip: process.platform === "win32" }, async (t) => {
+	await withLiveFixture(t, {
+		recorder: { tail: [1, 0] },
+		worker: { wrongDone: true, tailText: "unconfirmed tail" },
+		env: { MICME_AUTO_SUBMIT: "1" },
+	}, async ({ log, harness, micme }) => {
 		await micme();
 		await micme();
 		assert.deepEqual(harness.sentMessages, []);
 		assert.match(harness.uiCalls.find((entry) => entry.level === "error")?.message ?? "", /done event or sample count/);
 		await micme("last");
-		assert.match(harness.uiCalls.at(-1)?.message ?? "", /No previous Micme transcript/);
+		assert.deepEqual(harness.sentMessages, [{ message: "fixture live transcript", options: undefined }]);
 		await assertProcessesStopped(await readProcessRows(log));
+	});
+});
+
+test("a failed live attempt with only a draft leaves the previous transcript available", { skip: process.platform === "win32" }, async (t) => {
+	const getPrimary = captureWidgetRecording(t);
+	await withLiveFixture(t, { worker: { text: "previous transcript" } }, async ({ binary, harness, micme }) => {
+		harness.ctx.mode = "rpc";
+		await micme();
+		await micme();
+
+		harness.uiCalls.length = 0;
+		await writeStreamingProcess(binary, { events: [["partial", "unconfirmed draft"]], wrongDone: true });
+		await micme();
+		await waitFor(() => getPrimary().liveDraft === "unconfirmed draft", "worker draft did not arrive");
+		await micme();
+		assert.match(assertAutomaticStopUi(harness), /done event or sample count/);
+		await micme("last");
+		assert.deepEqual(harness.uiCalls.at(-1), { method: "pasteToEditor", value: "previous transcript " });
 	});
 });
 
@@ -2858,20 +2880,26 @@ test("a late clip exit returns to idle even if stderr stays open", async (t) => 
 	});
 });
 
-test("an unexpected code-zero worker exit stops its recorder even with inherited stdout open", { skip: process.platform === "win32" }, async (t) => {
+test("an unexpected code-zero worker exit stops its recorder and saves confirmed RPC words for replay", { skip: process.platform === "win32" }, async (t) => {
+	const getPrimary = captureWidgetRecording(t);
 	await withLiveFixture(t, {
-		worker: ({ root }) => ({ exitGate: join(root, "exit"), text: "" }),
+		worker: ({ root }) => ({ exitGate: join(root, "exit"), events: [["partial", "live draft"], ["final", "confirmed live words"]] }),
+		recorder: ({ root }) => ({ gates: [join(root, "confirm")] }),
 		env: ({ root }) => ({
 			MICME_AUTO_SUBMIT: "1", MICME_STREAM_FINALIZE_WITH_CLIP: "1", MICME_TEST_DRAIN_FILE: join(root, "drain"),
 			MICME_TRANSCRIBE_COMMAND: `: > ${shellQuote(join(root, "transcribed"))}`,
 		}),
 	}, async ({ root, scratch, log, harness, micme }) => {
+		harness.ctx.mode = "rpc";
 		await micme();
 		assert.equal(harness.owner.getPhase(), "streaming");
 		const started = await readProcessRows(log);
 		assert.deepEqual(started.map((row) => row.split(" ")[0]), ["stream", "recorder"]);
 		const [attempt] = await readdir(scratch);
 		try {
+			await waitFor(() => getPrimary().liveDraft === "live draft", "worker draft did not arrive");
+			await writeFile(join(root, "confirm"), "");
+			await waitFor(() => getPrimary().liveDraft === undefined, "worker final did not clear the draft");
 			await writeFile(join(root, "exit"), "");
 			await waitFor(() => harness.owner.getPhase() === "stopping", "worker exit was not observed before the inherited stdout drained", 2_000);
 			await writeFile(join(root, "drain"), "");
@@ -2884,11 +2912,13 @@ test("an unexpected code-zero worker exit stops its recorder even with inherited
 		assert.match(error, /Live worker output:\nworker disconnected/);
 		assert.equal(error.includes("\u001b"), false);
 		assert.ok(error.includes(`Audio kept for debugging: ${join(scratch, attempt)}`));
-		assert.equal((await readFile(join(scratch, attempt, "raw.wav"))).length, 1024);
+		assert.equal((await readFile(join(scratch, attempt, "raw.wav"))).length, 1224);
 		await assert.rejects(stat(join(root, "transcribed")), { code: "ENOENT" });
 		await assertProcessesStopped(await readProcessRows(log));
 		await micme("audio");
 		assert.equal(harness.uiCalls.at(-1)?.message, `Last Micme audio directory: ${join(scratch, attempt)}`);
+		await micme("last");
+		assert.deepEqual(harness.sentMessages, [{ message: "confirmed live words", options: undefined }]);
 	});
 });
 

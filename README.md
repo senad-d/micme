@@ -218,7 +218,7 @@ In a paced speech test on a four-core CPU, `base.en` showed the first relevant w
 
 1. [Build and install `micme-live`](native/live/README.md). Installing Micme does not build the worker. `whisper-stream` is not a substitute, and `whisper-cli` is not needed for live decoding itself.
 2. Use the same microphone settings as clip mode: `MICME_AVFOUNDATION_INPUT` (or `MICME_AUDIO_DEVICE`) on macOS, `MICME_PULSE_SOURCE` on Linux, and `MICME_DSHOW_AUDIO_DEVICE` on Windows. A legacy SDL capture ID does not select a device in the new worker.
-3. Select stream mode in `/micme conf` or set `MICME_TRANSCRIPTION_MODE=stream` in `micme.json`. Live decoding requires `MICME_TRANSCRIBE_BACKEND=auto` or `whisper.cpp`. Switching modes saves only the mode; it does not change your model, device, or refinement settings.
+3. Select stream mode in `/micme conf` or set `MICME_TRANSCRIPTION_MODE=stream` in `micme.json`. Live decoding requires `MICME_TRANSCRIBE_BACKEND=auto` or `whisper.cpp`. Switching modes in settings resets **Stream final pass** (off for stream, on for clip) without changing your model or device. To opt in to refinement, turn it on after switching to stream.
 4. Run [doctor](#diagnostics) to check the resolved worker, speech recognition (ASR) weights, speech detection (VAD) weights, and language. Before opening the microphone, Micme provisions missing supported weights if enabled and waits for the worker to load both models. If setup fails, fix the reported issue or choose clip mode; Micme does not silently fall back to another backend.
 
 Example `micme.json` when the worker is not on `PATH` and the VAD file is stored outside the model cache:
@@ -242,6 +242,8 @@ Micme opens one recorder and feeds its PCM to a local Worker v1 process. The wor
 
 - **TUI:** Only finalized words are appended to the editor. If Micme detects added editor text during dictation, it keeps that text and does not replace the dictated portion or auto-submit on stop. Simply clearing or trimming Micme's suffix does not count as an addition.
 - **RPC:** Micme cannot read the host's editor. It saves the completed transcript for the session and never writes or sends it automatically in stream mode. With auto-submit off, explicitly running `/micme last` **replaces** the RPC prompt, so save any existing text first. With auto-submit on, that command sends the transcript or queues it as a follow-up; turn auto-submit off first if you want to review it.
+
+If a live recording fails, `/micme last` can replay the words confirmed before the error. If no words were confirmed, it still replays the previous saved transcript, if any.
 
 ### Capture and optional refinement
 

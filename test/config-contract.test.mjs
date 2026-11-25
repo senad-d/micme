@@ -173,19 +173,19 @@ test("schema, example, flags, and runtime defaults remain aligned", async (t) =>
 	});
 });
 
-test("mode changes preserve explicit overrides and stored legacy values", async (t) => {
+test("mode profiles reset the final-pass flag but preserve shell precedence and other saved settings", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-config-mode-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const path = join(root, "micme.json");
 	const saved = { $schema: "./micme.schema.json", MICME_STREAM_FINALIZE_WITH_CLIP: "1", MICME_LIVE_BIN: "custom-worker", MICME_STREAM_CAPTURE: "4" };
 	await writeFile(path, JSON.stringify(saved));
 	await withEnvironment({ PI_CODING_AGENT_DIR: root, MICME_STREAM_FINALIZE_WITH_CLIP: "0" }, async () => {
-		for (const mode of ["stream", "clip"]) {
+		for (const [mode, finalize] of [["stream", "0"], ["clip", "1"]]) {
 			const profile = getTranscriptionModeProfile(mode);
-			assert.deepEqual(profile, { MICME_TRANSCRIPTION_MODE: mode });
+			assert.deepEqual(profile, { MICME_TRANSCRIPTION_MODE: mode, MICME_STREAM_FINALIZE_WITH_CLIP: finalize });
 			await writeMicmeConfigValues(profile);
 			const stored = JSON.parse(await readFile(path, "utf8"));
-			assert.deepEqual(stored, { ...saved, MICME_TRANSCRIPTION_MODE: mode });
+			assert.deepEqual(stored, { ...saved, ...profile });
 			assert.equal(getStreamFinalizeWithClip(), false);
 		}
 	});

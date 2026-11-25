@@ -243,7 +243,10 @@ function removeConfigWriteTail(configPath: string, pending: Promise<void>) {
 }
 
 export function getTranscriptionModeProfile(mode: TranscriptionMode): Record<string, string> {
-	return { MICME_TRANSCRIPTION_MODE: mode };
+	return {
+		MICME_TRANSCRIPTION_MODE: mode,
+		MICME_STREAM_FINALIZE_WITH_CLIP: mode === "stream" ? "0" : "1",
+	};
 }
 
 export function getAudioInputConfigKey(platform: NodeJS.Platform) {

@@ -638,6 +638,8 @@ async function stopStreamingTranscription(
 		await stopOwnedProcesses(operation);
 		await live.pump;
 		if (!owner.isCurrent(operation)) return;
+		const confirmed = live.transcript.text;
+		if (confirmed) owner.rememberTranscript(operation, confirmed);
 		throw withKeptAudio(recordingError(operation, error), await settleRecordedAudio(owner, operation, "failed"));
 	}
 
