@@ -26,6 +26,7 @@ const {
 	sendStopInput,
 	shellCommand,
 	shellQuote,
+	spawnLiveWorker,
 	spawnRecording,
 	stopProcess,
 	stopRecorder,
@@ -33,6 +34,26 @@ const {
 const { buildRecorderCommand } = await import("../src/audio.ts");
 const { RECORDER_STOP_GRACE_MS } = await import("../src/constants.ts");
 const { transcribeWithCustomCommand } = await import("../src/transcription.ts");
+
+test("an owned worker uses binary stdin and stdout without recorder stop input", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-worker-pipes-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const worker = join(root, "worker.cjs");
+	await writeFile(worker, `process.stdin.on("data", (chunk) => process.stdout.write(chunk));
+process.stdin.on("end", () => process.stderr.write("worker diagnostic\\n"));
+`);
+	const processHandle = spawnLiveWorker({ command: process.execPath, args: [worker], display: "worker fixture", stopInput: "q\n" });
+	t.after(() => stopProcess(processHandle));
+	const output = [];
+	processHandle.process.stdout.on("data", (chunk) => output.push(chunk));
+	const input = Buffer.of(1, 3, 0, 0, 0, 0x0d, 0x0a, 0xff, 0x00, 0x03, 0x80, 3);
+	assert.equal(sendStopInput(processHandle), false);
+	processHandle.process.stdin.end(input);
+	assert.deepEqual(await processHandle.exitObserved, { code: 0, signal: null });
+	assert.deepEqual(await processHandle.exitPromise, { code: 0, signal: null });
+	assert.deepEqual(Buffer.concat(output), input);
+	assert.equal(processHandle.stderr(), "worker diagnostic\n");
+});
 
 async function withEnv(values, fn) {
 	const previous = new Map();

@@ -21,13 +21,14 @@
     "MICME_TRANSCRIPTION_MODE": {
       "type": "string",
       "enum": ["clip", "stream"],
-      "default": "clip"
+      "default": "clip",
+      "description": "Stream uses the local micme-live worker and speech detector. Clip does not require either component."
     },
     "MICME_TRANSCRIBE_BACKEND": {
       "type": "string",
       "enum": ["auto", "whisper.cpp", "python", "custom"],
       "default": "auto",
-      "description": "Select transcription backend. auto preserves priority: custom command, whisper.cpp, then Python Whisper."
+      "description": "Clip auto selects a custom command, whisper.cpp, then Python Whisper. Stream requires auto or whisper.cpp."
     },
     "MICME_TRANSCRIBE_TIMEOUT_MS": {
       "type": ["string", "number"],
@@ -36,7 +37,7 @@
       "maximum": 3600000,
       "multipleOf": 1,
       "default": "120000",
-      "description": "Transcription timeout in whole milliseconds. Runtime range: 1000 through 3600000."
+      "description": "Timeout in whole milliseconds for clip transcription and live readiness, PCM acknowledgments and finalization. Runtime range: 1000 through 3600000."
     },
     "MICME_AUTO_SUBMIT": {
       "$ref": "#/$defs/stringFlag",
@@ -56,7 +57,7 @@
     "MICME_AUTO_DOWNLOAD_MODEL": {
       "$ref": "#/$defs/stringFlag",
       "default": "1",
-      "description": "Download a missing standard whisper.cpp model automatically. Defaults on."
+      "description": "Automatically download missing standard Whisper ASR weights and the standard live VAD weight when needed. Defaults on."
     },
     "MICME_DEFAULT_WHISPER_CPP_MODEL": {
       "type": "string",
@@ -70,6 +71,14 @@
     "MICME_WHISPER_CPP_BIN": {
       "type": "string",
       "description": "Command or path for whisper.cpp clip transcription. Leave unset to find whisper-cli/whisper-cpp on PATH."
+    },
+    "MICME_LIVE_BIN": {
+      "type": "string",
+      "description": "Command or path to the Micme Worker v1 executable. Leave unset to find micme-live on PATH. Not whisper-stream."
+    },
+    "MICME_VAD_MODEL": {
+      "type": "string",
+      "description": "Optional existing Silero VAD model file for the live worker. Leave unset to use vad/ggml-silero-v5.1.2.bin under the Whisper model cache."
     },
     "MICME_WHISPER_MODEL": {
       "type": "string",
@@ -91,7 +100,7 @@
       "maximum": 384000,
       "multipleOf": 1,
       "default": "auto",
-      "description": "Raw recording sample-rate override in whole Hz from 8000 through 384000. Leave auto/unset so ffmpeg uses the selected input's native sample rate."
+      "description": "Raw recording sample-rate override in whole Hz from 8000 through 384000. Clip only. Leave auto/unset so ffmpeg uses the selected input's native sample rate."
     },
     "MICME_TRANSCRIBE_SAMPLE_RATE": {
       "type": ["string", "number"],
@@ -100,7 +109,7 @@
       "maximum": 384000,
       "multipleOf": 1,
       "default": "16000",
-      "description": "Sample rate in whole Hz from 8000 through 384000 for processed audio sent to Whisper."
+      "description": "Clip processing sample rate in whole Hz from 8000 through 384000. Stream is fixed to 16000 Hz."
     },
     "MICME_RECORD_SYNC": {
       "$ref": "#/$defs/stringFlag",
@@ -110,7 +119,7 @@
     "MICME_RECORD_METER": {
       "$ref": "#/$defs/stringFlag",
       "default": "0",
-      "description": "Enable the legacy ffmpeg stdout PCM branch for live metering. Defaults off to avoid recorder backpressure; the UI can still meter by polling raw.wav."
+      "description": "Clip only: enable the optional FFmpeg stdout metering branch. Stream meters the PCM sent to the worker."
     },
     "MICME_AVFOUNDATION_DROP_LATE_FRAMES": {
       "$ref": "#/$defs/stringFlag",
@@ -127,7 +136,8 @@
     },
     "MICME_PROCESS_AUDIO": {
       "$ref": "#/$defs/stringFlag",
-      "default": "1"
+      "default": "1",
+      "description": "Apply configured audio preprocessing. In stream mode the built-in recorder filters capture once; custom recorders own filtering and refinement never filters again."
     },
     "MICME_VALIDATE_AUDIO": {
       "$ref": "#/$defs/stringFlag",
@@ -138,90 +148,35 @@
       "$ref": "#/$defs/stringFlag",
       "default": "0"
     },
-    "MICME_STREAM_CAPTURE": {
-      "type": ["string", "number"],
-      "pattern": "^-?(?:0|[1-9][0-9]*)$",
-      "minimum": -1,
-      "maximum": 255,
-      "multipleOf": 1,
-      "default": "-1",
-      "description": "whisper-stream/SDL capture id from -1 through 255. -1 selects the system default."
-    },
-    "MICME_STREAM_STEP_MS": {
-      "type": ["string", "number"],
-      "pattern": "^(?:0|[1-9][0-9]*)$",
-      "minimum": 100,
-      "maximum": 60000,
-      "multipleOf": 1,
-      "default": "1000",
-      "description": "whisper-stream processing step in whole milliseconds from 100 through 60000."
-    },
-    "MICME_STREAM_LENGTH_MS": {
-      "type": ["string", "number"],
-      "pattern": "^(?:0|[1-9][0-9]*)$",
-      "minimum": 1000,
-      "maximum": 120000,
-      "multipleOf": 1,
-      "default": "5000",
-      "description": "whisper-stream audio window in whole milliseconds from 1000 through 120000."
-    },
-    "MICME_STREAM_KEEP_MS": {
-      "type": ["string", "number"],
-      "pattern": "^(?:0|[1-9][0-9]*)$",
-      "minimum": 0,
-      "maximum": 60000,
-      "multipleOf": 1,
-      "default": "500",
-      "description": "whisper-stream overlap retained in whole milliseconds from 0 through 60000."
-    },
-    "MICME_STREAM_MAX_TOKENS": {
-      "type": ["string", "number"],
-      "pattern": "^(?:0|[1-9][0-9]*)$",
-      "minimum": 1,
-      "maximum": 4096,
-      "multipleOf": 1,
-      "default": "64",
-      "description": "Maximum whisper-stream tokens from 1 through 4096."
-    },
-    "MICME_STREAM_KEEP_CONTEXT": {
-      "$ref": "#/$defs/stringFlag",
-      "default": "0",
-      "description": "Pass --keep-context to whisper-stream. Defaults to off for append-only dictation."
-    },
     "MICME_STREAM_FINALIZE_WITH_CLIP": {
       "$ref": "#/$defs/stringFlag",
       "default": "0",
-      "description": "When enabled, stop-time clip transcription may replace the append-only live stream transcript."
+      "description": "After a successful live stop with recognized words, refine using the selected clip backend on a verified private copy of the same captured samples."
     },
-    "MICME_STREAM_FLUSH_MS": {
-      "type": ["string", "number"],
-      "pattern": "^(?:0|[1-9][0-9]*)$",
-      "minimum": 100,
-      "maximum": 60000,
-      "multipleOf": 1,
-      "default": "700",
-      "description": "Quiet interval in whole milliseconds from 100 through 60000 before tentative stream words are committed append-only."
+    "MICME_STREAM_DIAGNOSTICS": {
+      "$ref": "#/$defs/stringFlag",
+      "default": "0",
+      "description": "Report live decoder timings, counts and backlog; does not log transcript text."
     },
-    "MICME_STREAM_WORDS_PER_CHUNK": {
-      "type": ["string", "number"],
-      "pattern": "^(?:0|[1-9][0-9]*)$",
-      "minimum": 1,
-      "maximum": 10,
-      "multipleOf": 1,
-      "default": "10",
-      "description": "Maximum stable words committed per streaming update, from 1 through 10."
+    "MICME_WHISPER_STREAM_BIN": {
+      "deprecated": true,
+      "description": "Ignored legacy SDL executable. Configure MICME_LIVE_BIN instead."
     },
-    "MICME_STREAM_VAD_THRESHOLD": {
-      "type": ["string", "number"],
-      "pattern": "^(?:0(?:\\.[0-9]+)?|1(?:\\.0+)?)$",
-      "minimum": 0.01,
-      "maximum": 0.99,
-      "default": "0.45",
-      "description": "whisper-stream voice activity threshold from 0.01 through 0.99."
+    "MICME_STREAM_CAPTURE": {
+      "deprecated": true,
+      "description": "Ignored legacy SDL device index. Configure the microphone in Audio instead."
     },
+    "MICME_STREAM_STEP_MS": { "$ref": "#/$defs/legacyStreamSetting", "deprecated": true },
+    "MICME_STREAM_LENGTH_MS": { "$ref": "#/$defs/legacyStreamSetting", "deprecated": true },
+    "MICME_STREAM_KEEP_MS": { "$ref": "#/$defs/legacyStreamSetting", "deprecated": true },
+    "MICME_STREAM_MAX_TOKENS": { "$ref": "#/$defs/legacyStreamSetting", "deprecated": true },
+    "MICME_STREAM_KEEP_CONTEXT": { "$ref": "#/$defs/legacyStreamSetting", "deprecated": true },
+    "MICME_STREAM_FLUSH_MS": { "$ref": "#/$defs/legacyStreamSetting", "deprecated": true },
+    "MICME_STREAM_WORDS_PER_CHUNK": { "$ref": "#/$defs/legacyStreamSetting", "deprecated": true },
+    "MICME_STREAM_VAD_THRESHOLD": { "$ref": "#/$defs/legacyStreamSetting", "deprecated": true },
     "MICME_RECORD_COMMAND": {
       "type": "string",
-      "description": "Advanced shell command hook. Use only trusted commands."
+      "description": "Advanced shell command hook. Use only trusted commands. In stream mode write a growing 16 kHz mono signed 16-bit PCM WAV to {audio} and finalize its header when stopped."
     },
     "MICME_TRANSCRIBE_COMMAND": {
       "type": "string",
@@ -236,6 +191,9 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "legacyStreamSetting": {
+      "description": "Ignored legacy whisper-stream setting. The live worker manages its decoding windows and speech detection."
+    },
     "stringFlag": {
       "type": "string",
       "enum": ["0", "1", "true", "false", "yes", "no", "on", "off"]

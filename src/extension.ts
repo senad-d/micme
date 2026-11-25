@@ -4,7 +4,7 @@ import { MIN_AUDIO_BYTES, RECORDER_STARTUP_GRACE_MS, STATUS_KEY } from "./consta
 import {
 	envFlag,
 	getShortcut,
-	getStreamFinalizeWithClip,
+	getLegacyStreamSettings,
 	getTerminalShortcut,
 	getTranscriptionMode,
 	reloadMicmeConfig,
@@ -12,8 +12,9 @@ import {
 } from "./config.ts";
 import { buildRecorderCommand, listAudioDevices, prepareAudioForTranscription, registerDeviceMessageRenderer, validateRecordedAudio } from "./audio.ts";
 import { installMicmeEditorFallback, type MicmeEditorInputHandlers } from "./editor.ts";
-import { resolveTranscriptionPlan, formatTranscriptionPlan } from "./backends.ts";
-import { ensureWhisperCppModel } from "./models.ts";
+import { pcm16BufferLevel } from "./audio-level.ts";
+import { buildLiveRecorderCommand, openLivePcm, type LivePcmReader } from "./live-capture.ts";
+import { ensureLiveModels, resolveLivePlan } from "./live-plan.ts";
 import {
 	assertExpectedProcessExit,
 	formatExit,
@@ -21,37 +22,39 @@ import {
 	hasRecorderExited,
 	normalizeTranscript,
 	raceWithTimeout,
+	spawnLiveWorker,
 	spawnRecording,
 	stopProcess,
 	stopRecorder,
 } from "./processes.ts";
 import { RecordingWidget } from "./recording-widget.ts";
-import { createRecordingDirectory, type RecordingDirectory } from "./recording-dir.ts";
+import { createLiveRecordingDirectory, createRecordingDirectory, type RecordingDirectory } from "./recording-dir.ts";
 import { showConfiguration } from "./settings.ts";
-import {
-	buildWhisperStreamCommand,
-	clearStreamingFlush,
-	drainStreamingOutput,
-	flushPendingStreamingWords,
-	getStreamingTranscript,
-	handleStreamingOutput,
-	keepEditedStreamingEditor,
-	pasteOrSubmitFinalStreamingTranscript,
-	renderStreamingPreview,
-	showStreamingDiagnostics,
-} from "./streaming.ts";
+import { buildLiveWorkerCommand, caughtUpForLivePreview, livePoll, LiveTranscript, LiveWorker, liveWorkerDiagnostics } from "./streaming.ts";
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import { sanitizeTerminalOutput } from "./terminal-text.ts";
 import { transcribe } from "./transcription.ts";
-import type { CommandSpec, ExitResult, Recording, ResolvedTranscriptionPlan } from "./types.ts";
+import type { ExitResult, OwnedProcess, Recording } from "./types.ts";
 
 const MICME_ACTIONS = ["devices", "conf", "last", "audio", "help"] as const;
 const SHORTCUT_REPEAT_GUARD_MS = 1_000;
 const GUARDED_UI_METHODS = new Set(["notify", "pasteToEditor", "setEditorText", "setStatus", "setWidget"]);
 
-type StreamingTranscriptionPlan = ResolvedTranscriptionPlan & { effectiveBackend: "whisper.cpp"; binary: string; modelPath: string };
-type StreamingClipFailure = { error: unknown };
-type StreamingClipPlan = { audioPath: string; command: CommandSpec } | StreamingClipFailure;
+type LiveSession = {
+	worker: LiveWorker;
+	child: OwnedProcess;
+	finalizeWithClip: boolean;
+	transcript: LiveTranscript;
+	reader?: LivePcmReader;
+	captureStartup?: Promise<Recording>;
+	pump?: Promise<void>;
+	startedAt: number;
+	firstDraftAt?: number;
+	peakLag: number;
+	level: number;
+	lastPcmAt: number;
+	stopping: boolean;
+};
 type KeptAudio = { note: string; path: string; directory: RecordingDirectory };
 type AudioOutcome = "delivered" | "failed" | "shutdown";
 export type MicmeOperationPhase = "idle" | "starting" | "recording" | "streaming" | "stopping" | "transcribing" | "finalizing" | "shutting_down";
@@ -61,11 +64,11 @@ type MicmeOperation = {
 	phase: Exclude<MicmeOperationPhase, "idle">;
 	context: ExtensionContext;
 	controller: AbortController;
-	processes: Set<Recording>;
+	processes: Set<OwnedProcess>;
 	directories: Set<RecordingDirectory>;
+	primary?: Recording;
+	live?: LiveSession;
 	keepAudio?: boolean;
-	/** Audio the user was already told is kept; it is never removed afterwards. */
-	reportedAudioDirectory?: RecordingDirectory;
 	completion?: Promise<void>;
 	startupFailureCleanup?: Promise<unknown>;
 };
@@ -73,8 +76,9 @@ type MicmeOperation = {
 class EarlyRecorderExitError extends Error {
 	private readonly readStderr: Recording["stderr"];
 
-	constructor(kind: "recorder" | "streaming", exit: ExitResult, recording: Recording) {
-		super(`Micme ${kind} exited early (${formatExit(exit)}).`);
+	constructor(exit: ExitResult, recording: Recording, live = false) {
+		const help = live ? " Check the audio device or configure the recorder to keep writing a growing 16 kHz mono signed 16-bit PCM WAV until stopped." : "";
+		super(`Micme recorder exited early (${formatExit(exit)}).${help}`);
 		this.readStderr = recording.stderr;
 	}
 
@@ -122,6 +126,7 @@ export class MicmeSessionOwner {
 	private lastShortcutInputAt = 0;
 	private lastTranscript = "";
 	private lastAudioDir = "";
+	private advisedLiveMigration = false;
 	private readonly pi: ExtensionAPI;
 
 	constructor(pi: ExtensionAPI) {
@@ -145,7 +150,7 @@ export class MicmeSessionOwner {
 			await this.start(ctx);
 			return;
 		}
-		if (active.phase === "recording" || active.phase === "streaming") {
+		if (active.phase === "recording" || active.phase === "streaming" || (active.phase === "starting" && active.live?.reader)) {
 			await this.stop(active);
 			return;
 		}
@@ -189,13 +194,13 @@ export class MicmeSessionOwner {
 		}
 
 		const phaseAtShutdown = active.phase;
-		const completion = active.completion?.catch(() => undefined);
+		const completion = active.completion?.catch(() => undefined) ?? active.live?.pump;
 		active.phase = "shutting_down";
+		clearLiveDraft(active);
 		active.controller.abort();
-		clearOperationTimers(active);
+		active.live?.reader?.close();
 		await stopOwnedProcesses(active);
 		if (phaseAtShutdown !== "starting" && completion) await raceWithTimeout(completion, 2_000);
-		clearOperationTimers(active);
 		await stopOwnedProcesses(active);
 		if (active.startupFailureCleanup) await active.startupFailureCleanup;
 		await settleRecordedAudio(this, active, "shutdown");
@@ -222,24 +227,35 @@ export class MicmeSessionOwner {
 		if (!this.transition(operation, phase)) return;
 		// Detect the hook's exit independently of the supervisor and stdio drain.
 		if (hasRecorderExited(primary)) {
-			void this.stop(operation);
+			void this.stop(operation, phase === "streaming" ? new EarlyRecorderExitError(primary.getExit(), primary, true) : undefined);
 			return;
 		}
-		void primary.exitObserved.then(() => {
-			if (this.isCurrent(operation) && operation.phase === phase) void this.stop(operation);
+		void primary.exitObserved.then((exit) => {
+			if (this.isCurrent(operation) && operation.phase === phase) {
+				void this.stop(operation, phase === "streaming" ? new EarlyRecorderExitError(exit, primary, true) : undefined);
+			}
 		});
 		const ctx = operation.context;
 		ctx.ui.setStatus(STATUS_KEY, `● ${phase} (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
 		this.recordingWidget.start(ctx, primary);
 	}
 
-	trackProcess(operation: MicmeOperation, active: Recording) {
-		operation.processes.add(active);
+	failLiveRecording(operation: MicmeOperation, error: unknown) {
+		if (this.isCurrent(operation) && operation.phase === "streaming") void this.stop(operation, error);
 	}
 
-	async allocateRecordingDirectory(operation: MicmeOperation, tempPrefix: string) {
+	adviseLiveMigration(ctx: ExtensionContext) {
+		if (this.advisedLiveMigration) return;
+		const keys = getLegacyStreamSettings();
+		if (!keys.length) return;
+		this.advisedLiveMigration = true;
+		ctx.ui.notify(`Micme stream now uses micme-live and the Audio input. Ignored legacy settings: ${keys.join(", ")}. Your saved values were not changed.`, "info");
+	}
+
+	async allocateRecordingDirectory(operation: MicmeOperation, tempPrefix: string, live = false) {
 		const keepAudio = envFlag("MICME_KEEP_AUDIO");
-		const directory = await createRecordingDirectory(operation.context.cwd, keepAudio, tempPrefix);
+		const createDirectory = live ? createLiveRecordingDirectory : createRecordingDirectory;
+		const directory = await createDirectory(operation.context.cwd, keepAudio, tempPrefix);
 		operation.keepAudio = keepAudio;
 		operation.directories.add(directory);
 		return directory;
@@ -254,10 +270,7 @@ export class MicmeSessionOwner {
 	}
 
 	pasteLastTranscript(ctx: ExtensionContext) {
-		const active = this.current;
-		// RPC has a write-only editor. Route replay through the same context that tracks live writes.
-		const replayCtx = ctx.mode === "rpc" && active && firstMainRecording(active)?.streaming ? active.context : ctx;
-		pasteOrSubmitTranscript(replayCtx, this.pi, this.lastTranscript);
+		if (!this.closed) pasteOrSubmitTranscript(ctx, this.pi, this.lastTranscript);
 	}
 
 	notifyLastAudioDirectory(ctx: ExtensionContext) {
@@ -272,7 +285,7 @@ export class MicmeSessionOwner {
 		try {
 			await work;
 		} catch (error) {
-			if (!this.isCurrent(operation)) return;
+			if (!this.isCurrent(operation) || operation.completion !== work) return;
 			operation.startupFailureCleanup = this.cleanupFailedRecordingStart(operation, error);
 			const reportedError = await operation.startupFailureCleanup;
 			if (!this.isCurrent(operation)) return;
@@ -286,18 +299,19 @@ export class MicmeSessionOwner {
 
 	private async cleanupFailedRecordingStart(operation: MicmeOperation, error: unknown) {
 		this.recordingWidget.clear(operation.context);
-		clearOperationTimers(operation);
+		clearLiveDraft(operation);
+		operation.live?.reader?.close();
 		await stopOwnedProcesses(operation);
-		// An observed hook exit can precede stderr drain; use the diagnostics available after stopping.
-		const reportedError = error instanceof EarlyRecorderExitError ? error.withDiagnostics() : error;
-		return withKeptAudio(reportedError, await settleRecordedAudio(this, operation, "failed"));
+		await operation.live?.pump;
+		return withKeptAudio(recordingError(operation, error), await settleRecordedAudio(this, operation, "failed"));
 	}
 
-	private async stop(operation: MicmeOperation) {
+	private async stop(operation: MicmeOperation, failure?: unknown) {
 		if (!this.transition(operation, "stopping")) return;
 		operation.context.ui.setStatus(STATUS_KEY, "stopping…");
+		clearLiveDraft(operation);
 		this.recordingWidget.clear(operation.context);
-		const work = stopAndTranscribe(this, operation, this.pi);
+		const work = stopAndTranscribe(this, operation, this.pi, failure);
 		operation.completion = work;
 		try {
 			await work;
@@ -427,137 +441,137 @@ async function startClipRecording(owner: MicmeSessionOwner, operation: MicmeOper
 	const command = await buildRecorderCommand(audioPath, directory.filesPath, operation.controller.signal);
 	if (!owner.isCurrent(operation)) return;
 	const active = spawnRecording(command, audioPath, directory.path, directory);
-	owner.trackProcess(operation, active);
+	operation.primary = active;
+	operation.processes.add(active);
 	const earlyExit = await raceWithTimeout(active.exitObserved, RECORDER_STARTUP_GRACE_MS);
 	if (!owner.isCurrent(operation)) return;
-	if (earlyExit) throw new EarlyRecorderExitError("recorder", earlyExit, active);
+	if (earlyExit) throw new EarlyRecorderExitError(earlyExit, active);
 
 	owner.activateRecording(operation, "recording", active, stopHint);
 }
 
 async function startStreamingTranscription(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext, stopHint: string) {
-	const plan = resolveStreamingTranscriptionPlan();
-	await ensureWhisperCppModel(plan.modelPath, ctx, { allowDownload: plan.modelDownloadable !== false, signal: operation.controller.signal });
-	if (!owner.isCurrent(operation)) return;
+	owner.adviseLiveMigration(ctx);
+	const plan = resolveLivePlan();
+	const { signal } = operation.controller;
+	ctx.ui.setStatus(STATUS_KEY, "preparing live models…");
+	await ensureLiveModels(plan, ctx, signal);
+	signal.throwIfAborted();
 
-	const directory = await owner.allocateRecordingDirectory(operation, "micme-stream-");
-	if (!owner.isCurrent(operation)) {
-		await cleanupRecordingDirectory(owner, operation, directory);
-		return;
-	}
-
-	const clipPlan = getStreamFinalizeWithClip() ? await prepareStreamingClip(operation, directory) : undefined;
-	if (!owner.isCurrent(operation)) return;
-	const streamRecording = spawnWhisperStreamingRecording(plan, directory.path);
-	owner.trackProcess(operation, streamRecording);
-	initializeStreamingRecording(ctx, streamRecording);
-	const [earlyExit, clipFailure] = await Promise.all([
-		raceWithTimeout(streamRecording.exitObserved, RECORDER_STARTUP_GRACE_MS),
-		startStreamingClip(owner, operation, streamRecording, directory, clipPlan),
-	]);
-	if (!owner.isCurrent(operation)) return;
-	if (earlyExit) throw new EarlyRecorderExitError("streaming", earlyExit, streamRecording);
-	if (clipFailure) await fallBackFromStreamingClipStart(owner, operation, streamRecording, clipFailure.error);
-	owner.activateRecording(operation, "streaming", streamRecording, stopHint);
-}
-
-function resolveStreamingTranscriptionPlan(): StreamingTranscriptionPlan {
-	const plan = resolveTranscriptionPlan({ transcriptionMode: "stream" });
-	if (plan.effectiveBackend !== "whisper.cpp" || !plan.binary || !plan.modelPath) {
-		throw new Error(formatTranscriptionPlan(plan));
-	}
-	return plan as StreamingTranscriptionPlan;
-}
-
-function spawnWhisperStreamingRecording(plan: StreamingTranscriptionPlan, tempDir: string) {
-	const command = buildWhisperStreamCommand(plan.binary, plan.modelPath, tempDir);
-	return spawnRecording(command, "", tempDir);
-}
-
-function initializeStreamingRecording(ctx: ExtensionContext, streamRecording: Recording) {
-	streamRecording.streaming = {
-		baseText: ctx.ui.getEditorText(),
-		renderedWordCount: 0,
-		outputBuffer: "",
-		lastText: "",
-		emittedWords: [],
-		candidateWords: [],
-		lastHypothesisWords: [],
-		startedAt: Date.now(),
-	};
-	streamRecording.process.stdout?.on("data", (chunk: Buffer | string) => {
-		// Draining pipes after a spontaneous exit must not restart the live preview timer.
-		if (!streamRecording.stopRequested && hasRecorderExited(streamRecording)) return;
-		const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-		handleStreamingOutput(ctx, streamRecording, text);
+	ctx.ui.setStatus(STATUS_KEY, "loading live models…");
+	const child = spawnLiveWorker(buildLiveWorkerCommand(plan));
+	operation.processes.add(child);
+	const worker = new LiveWorker(child, signal, (update) => {
+		if (!owner.isCurrent(operation) || worker.signal.aborted) return;
+		const { primary, live } = operation;
+		if (!primary || !live) return;
+		if (update.type === "final") {
+			primary.liveDraft = undefined;
+			live.transcript.commit(update.text);
+		} else if (!live.stopping) {
+			primary.liveDraft = update.text || undefined;
+			if (update.text) live.firstDraftAt ??= performance.now();
+		}
 	});
+	const live: LiveSession = {
+		worker, child, finalizeWithClip: plan.finalizeWithClip, transcript: new LiveTranscript(ctx),
+		startedAt: 0, peakLag: 0, level: 0, lastPcmAt: 0, stopping: false,
+	};
+	operation.live = live;
+	const ready = await worker.ready;
+	worker.signal.throwIfAborted();
+	if (envFlag("MICME_STREAM_DIAGNOSTICS")) {
+		ctx.ui.notify(`Micme live model load: ${Math.round(ready.loadMs)} ms (ASR ${ready.asrLoads}, VAD ${ready.vadLoads})`, "info");
+	}
+
+	ctx.ui.setStatus(STATUS_KEY, "waiting for live audio…");
+	live.captureStartup = startLiveCapture(owner, operation, live);
+	const active = await live.captureStartup;
+	worker.signal.throwIfAborted();
+	if (operation.phase !== "starting") return;
+	live.startedAt = performance.now();
+	worker.signal.addEventListener("abort", () => owner.failLiveRecording(operation, worker.failure), { once: true });
+	owner.activateRecording(operation, "streaming", active, stopHint);
 }
 
-async function prepareStreamingClip(operation: MicmeOperation, directory: RecordingDirectory): Promise<StreamingClipPlan> {
+async function startLiveCapture(owner: MicmeSessionOwner, operation: MicmeOperation, live: LiveSession) {
+	const { worker } = live;
+	const { signal } = worker;
+	const directory = await owner.allocateRecordingDirectory(operation, "micme-stream-", true);
+	if (!owner.isCurrent(operation)) await cleanupRecordingDirectory(owner, operation, directory);
+	signal.throwIfAborted();
 	const audioPath = join(directory.filesPath, "raw.wav");
+	const command = await buildLiveRecorderCommand(audioPath, directory, signal);
+	signal.throwIfAborted();
+	const active = spawnRecording(command, audioPath, directory.path, directory);
+	active.audioLevel = () => performance.now() - live.lastPcmAt < 250 ? live.level : 0;
+	active.livePcmMeter = true;
+	operation.primary = active;
+	operation.processes.add(active);
+	void active.exitObserved.then((exit) => {
+		if (operation.phase === "starting") worker.fail(new EarlyRecorderExitError(exit, active, true));
+	});
+	const timer = setTimeout(() => {
+		worker.fail(new Error("Micme timed out waiting for live PCM. Check the microphone or configure a growing 16 kHz mono signed 16-bit PCM WAV recorder."));
+	}, worker.timeoutMs);
 	try {
-		const command = await buildRecorderCommand(audioPath, directory.filesPath, operation.controller.signal);
-		return { audioPath, command };
+		const reader = await openLivePcm(audioPath, directory, signal);
+		live.reader = reader;
+		operation.context.ui.setStatus(STATUS_KEY, "waiting for microphone samples…");
+		const first = await firstLivePcm(live, reader);
+		signal.throwIfAborted();
+		if (first) live.pump = pumpLivePcm(live, reader, first).catch((error: unknown) => worker.fail(error));
+		return active;
 	} catch (error) {
-		return { error };
+		live.reader?.close();
+		throw worker.failure ?? error;
+	} finally {
+		clearTimeout(timer);
 	}
 }
 
-async function startStreamingClip(
-	owner: MicmeSessionOwner,
-	operation: MicmeOperation,
-	streamRecording: Recording,
-	directory: RecordingDirectory,
-	plan: StreamingClipPlan | undefined,
-): Promise<StreamingClipFailure | undefined> {
-	if (!plan || "error" in plan) return plan;
-	try {
-		const clip = spawnRecording(plan.command, plan.audioPath, directory.path, directory);
-		streamRecording.clipRecording = clip;
-		owner.trackProcess(operation, clip);
-		const earlyExit = await raceWithTimeout(clip.exitObserved, RECORDER_STARTUP_GRACE_MS);
-		if (earlyExit) return { error: new EarlyRecorderExitError("recorder", earlyExit, clip) };
-	} catch (error) {
-		return { error };
+async function firstLivePcm(live: LiveSession, reader: LivePcmReader) {
+	while (!live.stopping) {
+		const block = await reader.read(false);
+		if (block.pcm.length) return block;
+		if (!live.stopping) await livePoll(live.worker.signal);
+	}
+	// The user may stop after the verified file opened but before it has any
+	// samples. Let the recorder close its header, then validate it in final drain.
+	return undefined;
+}
+
+async function pumpLivePcm(live: LiveSession, reader: LivePcmReader, first: Awaited<ReturnType<LivePcmReader["read"]>>) {
+	const { worker } = live;
+	let block = first;
+	for (;;) {
+		worker.signal.throwIfAborted();
+		if (block.pcm.length) {
+			// A block read concurrently with stop must still be fed before the final drain.
+			const preview = !live.stopping && caughtUpForLivePreview(block.availableThrough, worker.through);
+			await sendLivePcm(live, block, preview);
+		}
+		if (live.stopping) return;
+		if (!block.pcm.length) {
+			await livePoll(worker.signal);
+			if (live.stopping) return;
+		}
+		block = await reader.read(false);
 	}
 }
 
-async function fallBackFromStreamingClipStart(owner: MicmeSessionOwner, operation: MicmeOperation, streamRecording: Recording, error: unknown) {
-	const clip = streamRecording.clipRecording;
-	// Stop only the companion and drain its diagnostics before inspecting partial audio.
-	const stopFailure = clip ? await stopProcess(clip).then(() => undefined, (error: unknown) => ({ error })) : undefined;
-	if (!owner.isCurrent(operation)) return;
-	if (hasRecorderExited(streamRecording)) throw new EarlyRecorderExitError("streaming", streamRecording.getExit(), streamRecording);
-
-	// Detach the unusable clip so stopping the stream takes the existing live-only path.
-	streamRecording.clipRecording = undefined;
-	// The operation continues, so report kept audio now and protect it from later cleanup.
-	const kept = stopFailure && clip?.directory
-		? { note: "Audio may remain in", path: clip.directory.path, directory: clip.directory }
-		: findCapturedAudio(operation);
-	if (kept) {
-		operation.reportedAudioDirectory = kept.directory;
-		owner.rememberAudioDirectory(operation, kept.path);
-	}
-	const startupError = error instanceof EarlyRecorderExitError ? error.withDiagnostics() : error;
-	const details = [startupError, ...(stopFailure ? [stopFailure.error] : [])]
-		.map((failure) => failure instanceof Error ? failure.message : String(failure)).join("\n");
-	const message = sanitizeTerminalOutput(withKeptAudio(details, kept).message) || "unknown error";
-	operation.context.ui.notify(`Micme will use the live append-only stream transcript because the final clip recorder could not start: ${message}`, "warning");
+function sendLivePcm(live: LiveSession, block: Awaited<ReturnType<LivePcmReader["read"]>>, preview: boolean) {
+	live.level = pcm16BufferLevel(block.pcm);
+	live.lastPcmAt = performance.now();
+	live.peakLag = Math.max(live.peakLag, block.availableThrough - live.worker.through);
+	return live.worker.send(block.pcm, preview);
 }
 
-async function stopAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI) {
-	const active = firstMainRecording(operation);
+async function stopAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, failure: unknown) {
+	const active = operation.primary;
 	if (!active) throw new Error("Micme lost ownership of its recording process.");
-	if (active.streaming) {
-		await stopStreamingTranscription(owner, operation, pi, active, active.streaming);
-		return;
-	}
-	await stopClipAndTranscribe(owner, operation, pi, active);
-}
-
-function firstMainRecording(operation: MicmeOperation) {
-	return operation.processes.values().next().value;
+	if (operation.live) await stopStreamingTranscription(owner, operation, pi, active, operation.live, failure);
+	else await stopClipAndTranscribe(owner, operation, pi, active);
 }
 
 async function stopClipAndTranscribe(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, active: Recording) {
@@ -585,41 +599,124 @@ async function stopStreamingTranscription(
 	operation: MicmeOperation,
 	pi: ExtensionAPI,
 	active: Recording,
-	state: NonNullable<Recording["streaming"]>,
+	live: LiveSession,
+	failure: unknown,
 ) {
 	const ctx = operation.context;
-	const clipStopPromise = stopClipRecording(active);
-	prepareStreamingStop(ctx, active, state);
-	const exit = await stopProcess(active);
-	if (!owner.isCurrent(operation)) return;
+	const { worker, reader } = live;
+	live.stopping = true;
+	let transcript: string;
+	let refined = false;
 	try {
-		assertExpectedProcessExit(active, exit, "stream");
+		if (failure !== undefined) throw failure;
+		if (!reader) throw new Error("Micme lost its verified PCM reader.");
+		const exit = await stopProcess(active);
+		worker.signal.throwIfAborted();
+		assertExpectedProcessExit(active, exit, "recorder");
+		owner.transition(operation, "finalizing");
+		ctx.ui.setStatus(STATUS_KEY, "finalizing stream…");
+		const done = await finishLiveWorker(live, reader);
+		await stopProcess(live.child); // Release the supervisor and any inherited workers.
+		worker.signal.throwIfAborted();
+		if (envFlag("MICME_STREAM_DIAGNOSTICS")) {
+			const firstDraft = live.firstDraftAt === undefined ? "none" : `${Math.round(live.firstDraftAt - live.startedAt)} ms`;
+			ctx.ui.notify(`Micme live: first draft ${firstDraft}; ${done.through} samples, peak lag ${live.peakLag} samples, ${done.vadFrames} VAD frames, ${done.asrCalls} ASR calls in ${Math.round(done.asrMs)} ms`, "info");
+		}
+		transcript = live.transcript.text;
+		if (transcript && live.finalizeWithClip) {
+			try {
+				transcript = await refineLiveTranscript(operation, reader, done.through);
+				refined = true;
+			} catch (error) {
+				if (!owner.isCurrent(operation)) return;
+				owner.rememberTranscript(operation, live.transcript.text);
+				reader.close();
+				const kept = await settleRecordedAudio(owner, operation, "failed");
+				const message = sanitizeTerminalOutput(withKeptAudio(error, kept).message);
+				ctx.ui.notify(`Micme saved the confirmed live transcript for /micme last because final clip refinement failed: ${message}`, "warning");
+				return;
+			}
+		}
 	} catch (error) {
-		await clipStopPromise;
+		worker.fail(error);
+		await stopOwnedProcesses(operation);
+		await live.pump;
+		reader?.close();
 		if (!owner.isCurrent(operation)) return;
-		throw withKeptAudio(error, await settleRecordedAudio(owner, operation, "failed"));
+		throw withKeptAudio(recordingError(operation, error), await settleRecordedAudio(owner, operation, "failed"));
+	} finally {
+		reader?.close();
 	}
 
-	owner.transition(operation, "finalizing");
-	ctx.ui.setStatus(STATUS_KEY, "finalizing stream…");
-	await completeStreamingStop(owner, operation, pi, active, state, clipStopPromise);
+	if (!owner.isCurrent(operation)) return;
+	try {
+		if (!transcript) ctx.ui.notify("Micme did not recognize any words in the live stream.", "warning");
+		else {
+			owner.rememberTranscript(operation, transcript);
+			live.transcript.deliver(pi, transcript, refined);
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Micme could not deliver the transcript: ${message}`, { cause: error });
+	} finally {
+		if (owner.isCurrent(operation)) await settleRecordedAudio(owner, operation, "delivered");
+	}
+}
+
+async function finishLiveWorker(live: LiveSession, reader: LivePcmReader) {
+	const { worker } = live;
+	const timer = setTimeout(() => worker.fail(new Error("Micme timed out draining the final live PCM.")), worker.timeoutMs);
+	try {
+		await live.captureStartup;
+		await live.pump;
+		for (;;) {
+			worker.signal.throwIfAborted();
+			const block = await reader.read(true);
+			if (!block.pcm.length) {
+				if (block.availableThrough !== worker.through) throw new Error("Micme did not acknowledge all captured PCM samples.");
+				return await worker.finish();
+			}
+			await sendLivePcm(live, block, false);
+		}
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function refineLiveTranscript(operation: MicmeOperation, reader: LivePcmReader, through: number) {
+	requireValidMicmeConfig();
+	const { context: ctx, controller: { signal } } = operation;
+	const target = await createLiveRecordingDirectory(ctx.cwd, false, "micme-refine-");
+	try {
+		const audioPath = await reader.writeRefinementInput(target, through, signal);
+		await validateAudioForTranscription(ctx, audioPath, signal, target.cwdFd);
+		signal.throwIfAborted();
+		const text = normalizeTranscript(await transcribe(audioPath, target.filesPath, ctx, signal, target));
+		if (!text) throw new Error("Micme did not receive any final transcript text.");
+		return text;
+	} finally {
+		try {
+			await target.remove();
+		} finally {
+			target.close();
+		}
+	}
 }
 
 // The one place that decides what happens to recorded audio when an operation ends:
 // - failed: keep captured audio so the failure can be debugged; the caller says where.
 // - delivered or shutdown: keep captured audio only when Keep audio is on.
-// Captured means at least MIN_AUDIO_BYTES, so a header-only WAV is not kept. Audio
-// already reported as kept during the operation is never removed.
+// Captured means at least MIN_AUDIO_BYTES, so a header-only WAV is not kept.
 async function settleRecordedAudio(owner: MicmeSessionOwner, operation: MicmeOperation, outcome: AudioOutcome) {
 	const kept = outcome === "failed" || operation.keepAudio ? findCapturedAudio(operation) : undefined;
 	if (kept) owner.rememberAudioDirectory(operation, kept.path);
-	const removable = [...operation.directories].filter((directory) => directory !== kept?.directory && directory !== operation.reportedAudioDirectory);
+	const removable = [...operation.directories].filter((directory) => directory !== kept?.directory);
 	await Promise.all(removable.map((directory) => cleanupRecordingDirectory(owner, operation, directory)));
 	return kept;
 }
 
 function findCapturedAudio(operation: MicmeOperation): KeptAudio | undefined {
-	const clip = [...operation.processes].find((recording) => recording.directory);
+	const clip = operation.primary;
 	if (!clip?.directory) return;
 	const { directory } = clip;
 	try {
@@ -637,87 +734,18 @@ function withKeptAudio(error: unknown, kept: KeptAudio | undefined) {
 	return new Error(`${message}\n${kept.note}: ${sanitizeTerminalOutput(kept.path)}`, { cause: error });
 }
 
-function stopClipRecording(active: Recording) {
-	return active.clipRecording ? stopRecorder(active.clipRecording).then(() => undefined, (error: unknown) => error) : undefined;
+function recordingError(operation: MicmeOperation, error: unknown) {
+	// Hook exit observation can precede the bounded stderr drain.
+	if (error instanceof EarlyRecorderExitError) return error.withDiagnostics();
+	const stderr = operation.live && liveWorkerDiagnostics(operation.live.child);
+	if (!stderr) return error;
+	return new Error(`${error instanceof Error ? error.message : String(error)}\nLive worker output:\n${stderr}`);
 }
 
 async function validateAudioForTranscription(ctx: ExtensionContext, audioPath: string, signal: AbortSignal, cwdFd?: number) {
 	const outcome = await validateRecordedAudio(audioPath, signal, cwdFd);
 	if (outcome.status !== "skipped" || outcome.reason !== "ffmpeg-unavailable") return;
 	ctx.ui.notify("Micme skipped silence validation because ffmpeg was not found. Install ffmpeg or set MICME_VALIDATE_AUDIO=0 to disable the silence guard.", "warning");
-}
-
-function prepareStreamingStop(ctx: ExtensionContext, active: Recording, state: NonNullable<Recording["streaming"]>) {
-	drainStreamingOutput(ctx, active, false);
-	renderStreamingPreview(ctx, state, false);
-	clearStreamingFlush(state);
-}
-
-async function completeStreamingStop(
-	owner: MicmeSessionOwner,
-	operation: MicmeOperation,
-	pi: ExtensionAPI,
-	active: Recording,
-	state: NonNullable<Recording["streaming"]>,
-	clipStopPromise: ReturnType<typeof stopClipRecording>,
-) {
-	const ctx = operation.context;
-	drainStreamingOutput(ctx, active, true);
-	showStreamingDiagnostics(ctx, state);
-	const clipRecording = active.clipRecording;
-	if (!clipRecording) {
-		useLiveStreamingTranscript(owner, operation, pi, state);
-		clearStreamingFlush(state);
-		if (owner.isCurrent(operation)) await settleRecordedAudio(owner, operation, "delivered");
-		return;
-	}
-
-	renderStreamingPreview(ctx, state, false);
-	clearStreamingFlush(state);
-	await finalizeStreamingClip(owner, operation, pi, active, clipRecording, state, clipStopPromise);
-}
-
-function useLiveStreamingTranscript(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, state: NonNullable<Recording["streaming"]>) {
-	const ctx = operation.context;
-	flushPendingStreamingWords(ctx, state);
-	const liveTranscript = normalizeTranscript(getStreamingTranscript(state));
-	if (!owner.isCurrent(operation)) return;
-	if (!liveTranscript) {
-		ctx.ui.notify("Micme did not recognize any words in the live stream.", "warning");
-		return;
-	}
-
-	owner.rememberTranscript(operation, liveTranscript);
-	if (!envFlag("MICME_AUTO_SUBMIT") || keepEditedStreamingEditor(ctx, state)) return;
-	ctx.ui.setEditorText(state.baseText);
-	if (!owner.isCurrent(operation)) return;
-	pasteOrSubmitTranscript(ctx, pi, liveTranscript);
-}
-
-async function finalizeStreamingClip(
-	owner: MicmeSessionOwner,
-	operation: MicmeOperation,
-	pi: ExtensionAPI,
-	active: Recording,
-	clipRecording: Recording,
-	state: NonNullable<Recording["streaming"]>,
-	clipStopPromise: ReturnType<typeof stopClipRecording>,
-) {
-	let transcript: string;
-	try {
-		const clipStopError = await clipStopPromise;
-		if (!owner.isCurrent(operation)) return;
-		if (clipStopError) throw clipStopError;
-		const rawTranscript = await transcribeRecordingClip(owner, operation, clipRecording);
-		if (!owner.isCurrent(operation)) return;
-		transcript = normalizeTranscript(rawTranscript);
-		if (!transcript) throw new Error("Micme did not receive any final transcript text.");
-	} catch (error) {
-		if (owner.isCurrent(operation)) await handleFinalStreamingClipError(owner, operation, state, error);
-		return;
-	}
-
-	await deliverTranscribedClip(owner, operation, pi, transcript, state);
 }
 
 async function transcribeRecordingClip(owner: MicmeSessionOwner, operation: MicmeOperation, recording: Recording) {
@@ -733,18 +761,11 @@ async function transcribeRecordingClip(owner: MicmeSessionOwner, operation: Micm
 	return transcribe(preparedAudioPath, filesPath, ctx, signal, directory);
 }
 
-async function deliverTranscribedClip(
-	owner: MicmeSessionOwner,
-	operation: MicmeOperation,
-	pi: ExtensionAPI,
-	transcript: string,
-	streaming?: NonNullable<Recording["streaming"]>,
-) {
+async function deliverTranscribedClip(owner: MicmeSessionOwner, operation: MicmeOperation, pi: ExtensionAPI, transcript: string) {
 	const ctx = operation.context;
 	owner.rememberTranscript(operation, transcript);
 	try {
-		if (streaming) pasteOrSubmitFinalStreamingTranscript(ctx, pi, streaming, transcript);
-		else pasteOrSubmitTranscript(ctx, pi, transcript);
+		pasteOrSubmitTranscript(ctx, pi, transcript);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`Micme could not deliver the transcript: ${message}`, { cause: error });
@@ -753,21 +774,8 @@ async function deliverTranscribedClip(
 	}
 }
 
-async function handleFinalStreamingClipError(owner: MicmeSessionOwner, operation: MicmeOperation, state: NonNullable<Recording["streaming"]>, error: unknown) {
-	const ctx = operation.context;
-	flushPendingStreamingWords(ctx, state);
-	const liveTranscript = normalizeTranscript(getStreamingTranscript(state));
-	if (liveTranscript) owner.rememberTranscript(operation, liveTranscript);
-	const kept = await settleRecordedAudio(owner, operation, "failed");
-	if (!owner.isCurrent(operation)) return;
-	const message = sanitizeTerminalOutput(withKeptAudio(error, kept).message);
-	ctx.ui.notify(`Micme kept the live append-only stream transcript because final clip transcription failed: ${message}`, "warning");
-}
-
-function clearOperationTimers(operation: MicmeOperation) {
-	for (const active of operation.processes) {
-		if (active.streaming) clearStreamingFlush(active.streaming);
-	}
+function clearLiveDraft(operation: MicmeOperation) {
+	if (operation.primary) operation.primary.liveDraft = undefined;
 }
 
 async function stopOwnedProcesses(operation: MicmeOperation) {
@@ -791,20 +799,12 @@ async function cleanupRecordingDirectory(owner: MicmeSessionOwner, operation: Mi
 }
 
 function createGuardedContext(ctx: ExtensionContext, isCurrent: () => boolean) {
-	let lastRpcEditorText: string | undefined;
 	const guardedUi = new Proxy(ctx.ui, {
 		get(target, property, receiver) {
 			const value = Reflect.get(target, property, receiver) as unknown;
 			if (typeof value !== "function") return value;
-			if (ctx.mode === "rpc" && property === "getEditorText") return () => lastRpcEditorText ?? ctx.ui.getEditorText();
 			if (!GUARDED_UI_METHODS.has(String(property))) return value.bind(target);
-			return (...args: unknown[]) => {
-				if (!isCurrent()) return undefined;
-				const result: unknown = Reflect.apply(value, target, args);
-				// Pi RPC implements both of these as set_editor_text; getEditorText() always returns "".
-				if (ctx.mode === "rpc" && (property === "setEditorText" || property === "pasteToEditor") && typeof args[0] === "string") lastRpcEditorText = args[0];
-				return result;
-			};
+			return (...args: unknown[]) => isCurrent() ? Reflect.apply(value, target, args) as unknown : undefined;
 		},
 	});
 	return new Proxy(ctx, {
