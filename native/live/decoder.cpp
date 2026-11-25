@@ -33,6 +33,9 @@ constexpr int release = rate / 2;
 constexpr int tail = rate / 5;
 constexpr int rollover = 20 * rate;
 constexpr int overlap = rate;
+constexpr int resume_gap = 5 * rate / 4; // Measured from the previous final's padded end to the new VAD onset.
+constexpr std::size_t resume_prompt_bytes = 256;
+constexpr int resume_prompt_tokens = 32;
 constexpr int preview_step = ((rate + vad_frame - 1) / vad_frame) * vad_frame;
 constexpr std::size_t max_line = 64 * 1024;
 
@@ -441,6 +444,12 @@ private:
         params.greedy.best_of = 1;
         params.temperature_inc = 0.0f;
         params.no_context = true;
+        // Supply only the previous confirmed endpoint, not Whisper's residual
+        // state or any draft. The input PCM and ownership ranges don't change.
+        if (mode == Decode::Endpoint && !need_times && !resume_prompt_.empty()) {
+            params.initial_prompt = resume_prompt_.c_str();
+            params.n_max_text_ctx = resume_prompt_tokens;
+        }
         params.suppress_nst = true;
         params.token_timestamps = need_times;
         params.print_progress = params.print_realtime = params.print_timestamps = params.print_special = false;
@@ -514,12 +523,14 @@ private:
             }
             rising_ += size;
             if (rising_ < onset) return;
-            frontier_ = std::max({frontier_, audio_start_, scanned_ - rising_ - preroll});
+            const auto speech_start = scanned_ - rising_;
+            if (speech_start - frontier_ > resume_gap) resume_prompt_.clear();
+            frontier_ = std::max({frontier_, audio_start_, speech_start - preroll});
             decode_from_ = frontier_;
             seam_.clear();
             draft_.clear();
             pauses_.clear();
-            preview_at_ = scanned_ - rising_;
+            preview_at_ = speech_start;
             voiced_ = rising_;
             rising_ = 0;
             quiet_since_ = -1;
@@ -558,11 +569,21 @@ private:
         const bool overlap_present = decode_from_ < frontier_;
         const auto result = decode_window(decode_from_, end, overlap_present, Decode::Endpoint);
         if (!result.placeable) throw std::runtime_error("Could not place final words after a live window boundary.");
-        text_event("final", frontier_, end, overlap_present ? result.owned(seam_.first_owned(result, frontier_), end) : result.text);
+        const auto text = overlap_present ? result.owned(seam_.first_owned(result, frontier_), end) : result.text;
+        text_event("final", frontier_, end, text);
         frontier_ = end;
+        // A translation is not source-language context. Limit both memory
+        // here and token history in the next endpoint decode.
+        resume_prompt_.clear();
+        if (!translate_) {
+            std::size_t first = text.size() > resume_prompt_bytes ? text.size() - resume_prompt_bytes : 0;
+            while (first < text.size() && (static_cast<unsigned char>(text[first]) & 0xc0) == 0x80) ++first;
+            resume_prompt_ = text.substr(first);
+        }
     }
 
     void cut_span(bool previews) {
+        resume_prompt_.clear(); // This utterance now owns its own acoustic context.
         const auto result = decode_window(decode_from_, scanned_, true, Decode::Rollover);
         if (!result.placeable) throw std::runtime_error("Could not place words at the live window limit.");
         // An empty window advances by exactly 20 seconds and must not leave
@@ -609,6 +630,7 @@ private:
     Diagnostics &diagnostics_;
     std::string language_;
     bool translate_;
+    std::string resume_prompt_;
     std::unique_ptr<whisper_context, decltype(&whisper_free)> asr_{nullptr, whisper_free};
     std::unique_ptr<whisper_vad_context, decltype(&whisper_vad_free)> vad_{nullptr, whisper_vad_free};
     std::vector<float> audio_;

@@ -51,6 +51,9 @@ int whisper_full(whisper_context *ctx, whisper_full_params params, const float *
         const char *word = sample == 2000 ? u8" Gr\u00fc\u00df" : sample == 3000 ? " Okay." : sample == 4000 ? " encore" :
                            sample == 5000 ? " here" : sample == 6000 ? " we" : sample == 7000 ? " go" :
                            sample == 8000 ? " again" : nullptr;
+        if (sample == 9000 && ctx->fixture == "pause") {
+            word = params.initial_prompt && std::string_view(params.initial_prompt) == " here we" ? " go" : " went";
+        }
         if (!word) continue;
         auto from = ctx->fixture == "untimed" ? -1 : i / 160;
         const int drift = count < 3 * 16000 && i < 2 * 16000 ?
