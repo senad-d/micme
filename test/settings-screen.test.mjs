@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -11,7 +12,8 @@ import { setImmediate as nextImmediate } from "node:timers/promises";
 const { reloadMicmeConfig, getTranscriptionModeProfile } = await import("../src/config.ts");
 const { buildConfigurationItems, createModelSelector, showConfiguration, uniqueStrings } = await import("../src/settings.ts");
 const { resolveTranscriptionPlan } = await import("../src/backends.ts");
-const { buildRecorderCommand } = await import("../src/audio.ts");
+const { buildLiveRecorderSpec, buildRecorderCommand } = await import("../src/audio.ts");
+const { buildLiveWorkerCommand } = await import("../src/streaming.ts");
 
 const theme = {
 	fg(_color, text) {
@@ -201,6 +203,177 @@ test("configuration screen renders, searches, captures shortcuts, and saves valu
 		harness.component.handleInput("\x1b");
 		harness.component.handleInput("\x1b");
 		assert.equal(harness.doneCount, 1);
+	});
+});
+
+test("Linux settings and live argv use the same configured input, worker, VAD, ASR and language with shell precedence", { skip: process.platform !== "linux" }, async (t) => {
+	await withTempAgent(t, async (root) => {
+		const bin = join(root, "bin");
+		await mkdir(bin);
+		await writeFile(join(bin, "ffmpeg"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		const worker = join(bin, "Local worker");
+		const vad = join(root, "Speech detector.bin");
+		const model = join(root, "ggml-base.en.bin");
+		for (const path of [worker, vad, model]) await writeFile(path, "fixture", { mode: 0o755 });
+		const configPath = join(root, "micme.json");
+		const config = {
+			MICME_TRANSCRIPTION_MODE: "stream",
+			MICME_TRANSCRIBE_BACKEND: "auto",
+			MICME_LANGUAGE: "auto",
+			MICME_WHISPER_CPP_MODEL: model,
+			MICME_LIVE_BIN: worker,
+			MICME_VAD_MODEL: vad,
+		};
+		await writeFile(configPath, JSON.stringify(config));
+		const defaults = createHarness(root);
+		await openSettingsPane(defaults, 3);
+		assert.match(defaults.component.render(100).join("\n"), /Microphone device\s+default/);
+		assert.match(defaults.component.render(100).join("\n"), /MICME_PULSE_SOURCE.*micme.json/);
+		defaults.component.handleInput("q");
+
+		config.MICME_PULSE_SOURCE = "studio.monitor";
+		await writeFile(configPath, JSON.stringify(config));
+		await assertEffectiveLinuxSettings(root, config);
+
+		const overrides = { MICME_PULSE_SOURCE: "shell.monitor", MICME_LIVE_BIN: join(bin, "Shell worker"), MICME_VAD_MODEL: join(root, "Shell detector.bin") };
+		await writeFile(overrides.MICME_LIVE_BIN, "fixture", { mode: 0o755 });
+		await writeFile(overrides.MICME_VAD_MODEL, "fixture");
+		await withEnv(overrides, () => assertEffectiveLinuxSettings(root, { ...config, ...overrides }, true));
+	});
+});
+
+async function openSettingsPane(harness, category) {
+	await showConfiguration(harness.ctx);
+	await waitFor(() => !harness.component.render(100).join("\n").includes("Loading "), "configuration discovery did not finish");
+	for (let index = 0; index < category; index++) harness.component.handleInput("\x1b[B");
+	harness.component.handleInput("\r");
+}
+
+async function assertEffectiveLinuxSettings(root, config, shellOverride = false) {
+	const harness = createHarness(root);
+	await openSettingsPane(harness, 2);
+	const stream = harness.component.render(160).join("\n");
+	assert.match(stream, /Live decoder/);
+	assert.ok(stream.includes(config.MICME_LIVE_BIN));
+	assert.match(stream, /MICME_LIVE_BIN.*micme\.json/);
+	if (shellOverride) assert.match(stream, /Shell override: MICME_LIVE_BIN/);
+	const narrow = harness.component.render(40);
+	assert.ok(narrow.every((line) => visibleWidth(line) <= 40));
+	assert.match(narrow.join("\n"), /MICME_LIVE_BIN/);
+	assert.match(narrow.join("\n"), /restart Pi/);
+	harness.component.handleInput("\r");
+	assert.doesNotMatch(harness.component.render(100).join("\n"), /Saving /);
+	harness.component.handleInput("\x1b[B");
+	const vad = harness.component.render(160).join("\n");
+	assert.ok(vad.includes(config.MICME_VAD_MODEL));
+	assert.match(vad, /MICME_VAD_MODEL.*micme\.json/);
+	harness.component.handleInput("\t");
+	harness.component.handleInput("\x1b[B");
+	harness.component.handleInput("\r");
+	const audio = harness.component.render(100).join("\n");
+	assert.ok(audio.includes(config.MICME_PULSE_SOURCE));
+	if (shellOverride) assert.match(audio, /Shell override: MICME_PULSE_SOURCE/);
+
+	const live = resolveTranscriptionPlan({ transcriptionMode: "stream" }).live;
+	const worker = buildLiveWorkerCommand(live);
+	assert.equal(worker.command, config.MICME_LIVE_BIN);
+	assert.deepEqual(worker.args, ["--model", config.MICME_WHISPER_CPP_MODEL, "--vad-model", config.MICME_VAD_MODEL, "--language", "en"]);
+	const recorder = await buildLiveRecorderSpec(join(root, "raw.wav"), root, new AbortController().signal);
+	assert.equal(recorder.args[recorder.args.indexOf("-i") + 1], config.MICME_PULSE_SOURCE);
+	if (!shellOverride) {
+		harness.component.handleInput("\r");
+		await waitFor(async () => {
+			const saved = JSON.parse(await readFile(join(root, "micme.json"), "utf8"));
+			return saved.MICME_PULSE_SOURCE === "default" && !harness.component.render(100).join("\n").includes("Saving ");
+		}, "did not cycle from an unlisted Pulse source back to the discovered default");
+	}
+
+	harness.component.handleInput("\t");
+	harness.component.handleInput("\x1b[B");
+	harness.component.handleInput("\r");
+	harness.component.handleInput("\x1b[B");
+	assert.match(harness.component.render(100).join("\n"), /Live language: en/);
+	harness.component.handleInput("q");
+}
+
+test("settings show missing live components without suggesting they are ready", async (t) => {
+	await withTempAgent(t, async (root) => {
+		const bin = join(root, "bin");
+		await mkdir(bin);
+		const configPath = join(root, "micme.json");
+		const worker = join(bin, "micme-live");
+		const config = { MICME_TRANSCRIPTION_MODE: "stream", MICME_LIVE_BIN: worker, MICME_VAD_MODEL: join(root, "absent-vad.bin"), MICME_WHISPER_CPP_MODEL: join(root, "absent-asr.bin") };
+		await writeFile(configPath, JSON.stringify(config));
+		const missingWorker = createHarness(root);
+		await openSettingsPane(missingWorker, 2);
+		assert.match(missingWorker.component.render(100).join("\n"), /MICME_LIVE_BIN is set but not found/);
+		missingWorker.component.handleInput("q");
+
+		await writeFile(worker, "fixture", { mode: 0o755 });
+		const missingWeights = createHarness(root);
+		await openSettingsPane(missingWeights, 2);
+		missingWeights.component.handleInput("\x1b[B");
+		assert.match(missingWeights.component.render(100).join("\n"), /Speech detector model file is missing/);
+		missingWeights.component.handleInput("\t");
+		missingWeights.component.handleInput("\x1b[A");
+		missingWeights.component.handleInput("\r");
+		for (let index = 0; index < 2; index++) missingWeights.component.handleInput("\x1b[B");
+		assert.match(missingWeights.component.render(100).join("\n"), /ASR model file is missing/);
+		missingWeights.component.handleInput("q");
+	});
+});
+
+test("the live final pass and diagnostics switches reflect effective flags and save to their live config keys", async (t) => {
+	await withTempAgent(t, async (root) => {
+		const configPath = join(root, "micme.json");
+		await writeFile(configPath, JSON.stringify({ MICME_STREAM_FINALIZE_WITH_CLIP: "yes", MICME_STREAM_DIAGNOSTICS: " on " }));
+		const harness = createHarness(root);
+		await openSettingsPane(harness, 2);
+		assert.match(harness.component.render(100).join("\n"), /Stream final pass\s+ON/);
+		harness.component.handleInput("\x1b[A");
+		harness.component.handleInput("\r");
+		await waitFor(() => /Stream final pass\s+OFF/.test(harness.component.render(100).join("\n")), "live final pass was not disabled");
+		harness.component.handleInput("\t");
+		harness.component.handleInput("\x1b[A");
+		harness.component.handleInput("\x1b[A");
+		harness.component.handleInput("\r");
+		assert.match(harness.component.render(100).join("\n"), /Stream diagnostics\s+ON/);
+		harness.component.handleInput("\x1b[A");
+		harness.component.handleInput("\r");
+		await waitFor(() => /Stream diagnostics\s+OFF/.test(harness.component.render(100).join("\n")), "live diagnostics were not disabled");
+		assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { MICME_STREAM_FINALIZE_WITH_CLIP: "0", MICME_STREAM_DIAGNOSTICS: "0" });
+		harness.component.handleInput("q");
+	});
+});
+
+test("macOS settings identify the effective explicit AVFoundation input instead of an inactive picker", async (t) => {
+	mockPlatform(t, "darwin");
+	await withTempAgent(t, async (root) => {
+		const configPath = join(root, "micme.json");
+		const config = { MICME_AUDIO_DEVICE: "1", MICME_AVFOUNDATION_INPUT: ":Override Mic" };
+		await writeFile(configPath, JSON.stringify(config));
+		const harness = createHarness(root);
+		await openSettingsPane(harness, 3);
+		const audio = harness.component.render(100).join("\n");
+		assert.match(audio, /Microphone device\s+:Override Mic/);
+		assert.match(audio, /MICME_AVFOUNDATION_INPUT overrides MICME_AUDIO_DEVICE/);
+		harness.component.handleInput("\r");
+		assert.doesNotMatch(harness.component.render(100).join("\n"), /Saving /);
+		assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), config);
+		harness.component.handleInput("q");
+	});
+});
+
+test("audio settings report a custom capture override without displaying the command", async (t) => {
+	await withTempAgent(t, async (root) => {
+		await writeFile(join(root, "micme.json"), JSON.stringify({ MICME_RECORD_COMMAND: "private-recorder-options {audio}" }));
+		const harness = createHarness(root);
+		await openSettingsPane(harness, 3);
+		const audio = harness.component.render(100).join("\n");
+		assert.match(audio, /Microphone device\s+Custom recorder/);
+		assert.match(audio, /MICME_RECORD_COMMAND/);
+		assert.doesNotMatch(audio, /private-recorder-options/);
+		harness.component.handleInput("q");
 	});
 });
 
@@ -467,7 +640,8 @@ test("configuration items include discovered candidates and derived visibility",
 		const pythonPlan = resolveTranscriptionPlan({ requestedBackend: "python", pythonWhisperBinary: "whisper", whisperCppBinary: null });
 		const cppPlan = resolveTranscriptionPlan({ requestedBackend: "whisper.cpp", whisperCppBinary: "whisper-cli", whisperCppModel: { path: join(root, "models", "ggml-tiny.bin"), exists: true, downloadable: true, source: "explicit-path", modelName: "tiny" } });
 
-		assert.ok(ids.includes("MICME_STREAM_VAD_THRESHOLD"));
+		assert.deepEqual(items.filter((item) => item.categoryId === "streaming").map((item) => item.id), ["MICME_LIVE_BIN", "MICME_VAD_MODEL", "MICME_STREAM_FINALIZE_WITH_CLIP"]);
+		assert.ok(ids.includes("MICME_STREAM_DIAGNOSTICS"));
 		assert.equal(backend?.rawValue, "python");
 		assert.deepEqual(audio?.values, ["2"]);
 		assert.equal(audio?.valueLabels?.["2"], "2: Studio Mic");
