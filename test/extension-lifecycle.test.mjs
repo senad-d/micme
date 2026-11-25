@@ -1942,6 +1942,30 @@ test("valid live drafts replace one another on the actual recorder without typin
 	});
 });
 
+test("stopping after two visible live guesses without a worker final never delivers or saves either guess", { skip: process.platform === "win32" }, async (t) => {
+	await withLiveFixture(t, {
+		worker: ({ root }) => ({ events: [["partial", "The ocean is blue"], ["partial", "Please open system settings"]], sampleLog: join(root, "samples.log") }),
+		recorder: ({ root }) => ({ gates: [join(root, "revise")], tail: [1, 0] }),
+		env: { MICME_AUTO_SUBMIT: "1" },
+	}, async ({ root, harness, micme }) => {
+		harness.ctx.ui.getEditorText = () => "existing prompt";
+		const visible = () => latestRecordingWidget(harness)?.find((line) => line.includes("Live: "));
+		await micme();
+		await waitFor(() => visible()?.includes("The ocean is blue"), "first tentative guess never became visible");
+		await writeFile(join(root, "revise"), "");
+		await waitFor(() => visible()?.includes("Please open system settings"), "corrected guess never replaced the first");
+		assert.doesNotMatch(visible(), /The ocean is blue/);
+		await micme();
+		assert.deepEqual((await readProcessRows(join(root, "samples.log"))).slice(-1), ["finish 591"]);
+		assert.equal(latestRecordingWidget(harness), undefined);
+		assert.ok(harness.uiCalls.some((call) => call.level === "warning" && call.message.includes("did not recognize any words")));
+		await micme("last");
+		assert.ok(harness.uiCalls.some((call) => call.level === "warning" && call.message.includes("No previous Micme transcript")));
+		assert.equal(harness.uiCalls.some((call) => call.method === "pasteToEditor" || call.method === "setEditorText"), false);
+		assert.deepEqual(harness.sentMessages, []);
+	});
+});
+
 for (const autoSubmit of [false, true]) {
 	test(`write-only RPC never replaces or sends its live result automatically (auto-submit ${autoSubmit})`, { skip: process.platform === "win32" }, async (t) => {
 		const getPrimary = captureWidgetRecording(t);
@@ -2492,6 +2516,21 @@ test("digest mismatch keeps the confirmed transcript for explicit replay and nev
 		await assertProcessesStopped(await readProcessRows(log));
 		await micme("last");
 		assert.deepEqual(harness.sentMessages, [{ message: "fixture live transcript", options: undefined }]);
+	});
+});
+
+test("a missing live ASR model explains how to fix stream or switch to clip before capture", { skip: process.platform === "win32" }, async (t) => {
+	await withLiveFixture(t, {
+		env: ({ root }) => ({ MICME_WHISPER_CPP_MODEL: join(root, "missing-live-model.bin") }),
+	}, async ({ harness, micme, log }) => {
+		await micme();
+		assert.equal(harness.owner.getPhase(), "idle");
+		assert.deepEqual(await readProcessRows(log), []);
+		assert.equal(latestRecordingWidget(harness), undefined);
+		const diagnostic = harness.uiCalls.find((entry) => entry.level === "error")?.message ?? "";
+		assert.match(diagnostic, /missing-live-model\.bin/);
+		assert.match(diagnostic, /MICME_WHISPER_CPP_MODEL/i);
+		assert.match(diagnostic, /clip mode/i);
 	});
 });
 
