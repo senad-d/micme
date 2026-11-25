@@ -291,20 +291,21 @@ export function uniqueModelNames(names: string[]) {
 	return output;
 }
 
-export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionContext, options: ModelDownloadOptions & { allowDownload?: boolean } = {}) {
+export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionContext, options: ModelDownloadOptions & { allowDownload?: boolean; missingModelHint?: string } = {}) {
 	options.signal?.throwIfAborted();
 	assertDownloadTargetIsUsable(modelPath, "Micme model path");
 	if (isRegularFile(modelPath)) return;
+	const hint = options.missingModelHint ? `. ${options.missingModelHint}` : "";
 	if (options.allowDownload === false) {
-		throw new Error(`Micme model is missing: ${modelPath}`);
+		throw new Error(`Micme model is missing: ${modelPath}${hint}`);
 	}
 	if (!getAutoDownloadModel()) {
-		throw new Error(`Micme model is missing and auto-download is disabled: ${modelPath}`);
+		throw new Error(`Micme model is missing and auto-download is disabled: ${modelPath}${hint}`);
 	}
 
 	const modelName = getDownloadableWhisperCppModelName(modelPath);
 	if (!modelName) {
-		throw new Error(`Micme model is missing and cannot infer a standard download URL: ${modelPath}`);
+		throw new Error(`Micme model is missing and cannot infer a standard download URL: ${modelPath}${hint}`);
 	}
 
 	await ensureSharedModelDownload(getWhisperCppModelUrl(modelName), modelPath, ctx, options);

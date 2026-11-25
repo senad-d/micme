@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { reloadMicmeConfig } from "../src/config.ts";
 import { ensureLiveModels, resolveLivePlan } from "../src/live-plan.ts";
+import { ensureWhisperCppModel } from "../src/models.ts";
 
 const executableExtension = process.platform === "win32" ? ".EXE" : "";
 
@@ -199,4 +200,24 @@ test("explicit ensure provisions the resolved ASR and uses the resolved local VA
 	assert.equal(fetch.mock.callCount(), 1);
 	assert.equal(await readFile(plan.modelPath, "utf8"), "ASR fixture");
 	assert.equal(await readFile(plan.vadModelPath, "utf8"), "local VAD");
+});
+
+test("missing live ASR offers recovery without changing clip errors or attempting a download", async (t) => {
+	const { root } = await setupLiveConfig(t, {
+		MICME_AUTO_DOWNLOAD_MODEL: false,
+		MICME_VAD_MODEL: "$PI_CODING_AGENT_DIR/custom-vad.bin",
+		MICME_WHISPER_CPP_MODEL: "$PI_CODING_AGENT_DIR/missing-asr.bin",
+	});
+	await writeExecutable(root, "micme-live");
+	const plan = resolveLivePlan();
+	await writeFile(plan.vadModelPath, "local VAD");
+	const fetch = t.mock.method(globalThis, "fetch", () => assert.fail("disabled downloads must not use network"));
+	const ctx = { ui: { setStatus() {}, notify() {} } };
+	const signal = new AbortController().signal;
+	const reason = `Micme model is missing and auto-download is disabled: ${plan.modelPath}`;
+	await assert.rejects(ensureLiveModels(plan, ctx, signal), {
+		message: `${reason}. Set MICME_WHISPER_CPP_MODEL to an installed Whisper model file, or choose clip mode.`,
+	});
+	await assert.rejects(ensureWhisperCppModel(plan.modelPath, ctx, { signal }), { message: reason });
+	assert.equal(fetch.mock.callCount(), 0);
 });

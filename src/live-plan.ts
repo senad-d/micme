@@ -30,7 +30,10 @@ export function resolveLivePlan() {
 
 export async function ensureLiveModels(plan: ReturnType<typeof resolveLivePlan>, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {
 	await ensureWhisperVadModel(plan.vadModelPath, ctx, { signal });
-	await ensureWhisperCppModel(plan.modelPath, ctx, { signal });
+	await ensureWhisperCppModel(plan.modelPath, ctx, {
+		signal,
+		missingModelHint: "Set MICME_WHISPER_CPP_MODEL to an installed Whisper model file, or choose clip mode.",
+	});
 }
 
 function resolveLiveBinary() {
