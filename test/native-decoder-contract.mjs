@@ -197,6 +197,25 @@ test("a brief pause can anchor a preview without splitting or truncating the fin
 	assert.deepEqual(events.filter(({ type }) => type === "final").map(({ text }) => text.trim()), ["Grüß Okay."]);
 });
 
+test("a resumed endpoint uses the previous final as context without replaying it", () => {
+	const pcm = voiced(4 * 16_000, [[0.4, 5000], [0.8, 6000], [2.5, 9000]]);
+	pcm.fill(0, 2 * 16_000, 4 * 16_000);
+	const events = invokeStub("pause", Buffer.concat([...frames(pcm), finish]), true);
+	const finals = events.filter(({ type }) => type === "final");
+	assert.deepEqual(finals.map(({ text }) => text.trim()), ["here we", "go"]);
+	assert.ok(finals[0].to < finals[1].from);
+	assert.ok(events.filter(({ type, from }) => type === "partial" && from === finals[1].from)
+		.some(({ text }) => text.trim() === "went"), "drafts must not use the confirmed prompt");
+	assert.equal(events.at(-1).through, pcm.length / 2);
+});
+
+test("an endpoint after a long pause starts without the previous prompt", () => {
+	const pcm = voiced(7 * 16_000, [[0.4, 5000], [0.8, 6000], [5.5, 9000]]);
+	pcm.fill(0, 2 * 16_000, 10 * 16_000);
+	const events = invokeStub("pause", Buffer.concat([...frames(pcm, 2), finish]), true);
+	assert.deepEqual(events.filter(({ type }) => type === "final").map(({ text }) => text.trim()), ["here we", "went"]);
+});
+
 test("rollover reconciles shifted word times without removing a real repeated phrase", () => {
 	const pcm = voiced(20.75 * 16_000, [[18.45, 5000], [18.65, 6000], [18.91, 7000], [19.05, 8000],
 		[19.45, 5000], [19.65, 6000], [19.91, 7000]]);
