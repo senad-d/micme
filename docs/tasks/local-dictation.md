@@ -114,7 +114,7 @@ Depends on: Task 1. Implement **Worker v1** in the scaffold. Load whisper.cpp AS
 
 ### 3. Read one microphone continuously without losing samples
 
-- [ ] Supply the configured recorder and a seekable live PCM reader that can catch up without reopening the microphone.
+- [x] Supply the configured recorder and a seekable live PCM reader that can catch up without reopening the microphone.
 
 #### Why
 

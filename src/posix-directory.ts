@@ -109,10 +109,12 @@ export class PosixDirectory {
 		return new PosixDirectory(fd, USE_PROC_FD);
 	}
 
-	openFile(name: string, flags: number) {
-		if (this.procPath) return openSync(join(this.procPath, name), flags);
+	openFile(name: string, flags: number, mode?: number) {
+		if (this.procPath) return openSync(join(this.procPath, name), flags, mode);
 		api ??= loadPosixApi();
-		return checked(api.openat(this.fd, name, flags | O_CLOEXEC), name);
+		const nativeFlags = flags | O_CLOEXEC;
+		const fd = mode === undefined ? api.openat(this.fd, name, nativeFlags) : api.openat(this.fd, name, nativeFlags, "uint32_t", mode);
+		return checked(fd, name);
 	}
 
 	openDirectory(name: string) {
