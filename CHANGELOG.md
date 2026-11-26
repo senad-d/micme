@@ -25,6 +25,12 @@ All notable changes to Micme will be documented in this file.
 - Align `micme-doctor` executable/model checks with runtime validation and translation-capable model fallback behavior.
 - Let `MICME_RECORD_COMMAND` use the same `{audio}`, `{tempDir}`, and `{transcript}` placeholders as custom transcription commands.
 
+## [0.5.0] - 2026-11-26
+
+- Stream mode replaces whisper-stream with micme-live and VAD weights, defaults to base.en for English live drafts, and requires existing stream users to migrate; clip mode retains its previous model default.
+- Linux PulseAudio recording no longer passes the input option that prevented FFmpeg 9.1 from starting capture.
+- Fix Micme loading, settings and recording controls in OMP 19.2.0 while preserving upstream Pi’s configured model-picker keys.
+
 ## [0.4.1] - 2026-11-24
 
 - Micme preserves text typed or replayed into the editor during live dictation instead of replacing or auto-submitting the edited draft.
