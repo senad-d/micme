@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
+import { nodeExecutable } from "./node-runtime.ts";
 import type { CommandSpec } from "./types.ts";
 
 // The launcher waits for IPC so nothing from the hook can run before job assignment.
@@ -115,7 +116,7 @@ export function spawnWindowsJobProcess(command: string, args: string[], pipeInpu
 	const job = new WindowsProcessJob(retainUntilStop);
 	let launcher: ChildProcess | undefined;
 	try {
-		launcher = spawn(process.execPath, ["--input-type=commonjs", "-e", LAUNCHER], {
+		launcher = spawn(nodeExecutable, ["--input-type=commonjs", "-e", LAUNCHER], {
 			stdio: [pipeInput ? "pipe" : "ignore", "pipe", "pipe", "ipc"],
 			windowsHide: true,
 		});

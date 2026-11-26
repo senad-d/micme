@@ -123,6 +123,8 @@ Micme declares `*` as the peer dependency range for both `@earendil-works/pi-cod
 
 Before adopting another Pi release, review both published peer ranges and update the development pins and the contract test together.
 
+Oh My Pi 19.2 uses its own terminal UI and composer integration. Install with `omp plugin install @senad-d/micme`. If running the standalone OMP binary, keep Node.js 22.19 or newer on `PATH` for Micme's recorder and cleanup helpers.
+
 ---
 
 ## Backend Setup

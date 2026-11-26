@@ -1,4 +1,4 @@
-import { DynamicBorder, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
@@ -30,10 +30,15 @@ import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCpp
 import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
 import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
-import { type Component, Container, decodeKittyPrintable, fuzzyFilter, Key, matchesKey, parseKey, type SelectItem, SelectList, type SettingItem, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
+import { type Component, decodeKittyPrintable, fuzzyFilter, isOmp, Key, matchesKey, parseKey, type SelectItem, type SettingItem, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
+
+// Each host supplies only its own picker dependencies.
+const piSelectorPath = "./terminal-ui-pi.ts";
+const piSelector = isOmp ? undefined : await import(piSelectorPath) as typeof import("./terminal-ui-pi.ts");
+const ompSelector = isOmp ? await import("./model-selector-omp.ts") : undefined;
 
 type ConfigurationCategoryId = "general" | "transcription" | "streaming" | "audio";
 type FocusedPane = "categories" | "settings";
@@ -307,7 +312,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	private handleCloseInput(data: string) {
-		if (!matchesKey(data, Key.ctrl("c")) && data !== "q" && data !== "Q") return false;
+		if (!matchesKey(data, "ctrl+c") && data !== "q" && data !== "Q") return false;
 		this.close();
 		return true;
 	}
@@ -319,7 +324,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	private handlePaneSwitchInput(data: string) {
-		if (!matchesKey(data, Key.tab) && !matchesKey(data, Key.shift("tab"))) return false;
+		if (!matchesKey(data, Key.tab) && !matchesKey(data, "shift+tab")) return false;
 		this.focusedPane = this.focusedPane === "categories" ? "settings" : "categories";
 		this.requestRender();
 		return true;
@@ -1166,6 +1171,8 @@ export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTh
 			description: sanitizeTerminalText(candidate.description),
 		};
 	});
+	if (ompSelector) return ompSelector.createOmpModelSelector(items, theme, done);
+	const { Container, DynamicBorder, SelectList, Text } = piSelector!;
 
 	const container = new Container();
 	container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));

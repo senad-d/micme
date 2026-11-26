@@ -126,6 +126,7 @@ export class MicmeSessionOwner {
 	private lastShortcutInputAt = 0;
 	private lastTranscript = "";
 	private lastAudioDir = "";
+	private removeComposerShortcut?: () => void;
 	private advisedLiveMigration = false;
 	private readonly pi: ExtensionAPI;
 
@@ -143,8 +144,18 @@ export class MicmeSessionOwner {
 		if (ctx.mode !== "tui" || this.closed) return;
 		await prepareRestoredDevicePanels(ctx);
 		if (!getPrintableShortcuts().length || this.closed) return;
-		const { installMicmeEditorFallback } = await import("./editor.ts");
-		if (!this.closed) installMicmeEditorFallback(ctx, createMicmeEditorHandlers(this, ctx));
+		if ("composer" in ctx.ui) {
+			const { installMicmeComposerShortcut } = await import("./editor-omp.ts");
+			if (!this.closed) {
+				this.removeComposerShortcut?.();
+				this.removeComposerShortcut = installMicmeComposerShortcut(ctx, createMicmeEditorHandlers(this, ctx));
+			}
+		} else {
+			// Only Pi exports CustomEditor; OMP must not resolve it during validation.
+			const editor = "./editor.ts";
+			const { installMicmeEditorFallback } = await import(editor) as typeof import("./editor.ts");
+			if (!this.closed) installMicmeEditorFallback(ctx, createMicmeEditorHandlers(this, ctx));
+		}
 	}
 
 	async toggle(ctx: ExtensionContext) {
@@ -186,6 +197,8 @@ export class MicmeSessionOwner {
 	async shutdown(ctx: ExtensionContext) {
 		if (this.closed) return;
 		this.closed = true;
+		this.removeComposerShortcut?.();
+		this.removeComposerShortcut = undefined;
 		const active = this.current;
 		this.current = undefined;
 		this.sessionController.abort();
