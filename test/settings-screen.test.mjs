@@ -138,22 +138,6 @@ function waitForAsyncWork() {
 	return new Promise((resolve) => setTimeout(resolve, 25));
 }
 
-test("showConfiguration warns outside interactive TUI mode", async () => {
-	const notifications = [];
-	const ctx = {
-		mode: "cli",
-		ui: {
-			notify(message, level) {
-				notifications.push({ message, level });
-			},
-		},
-	};
-
-	await showConfiguration(ctx);
-
-	assert.deepEqual(notifications, [{ message: "/micme conf requires interactive TUI mode.", level: "warning" }]);
-});
-
 test("configuration screen renders, searches, captures shortcuts, and saves values", async (t) => {
 	await withTempAgent(t, async (root) => {
 		await writeFile(join(root, "micme.json"), JSON.stringify({ MICME_AUTO_DOWNLOAD_MODEL: "1", MICME_PRINTABLE_SHORTCUTS: "§" }, null, 2));

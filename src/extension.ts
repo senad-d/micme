@@ -1,17 +1,18 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import { MIN_AUDIO_BYTES, RECORDER_STARTUP_GRACE_MS, STATUS_KEY } from "./constants.ts";
+import { MIN_AUDIO_BYTES, RECORDER_STARTUP_GRACE_MS, RECORDING_WIDGET_KEY, STATUS_KEY } from "./constants.ts";
 import {
 	envFlag,
 	getShortcut,
 	getLegacyStreamSettings,
+	getPrintableShortcuts,
 	getTerminalShortcut,
 	getTranscriptionMode,
 	reloadMicmeConfig,
 	requireValidMicmeConfig,
 } from "./config.ts";
-import { buildRecorderCommand, listAudioDevices, prepareAudioForTranscription, registerDeviceMessageRenderer, validateRecordedAudio } from "./audio.ts";
-import { installMicmeEditorFallback, type MicmeEditorInputHandlers } from "./editor.ts";
+import { buildRecorderCommand, listAudioDevices, prepareAudioForTranscription, prepareRestoredDevicePanels, registerDeviceMessageRenderer, validateRecordedAudio } from "./audio.ts";
+import type { MicmeEditorInputHandlers } from "./editor.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
 import { buildLiveRecorderCommand, openLivePcm, type LivePcmReader } from "./live-capture.ts";
 import { ensureLiveModels, resolveLivePlan } from "./live-plan.ts";
@@ -27,9 +28,8 @@ import {
 	stopProcess,
 	stopRecorder,
 } from "./processes.ts";
-import { RecordingWidget } from "./recording-widget.ts";
+import type { RecordingWidget } from "./recording-widget.ts";
 import { createLiveRecordingDirectory, createRecordingDirectory, type RecordingDirectory } from "./recording-dir.ts";
-import { showConfiguration } from "./settings.ts";
 import { buildLiveWorkerCommand, caughtUpForLivePreview, livePoll, LiveTranscript, LiveWorker, liveWorkerDiagnostics } from "./streaming.ts";
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import { sanitizeTerminalOutput } from "./terminal-text.ts";
@@ -117,7 +117,7 @@ export function registerMicmeExtension(pi: ExtensionAPI) {
 }
 
 export class MicmeSessionOwner {
-	private readonly recordingWidget = new RecordingWidget();
+	private recordingWidget: RecordingWidget | undefined;
 	private readonly sessionController = new AbortController();
 	private readonly sessionWork = new Set<Promise<void>>();
 	private current: MicmeOperation | undefined;
@@ -138,9 +138,13 @@ export class MicmeSessionOwner {
 		return this.current?.phase ?? "idle";
 	}
 
-	startSession(ctx: ExtensionContext) {
+	async startSession(ctx: ExtensionContext) {
 		reloadMicmeConfig();
-		installMicmeEditorFallback(ctx, createMicmeEditorHandlers(this, ctx));
+		if (ctx.mode !== "tui" || this.closed) return;
+		await prepareRestoredDevicePanels(ctx);
+		if (!getPrintableShortcuts().length || this.closed) return;
+		const { installMicmeEditorFallback } = await import("./editor.ts");
+		if (!this.closed) installMicmeEditorFallback(ctx, createMicmeEditorHandlers(this, ctx));
 	}
 
 	async toggle(ctx: ExtensionContext) {
@@ -187,7 +191,7 @@ export class MicmeSessionOwner {
 		this.sessionController.abort();
 		const pendingSessionWork = Promise.allSettled(this.sessionWork);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		this.recordingWidget.clear(ctx);
+		this.clearRecordingWidget(ctx);
 		if (!active) {
 			await pendingSessionWork;
 			return;
@@ -208,7 +212,7 @@ export class MicmeSessionOwner {
 		if (completion) void completion.then(() => closeRecordingResources(active));
 		else closeRecordingResources(active);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		this.recordingWidget.clear(ctx);
+		this.clearRecordingWidget(ctx);
 		await pendingSessionWork;
 	}
 
@@ -236,7 +240,7 @@ export class MicmeSessionOwner {
 		});
 		const ctx = operation.context;
 		ctx.ui.setStatus(STATUS_KEY, `● ${phase} (${sanitizeTerminalOutput(stopHint) || "shortcut"} or /micme)`);
-		this.recordingWidget.start(ctx, primary);
+		this.recordingWidget?.start(ctx, primary);
 	}
 
 	failLiveRecording(operation: MicmeOperation, error: unknown) {
@@ -279,7 +283,7 @@ export class MicmeSessionOwner {
 	private async start(ctx: ExtensionContext) {
 		requireValidMicmeConfig();
 		const operation = this.beginOperation(ctx);
-		const work = startRecording(this, operation, operation.context);
+		const work = this.startWithRecordingWidget(operation);
 		operation.completion = work;
 		try {
 			await work;
@@ -296,8 +300,22 @@ export class MicmeSessionOwner {
 		}
 	}
 
+	private async startWithRecordingWidget(operation: MicmeOperation) {
+		if (!this.recordingWidget) {
+			const { RecordingWidget } = await import("./recording-widget.ts");
+			if (!this.isCurrent(operation)) return;
+			this.recordingWidget = new RecordingWidget();
+		}
+		await startRecording(this, operation, operation.context);
+	}
+
+	private clearRecordingWidget(ctx: ExtensionContext) {
+		if (this.recordingWidget) this.recordingWidget.clear(ctx);
+		else ctx.ui.setWidget(RECORDING_WIDGET_KEY, undefined);
+	}
+
 	private async cleanupFailedRecordingStart(operation: MicmeOperation, error: unknown) {
-		this.recordingWidget.clear(operation.context);
+		this.clearRecordingWidget(operation.context);
 		clearLiveDraft(operation);
 		await stopOwnedProcesses(operation);
 		await operation.live?.pump;
@@ -308,7 +326,7 @@ export class MicmeSessionOwner {
 		if (!this.transition(operation, "stopping")) return;
 		operation.context.ui.setStatus(STATUS_KEY, "stopping…");
 		clearLiveDraft(operation);
-		this.recordingWidget.clear(operation.context);
+		this.clearRecordingWidget(operation.context);
 		const work = stopAndTranscribe(this, operation, this.pi, failure);
 		operation.completion = work;
 		try {
@@ -373,7 +391,7 @@ async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, ar
 				});
 				return;
 			case "conf":
-				await owner.runSessionWork(ctx, showConfiguration);
+				await owner.runSessionWork(ctx, openMicmeSettings);
 				return;
 			case "last":
 				owner.pasteLastTranscript(ctx);
@@ -390,6 +408,15 @@ async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, ar
 	} catch (error) {
 		notifyExtensionError(ctx, error);
 	}
+}
+
+async function openMicmeSettings(ctx: ExtensionContext, signal: AbortSignal) {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify("/micme conf requires interactive TUI mode.", "warning");
+		return;
+	}
+	const { showConfiguration } = await import("./settings.ts");
+	await showConfiguration(ctx, signal);
 }
 
 async function handleMicmeTerminalShortcut(owner: MicmeSessionOwner, ctx: ExtensionContext) {

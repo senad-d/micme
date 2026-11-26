@@ -1,8 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { readPcm16WaveLevel } from "./audio-level.ts";
 import { RECORDING_WIDGET_KEY } from "./constants.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sliceByColumn, truncateToWidth, visibleWidth } from "./terminal-ui.ts";
 import type { Recording } from "./types.ts";
 
 const LIVE_LABEL = "Live: ";

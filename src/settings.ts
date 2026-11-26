@@ -1,20 +1,4 @@
 import { DynamicBorder, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	Container,
-	decodeKittyPrintable,
-	fuzzyFilter,
-	Key,
-	matchesKey,
-	parseKey,
-	type Component,
-	type SelectItem,
-	SelectList,
-	type SettingItem,
-	Text,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
 import { basename } from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
@@ -46,6 +30,7 @@ import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCpp
 import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
 import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
+import { type Component, Container, decodeKittyPrintable, fuzzyFilter, Key, matchesKey, parseKey, type SelectItem, SelectList, type SettingItem, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
@@ -114,11 +99,6 @@ type ConfigurationDiscoveryState = {
 
 export async function showConfiguration(ctx: ExtensionContext, sessionSignal?: AbortSignal) {
 	if (sessionSignal?.aborted) return;
-	if (ctx.mode !== "tui") {
-		ctx.ui.notify("/micme conf requires interactive TUI mode.", "warning");
-		return;
-	}
-
 	const configState = reloadMicmeConfig();
 	if (configState.error) {
 		notifySanitized(ctx, `Micme config is invalid at ${configState.path}: ${configState.error}. Fix it before saving settings.`, "warning");

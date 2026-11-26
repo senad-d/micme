@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import { addAbortSignal } from "node:stream";
@@ -7,6 +6,7 @@ import { AUDIO_VALIDATION_TIMEOUT_MS, LIVE_CAPTURE_RATE, MAX_CAPTURED_OUTPUT_CHA
 import { env, envFlag, getAudioFilter, getAudioInputConfigKey, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getConfiguredRecorderInput, getFlagSetting, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
 import { appendCapped, findExecutable, formatProcessOutput, formatRunExit, runProcess, shellCommand, shellQuote } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
+import type { Component } from "./terminal-ui.ts";
 import type { AudioDeviceCandidate, AudioDiagnostics, AudioValidationOutcome, CommandSpec, RunResult } from "./types.ts";
 
 type DeviceBackend = "avfoundation" | "pulse" | "dshow" | "unsupported";
@@ -48,7 +48,9 @@ type DevicePanelOptions = {
 	errorLines?: string[];
 };
 
-type DevicePanelStyle = {
+type DevicePanelMetrics = Pick<typeof import("./terminal-ui.ts"), "sliceByColumn" | "visibleWidth">;
+
+type DevicePanelStyle = DevicePanelMetrics & {
 	plain: boolean;
 	separator: string;
 	audioLabel: string;
@@ -76,6 +78,7 @@ const FFMPEG_WARNING_WORDS = new Set(["warning", "error", "failed", "cannot", "u
 const PULSE_SOURCE_LINE_PATTERN = /^([^\s[]+)(?:\s+\[(.+)\])?$/;
 
 let deviceMessageRendererRegistered = false;
+let devicePanelMetrics: DevicePanelMetrics | undefined;
 
 type DevicePanelMessage = {
 	customType: string;
@@ -103,11 +106,26 @@ export function registerDeviceMessageRenderer(pi: ExtensionAPI) {
 	deviceMessageRendererRegistered = true;
 }
 
+async function loadDevicePanelMetrics() {
+	return devicePanelMetrics ??= await import("./terminal-ui.ts");
+}
+
+export async function prepareRestoredDevicePanels(ctx: ExtensionContext) {
+	// Pi's restored custom messages render synchronously. Prepare the metrics
+	// when mounting history, including device panels on alternate branches.
+	if (!devicePanelMetrics && ctx.sessionManager.getEntries().some((entry) =>
+		entry.type === "custom_message" && entry.customType === DEVICE_PANEL_MESSAGE_TYPE && entry.display)) {
+		await loadDevicePanelMetrics();
+	}
+}
+
 export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI, signal?: AbortSignal) {
+	if (signal?.aborted) return;
+	const metrics = await loadDevicePanelMetrics();
 	if (signal?.aborted) return;
 	const backend = getCurrentDeviceBackend();
 	if (backend.backend === "unsupported") {
-		showDevicePanel(ctx, pi, {
+		showDevicePanel(ctx, pi, metrics, {
 			sourceLabel: backend.sourceLabel,
 			backend: backend.backend,
 			errorLines: ["Device listing is not implemented for this platform"],
@@ -117,7 +135,7 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI,
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
 	if (!ffmpeg) {
-		showDevicePanel(ctx, pi, {
+		showDevicePanel(ctx, pi, metrics, {
 			sourceLabel: backend.sourceLabel,
 			backend: backend.backend,
 			errorLines: ["ffmpeg not found", "Install ffmpeg or configure a custom recorder before listing devices."],
@@ -130,7 +148,7 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI,
 		result = await runProcess(ffmpeg, backend.args, DEVICE_SCAN_TIMEOUT_MS, { signal });
 	} catch {
 		if (signal?.aborted) return;
-		showDevicePanel(ctx, pi, {
+		showDevicePanel(ctx, pi, metrics, {
 			sourceLabel: backend.sourceLabel,
 			backend: backend.backend,
 			errorLines: ["Device scan failed", "Could not start ffmpeg to list capture devices."],
@@ -139,7 +157,7 @@ export async function listAudioDevices(ctx: ExtensionContext, pi?: ExtensionAPI,
 	}
 
 	if (signal?.aborted || result.cancelled) return;
-	showDevicePanel(ctx, pi, buildDevicePanelFromRun(backend, result));
+	showDevicePanel(ctx, pi, metrics, buildDevicePanelFromRun(backend, result));
 }
 
 function getCurrentDeviceBackend(): DeviceBackendInfo {
@@ -394,9 +412,9 @@ function getBackendLongName(backend: Exclude<DeviceBackend, "unsupported">) {
 	return "DirectShow";
 }
 
-function showDevicePanel(ctx: ExtensionContext, pi: ExtensionAPI | undefined, options: DevicePanelOptions) {
+function showDevicePanel(ctx: ExtensionContext, pi: ExtensionAPI | undefined, metrics: DevicePanelMetrics, options: DevicePanelOptions) {
 	if (sendDevicePanelMessage(pi, options)) return;
-	ctx.ui.setWidget(DEVICE_PANEL_MESSAGE_TYPE, renderDevicePanel(options).split("\n"));
+	ctx.ui.setWidget(DEVICE_PANEL_MESSAGE_TYPE, renderDevicePanel(options, metrics).split("\n"));
 }
 
 function sendDevicePanelMessage(pi: ExtensionAPI | undefined, options: DevicePanelOptions) {
@@ -414,7 +432,10 @@ class DevicePanelMessageComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		return renderDevicePanel(this.options, Math.min(width, DEVICE_PANEL_MAX_WIDTH)).split("\n");
+		// On a session switch, Pi can construct the component before rebinding
+		// extensions. It redraws after session_start has prepared the metrics.
+		if (!devicePanelMetrics) return [];
+		return renderDevicePanel(this.options, devicePanelMetrics, Math.min(width, DEVICE_PANEL_MAX_WIDTH)).split("\n");
 	}
 
 	invalidate(): void {
@@ -443,9 +464,9 @@ function isDeviceBackend(value: unknown): value is DeviceBackend {
 	return value === "avfoundation" || value === "pulse" || value === "dshow" || value === "unsupported";
 }
 
-export function renderDevicePanel(options: DevicePanelOptions, width = getDevicePanelWidth()) {
+export function renderDevicePanel(options: DevicePanelOptions, metrics: DevicePanelMetrics, width = getDevicePanelWidth()) {
 	const safeOptions = sanitizeDevicePanelOptions(options);
-	const style = getDevicePanelStyle();
+	const style = getDevicePanelStyle(metrics);
 	const panelWidth = Math.max(2, Math.floor(width));
 	const lines = [buildDevicePanelHeader(panelWidth, safeOptions.sourceLabel, style)];
 	const hasInventory = safeOptions.audio !== undefined || safeOptions.video !== undefined || !safeOptions.errorLines?.length;
@@ -492,9 +513,11 @@ function getDevicePanelWidth() {
 	return DEVICE_PANEL_DEFAULT_WIDTH;
 }
 
-function getDevicePanelStyle(): DevicePanelStyle {
+function getDevicePanelStyle({ sliceByColumn, visibleWidth }: DevicePanelMetrics): DevicePanelStyle {
 	const plain = shouldUsePlainDevicePanel();
 	return {
+		sliceByColumn,
+		visibleWidth,
 		plain,
 		separator: plain ? " | " : " │ ",
 		audioLabel: plain ? "audio" : "🎙",
@@ -535,6 +558,7 @@ function isLabelWhitespace(character: string) {
 }
 
 function buildDevicePanelHeader(width: number, sourceLabel: string, style: DevicePanelStyle) {
+	const { visibleWidth } = style;
 	const title = "Micme devices";
 	if (width < 18) return fitLine(style.plain ? `+-- ${title}` : `╭─ ${title}`, width, style);
 
@@ -559,6 +583,7 @@ function buildDevicePanelFooter(width: number, style: DevicePanelStyle) {
 }
 
 function buildDeviceRow(kind: DeviceKind, devices: ListedDevice[], style: DevicePanelStyle, width: number) {
+	const { visibleWidth } = style;
 	const deviceLabel = kind === "audio" ? style.audioLabel : style.videoLabel;
 	const prefix = style.plain ? `  ${kind.padEnd(5)} ${devices.length}` : `  ${deviceLabel} ${devices.length}`;
 	if (devices.length === 0) return fitLine(`${prefix}${style.separator}no ${kind} devices found`, width, style);
@@ -579,7 +604,7 @@ function buildDeviceRow(kind: DeviceKind, devices: ListedDevice[], style: Device
 		}
 
 		const availableForChip = width - visibleWidth(`${row}${style.separator}${overflow}`);
-		if (availableForChip >= getMinimumDeviceChipWidth(devices[index]!)) {
+		if (availableForChip >= getMinimumDeviceChipWidth(devices[index]!, visibleWidth)) {
 			row = `${row}${style.separator}${truncateDeviceChip(devices[index]!, displayNames[index]!, availableForChip, style)}`;
 			shown = index + 1;
 		}
@@ -634,6 +659,7 @@ function formatDeviceChip(device: ListedDevice, displayName: string) {
 }
 
 function truncateDeviceChip(device: ListedDevice, displayName: string, width: number, style: DevicePanelStyle) {
+	const { visibleWidth } = style;
 	const id = device.id?.trim();
 	if (!id) return ellipsize(displayName, width, style);
 	if (visibleWidth(id) >= width) return ellipsize(id, width, style);
@@ -643,17 +669,18 @@ function truncateDeviceChip(device: ListedDevice, displayName: string, width: nu
 	return `${prefix}${ellipsize(displayName, nameWidth, style)}`;
 }
 
-function getMinimumDeviceChipWidth(device: ListedDevice) {
+function getMinimumDeviceChipWidth(device: ListedDevice, visibleWidth: DevicePanelMetrics["visibleWidth"]) {
 	const id = device.id?.trim();
 	if (id) return device.name ? visibleWidth(id) + 2 : visibleWidth(id);
 	return Math.min(4, Math.max(1, visibleWidth(device.name || "unknown")));
 }
 
 function fitLine(line: string, width: number, style: DevicePanelStyle) {
-	return visibleWidth(line) <= width ? line : ellipsize(line, width, style);
+	return style.visibleWidth(line) <= width ? line : ellipsize(line, width, style);
 }
 
 function ellipsize(value: string, width: number, style: DevicePanelStyle) {
+	const { sliceByColumn, visibleWidth } = style;
 	if (width <= 0) return "";
 	if (visibleWidth(value) <= width) return value;
 	const ellipsisWidth = visibleWidth(style.ellipsis);

@@ -1,6 +1,6 @@
 import { type AppKeybinding, CustomEditor, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type AutocompleteProvider, decodeKittyPrintable, type EditorComponent } from "@earendil-works/pi-tui";
 import { getPrintableShortcuts, matchesPrintableMicmeShortcut } from "./config.ts";
+import { type AutocompleteProvider, decodeKittyPrintable, type EditorComponent } from "./terminal-ui.ts";
 
 type CustomEditorArgs = ConstructorParameters<typeof CustomEditor>;
 // Printable Option-key fallbacks auto-repeat while held; debounce them so one hold is one toggle.
