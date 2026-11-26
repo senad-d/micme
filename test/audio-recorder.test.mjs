@@ -1,3 +1,4 @@
+import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -187,6 +188,8 @@ test("volume parsing requires a complete metric on one line", () => {
 	assert.equal(parseVolumeDb(output, "max_volume"), undefined);
 });
 
+const devicePanelMetrics = { sliceByColumn, visibleWidth };
+
 test("device panel rendering strips terminal control sequences from persisted details", () => {
 	const panel = renderDevicePanel(
 		{
@@ -195,6 +198,7 @@ test("device panel rendering strips terminal control sequences from persisted de
 			audio: [{ id: "0", name: "\u001b[31mStudio Mic\u001b[0m" }],
 			warning: "\u001bPignored\u001b\\warning",
 		},
+		devicePanelMetrics,
 		80,
 	);
 
@@ -211,6 +215,7 @@ test("plain device panel renders source separators as ASCII", () => {
 				backend: "avfoundation",
 				audio: [],
 			},
+			devicePanelMetrics,
 			80,
 		);
 

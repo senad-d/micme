@@ -204,44 +204,6 @@ async function testWrappedCustomEditor() {
 
 test("wrapped CustomEditor keeps Pi app shortcuts and the previous editor behavior", testWrappedCustomEditor);
 
-function exerciseComposerShortcut(clock) {
-	let keyHandler;
-	let toggles = 0;
-	const remove = () => { keyHandler = undefined; };
-	const composerCtx = {
-		mode: "tui",
-		ui: { composer: { addKeyHandler(handler) { keyHandler = handler; return remove; } } },
-	};
-	const uninstall = installMicmeEditorFallback(composerCtx, { toggle: () => { toggles++; } });
-	const unrelatedConsumed = keyHandler({ kind: "press", text: "x" });
-	const unrelatedRepeatConsumed = keyHandler({ kind: "repeat", text: "x" });
-	const pressConsumed = keyHandler({ kind: "press", text: "§" });
-	clock.tick(1_100);
-	const repeatConsumed = keyHandler({ kind: "repeat", text: "§" });
-	const togglesAfterRepeat = toggles;
-	const releaseConsumed = keyHandler({ kind: "release", text: "§" });
-	const freshPressConsumed = keyHandler({ kind: "press", text: "§" });
-	uninstall();
-	return { unrelatedConsumed, unrelatedRepeatConsumed, pressConsumed, repeatConsumed, togglesAfterRepeat, releaseConsumed, freshPressConsumed, toggles, keyHandler };
-}
-
-test("reactive composer consumes a delayed printable repeat without toggling until the next press", async (t) => {
-	const clock = t.mock.timers;
-	clock.enable({ apis: ["Date"] });
-	const result = await withEnv(PRINTABLE_SHORTCUT_ENV, exerciseComposerShortcut.bind(undefined, clock));
-	assert.deepEqual(result, {
-		unrelatedConsumed: false,
-		unrelatedRepeatConsumed: false,
-		pressConsumed: true,
-		repeatConsumed: true,
-		togglesAfterRepeat: 1,
-		releaseConsumed: false,
-		freshPressConsumed: true,
-		toggles: 2,
-		keyHandler: undefined,
-	});
-});
-
 function runReadonlyRenderScenario() {
 	installedFactory = undefined;
 	installMicmeEditorFallback(ctx, micmeHandlers);

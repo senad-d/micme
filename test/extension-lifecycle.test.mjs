@@ -77,6 +77,7 @@ function createExtensionHarness(cwd) {
 	const ctx = {
 		cwd,
 		mode: "tui",
+		sessionManager: { getEntries: () => [] },
 		isIdle: () => true,
 		ui: {
 			theme,

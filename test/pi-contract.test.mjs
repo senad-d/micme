@@ -31,7 +31,7 @@ async function withEnv(values, fn) {
 	}
 }
 
-test("Pi's jiti loader registers the default Micme extension", async (t) => {
+test("Pi jiti contract: registers the default Micme extension", async (t) => {
 	const agentDir = await mkdtemp(join(tmpdir(), "micme-pi-contract-"));
 	t.after(() => rm(agentDir, { recursive: true, force: true }));
 
@@ -47,7 +47,7 @@ test("Pi's jiti loader registers the default Micme extension", async (t) => {
 	await withEnv(
 		{
 			PI_CODING_AGENT_DIR: agentDir,
-			MICME_SHORTCUT: "alt+m",
+			MICME_SHORTCUT: undefined,
 			MICME_PRINTABLE_SHORTCUTS: "",
 		},
 		async () => {
@@ -66,6 +66,25 @@ test("Pi's jiti loader registers the default Micme extension", async (t) => {
 	);
 });
 
+test("Pi jiti contract: renders a restored device panel after binding its session", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-pi-device-panel-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await withEnv({ PI_CODING_AGENT_DIR: root, MICME_PRINTABLE_SHORTCUTS: "", MICME_SHORTCUT: "alt+m" }, async () => {
+		const { extensions, runtime, errors } = await discoverAndLoadExtensions([join(process.cwd(), "src", "extension.ts")], root, root);
+		assert.deepEqual(errors, []);
+		const session = SessionManager.inMemory(root);
+		const details = { sourceLabel: "Linux · Pulse", backend: "pulse", audio: [{ name: "Fixture microphone" }] };
+		session.appendCustomMessageEntry("micme-devices", "Micme devices", true, details);
+		const runner = new ExtensionRunner(extensions, runtime, root, session, undefined);
+		runner.setUIContext({}, "tui");
+		const renderer = runner.getMessageRenderer("micme-devices");
+		assert.ok(renderer);
+		const panel = renderer({ customType: "micme-devices", content: "Micme devices", display: true, details }, {}, {});
+		await runner.emit({ type: "session_start", reason: "startup" });
+		assert.match(panel.render(80).join("\n"), /Fixture microphone/);
+	});
+});
+
 async function expectRows(screen, pattern) {
 	let rows;
 	const deadline = Date.now() + 2_000;
@@ -77,21 +96,17 @@ async function expectRows(screen, pattern) {
 	assert.match(rows, pattern);
 }
 
-test("Pi-loaded /micme conf saves the local model selected by filtering and a remapped confirm key", { timeout: 8_000 }, async (t) => {
+test("Pi jiti contract: /micme conf saves a local model using Pi's remapped selection keys", { timeout: 8_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-pi-model-picker-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const models = join(root, "models");
 	const selected = join(models, "ggml-fixture-blue.bin");
 	const configPath = join(root, "micme.json");
 	await mkdir(models);
-	await Promise.all([
-		writeFile(join(models, "ggml-fixture-amber.bin"), ""),
-		writeFile(selected, ""),
-		writeFile(configPath, "{}"),
-	]);
+	await Promise.all([writeFile(selected, ""), writeFile(configPath, "{}")]);
 	const previousKeybindings = getKeybindings();
 	t.after(() => setKeybindings(previousKeybindings));
-	const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.confirm": "ctrl+g" });
+	const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.down": "ctrl+n", "tui.select.confirm": "ctrl+g" });
 	setKeybindings(keybindings);
 
 	await withEnv({
@@ -128,9 +143,11 @@ test("Pi-loaded /micme conf saves the local model selected by filtering and a re
 			assert.ok(screen, `Micme did not open its settings: ${notifications.join("; ")}`);
 			await expectRows(screen, /^(?![\s\S]*Loading )/);
 			for (const character of "/ASR model\r") screen.handleInput(character);
-			await expectRows(screen, /ggml-fixture-blue\.bin/);
-			for (const character of "fixture-blue") screen.handleInput(character);
+			await expectRows(screen, /→ ✓ Use default model/);
+			screen.handleInput("\x0e");
 			await expectRows(screen, /→ ✓ ggml-fixture-blue\.bin/);
+			screen.handleInput("\r");
+			assert.match(screen.render(100).join("\n"), /Select whisper\.cpp model/);
 			screen.handleInput("\x07");
 			await expectRows(screen, /ASR model \(Transcription\) +ggml-fixture-blue\.bin/);
 			assert.equal(JSON.parse(await readFile(configPath, "utf8")).MICME_WHISPER_CPP_MODEL, selected);

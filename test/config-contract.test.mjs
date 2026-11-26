@@ -11,9 +11,7 @@ const {
 	getRecordSampleRate,
 	getRecordSync,
 	getLegacyStreamSettings,
-	getShortcutSettingValue,
 	getStreamFinalizeWithClip,
-	getTerminalShortcut,
 	getTranscribeBackend,
 	getTranscribeSampleRate,
 	getTranscribeTimeoutMs,
@@ -87,19 +85,6 @@ function getArgumentValue(args, flag) {
 	assert.notEqual(index, -1, `missing ${flag} in ${JSON.stringify(args)}`);
 	return args[index + 1];
 }
-
-test("a host's recording shortcut default does not override explicit configuration", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "micme-shortcut-contract-"));
-	t.after(() => rm(root, { recursive: true, force: true }));
-	await withEnvironment({ PI_CODING_AGENT_DIR: root, MICME_SHORTCUT: undefined, MICME_PRINTABLE_SHORTCUTS: undefined }, async () => {
-		assert.equal(getTerminalShortcut("alt+shift+m"), "alt+shift+m");
-		assert.equal(getShortcutSettingValue("alt+shift+m"), "alt+shift+m");
-		await writeFile(join(root, "micme.json"), '{"MICME_SHORTCUT":"f8"}');
-		reloadMicmeConfig();
-		assert.equal(getTerminalShortcut("alt+shift+m"), "f8");
-		assert.equal(getShortcutSettingValue("alt+shift+m"), "f8");
-	});
-});
 
 test("bounded integer settings share environment and JSON boundary behavior", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-config-contract-"));

@@ -119,13 +119,9 @@ pi install /absolute/path/to/micme
 
 ## Pi Compatibility
 
-Micme declares `*` as the peer dependency range for both `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`. These published ranges are not a compatibility guarantee. CI pins both Pi packages to `1.6.0` for typechecking and tests extension loading through Pi's jiti-based loader. The default recording shortcut in Pi is `Alt+M`.
+Micme declares `*` as the peer dependency range for both `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`. These published ranges are not a compatibility guarantee. CI pins both packages to `1.6.0` and tests only that version: it typechecks every production TypeScript file against their declarations and loads the default extension through Pi's jiti-based loader.
 
 Before adopting another Pi release, review both published peer ranges and update the development pins and the contract test together.
-
-Micme supports the reactive UI in Oh My Pi (OMP) **19.2.0**, verified on Linux. On Linux and macOS, put `node` (Node.js 22.19.0 or newer) on `PATH` before launching OMP; Micme uses it for its recording and device-discovery subprocesses. Recording in OMP on Windows is not supported by this update.
-
-In OMP, the default recording shortcut is `Alt+Shift+M` because OMP reserves `Alt+M`. If you set `MICME_SHORTCUT=alt+m` in your shell, unset or change it and restart OMP; the shell setting takes precedence over `/micme conf`. If you set it in `micme.json`, remove it to use the default or choose an unreserved shortcut in `/micme conf`, then reload. The `/micme` command works independently of the shortcut. Other OMP versions aren't covered by this compatibility check.
 
 ---
 
@@ -201,7 +197,7 @@ Common settings:
 | `MICME_LANGUAGE=en` | Transcription language when translation is off. Use `auto` for detection with multilingual weights. |
 | `MICME_TRANSLATE_TO_ENGLISH=off` | “Translate from” option. Leave `off`, or set the spoken source language code such as `hr`, `bs`, `de`, or `tr` to output English. |
 | `MICME_AUTO_SUBMIT=0` | Review in the editor. Set `1` to send eligible results automatically. Live RPC results always require explicit replay. |
-| `MICME_SHORTCUT` | Toggle shortcut. The default depends on the [host](#pi-compatibility). Use a key combination (`ctrl+space`, `f8`) or a printable character such as `§`. Restart or `/reload` after changing. |
+| `MICME_SHORTCUT=alt+m` | Toggle shortcut. Use terminal syntax (`alt+m`, `ctrl+space`, `f8`) or a printable character such as `§`. Restart or `/reload` after changing. |
 | `MICME_VALIDATE_AUDIO=1` | Clip transcription and optional refinement: reject near-silent audio and fail closed if ffmpeg omits or truncates `max_volume`. With a custom recorder and no ffmpeg, Micme warns and skips this guard. Set `0` to disable it. |
 | `MICME_RECORD_SAMPLE_RATE=auto` | Clip recording sample-rate override. Leave `auto` to use the input's native rate. Stream capture is fixed at 16 kHz. |
 | `MICME_RECORD_SYNC=1` | Preserve wall-clock recording duration from ffmpeg timestamps in the built-in recorder. |

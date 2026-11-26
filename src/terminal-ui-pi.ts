@@ -1,9 +1,15 @@
-import { getKeybindings } from "@earendil-works/pi-tui";
-import type { SelectionAction } from "./terminal-ui.ts";
-
-export { decodeKittyPrintable, fuzzyFilter, matchesKey, parseKey, sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-export { installLegacyEditor } from "./editor-pi.ts";
-
-export function matchesSelectionAction(data: string, action: SelectionAction) {
-	return getKeybindings().matches(data, `tui.select.${action}`);
-}
+export {
+	Container,
+	Key,
+	SelectList,
+	Text,
+	decodeKittyPrintable,
+	fuzzyFilter,
+	matchesKey,
+	parseKey,
+	sliceByColumn,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
+export type { AutocompleteProvider, Component, EditorComponent, SelectItem, SettingItem } from "@earendil-works/pi-tui";
