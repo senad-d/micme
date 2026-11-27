@@ -1,0 +1,4 @@
+Pi replay: scripted ASR with real Pi; network blocked except installed loopback fixture, no microphone or coding prompts.
+Pi 40 columns [scripted ASR, real PTY]: first pair and advancing draft rendered (clipped) before commit; stop-to-target 110 ms; confirmed "PUBLIC BENCHMARK: Public sample for the isolated Pi replay."; replay "Public sample for the isolated Pi replay." (after Left Arrow); no sends or queues
+Pi 80 columns [scripted ASR, real PTY]: first pair and advancing draft rendered before commit; stop-to-target 90 ms; confirmed "PUBLIC BENCHMARK: Public sample for the isolated Pi replay."; replay "Public sample for the isolated Pi replay." (after Left Arrow); no sends or queues
+Restarted only the disposable session; public seed survived the restart.

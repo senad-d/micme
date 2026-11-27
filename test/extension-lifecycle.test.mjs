@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import fsPromises, { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { createRequire, syncBuiltinESMExports } from "node:module";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
@@ -13,6 +14,7 @@ const PARTIAL_AUDIO = "partial audio ".repeat(40);
 const HEADER_ONLY_AUDIO = "RIFF".padEnd(44, "_");
 const { shellQuote } = await import("../src/processes.ts");
 const { RecordingWidget } = await import("../src/recording-widget.ts");
+const { RecordingDirectory } = await import("../src/recording-dir.ts");
 
 const theme = {
 	fg(_color, text) {
@@ -196,17 +198,12 @@ async function assertProcessesStopped(rows) {
 }
 
 function rejectRecordingDirectoryCleanup(t, scratch) {
-	const remove = rm;
-	const removal = t.mock.method(fsPromises, "rm", async (path, options) => {
-		if (typeof path === "string" && dirname(path) === scratch) {
+	const remove = RecordingDirectory.prototype.remove;
+	t.mock.method(RecordingDirectory.prototype, "remove", async function () {
+		if (dirname(this.path) === scratch) {
 			throw Object.assign(new Error("\u001b[31mEACCES: permission denied\u001b[0m"), { code: "EACCES" });
 		}
-		return remove(path, options);
-	});
-	syncBuiltinESMExports();
-	t.after(() => {
-		removal.mock.restore();
-		syncBuiltinESMExports();
+		return remove.call(this);
 	});
 }
 
@@ -326,7 +323,7 @@ const pending = (options.gates ?? []).slice();
 const tick = setInterval(() => {
   if (!pending.length || !existsSync(pending[0])) return;
   pending.shift();
-  appendFileSync(path, Buffer.alloc(200, 0x34));
+  appendFileSync(path, Buffer.alloc(200, options.gateFill ?? 0x34));
 }, 10);
 function stop() {
   clearInterval(tick);
@@ -389,11 +386,11 @@ async function withLiveFixture(t, { worker = {}, recorder = {}, env = {}, create
 	});
 }
 
-async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024, logPostprocessing = false, corruptConfigOnStop, argsLog, pulseSource } = {}) {
+async function writeFfmpegProcess(path, { verifyInput = false, rawBytes = 1024, logPostprocessing = false, corruptConfigOnStop, argsLog, pulseSource, audioGate } = {}) {
 	await writeExecutable(
 		path,
 		`#!/usr/bin/env node
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const output = args.at(-1);
 const argsLog = ${JSON.stringify(argsLog ?? null)};
@@ -425,9 +422,19 @@ if (pulseSource !== undefined) {
     process.exit(234);
   }
 }
-if (${rawBytes !== null}) {
+function writeAudio() {
+  if (!${rawBytes !== null}) return;
   const wav = args.includes("-flush_packets") && ${rawBytes ?? 0} >= 44;
   writeFileSync(output, wav ? Buffer.from(${JSON.stringify(testWav(Math.max(44, rawBytes ?? 0)).toString("base64"))}, "base64") : Buffer.alloc(${rawBytes ?? 0}));
+}
+const audioGate = ${JSON.stringify(audioGate ?? null)};
+if (!audioGate) writeAudio();
+else {
+  const poll = setInterval(() => {
+    if (!existsSync(audioGate)) return;
+    clearInterval(poll);
+    writeAudio();
+  }, 10);
 }
 appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`recorder \${process.pid}\\n\`);
 process.stdin.setEncoding("utf8");
@@ -1043,7 +1050,7 @@ test("a failed /micme devices config check leaves the active recording status un
 			await command.handler("", harness.ctx);
 			await waitFor(async () => (await readProcessRows(processLog)).length > 0, "recorder did not start");
 			const status = harness.uiCalls.findLast((entry) => entry.method === "setStatus" && entry.key === STATUS_KEY);
-			assert.match(status?.value ?? "", /^● recording /);
+			assert.match(status?.value ?? "", /^[○●] recording /);
 
 			await writeFile(configPath, "{ invalid");
 			const beforeDevices = harness.uiCalls.length;
@@ -1960,6 +1967,80 @@ test("a valid zero-sample recording can stop without ever presenting a listening
 	});
 });
 
+test("delayed live PCM publishes a single digital-zero readiness cue before the first feed", { skip: process.platform === "win32" }, async (t) => {
+	await withLiveFixture(t, {
+		worker: ({ root }) => ({ text: "", sampleLog: join(root, "samples.log") }),
+		recorder: ({ root }) => ({ initialSamples: 0, gates: [join(root, "sample"), join(root, "more")], gateFill: 0 }),
+	}, async ({ root, harness, micme }) => {
+		const starting = micme();
+		await waitFor(() => harness.uiCalls.some((entry) => entry.value === "waiting for microphone samples…"), "reader did not enter waiting");
+		const ready = () => harness.uiCalls.filter((entry) => entry.method === "setStatus" && entry.value?.startsWith("● streaming"));
+		assert.deepEqual(ready(), []);
+		const status = harness.ctx.ui.setStatus;
+		let beforeFeed;
+		harness.ctx.ui.setStatus = (key, value) => {
+			if (value?.includes("Capturing: digital zero")) beforeFeed = !existsSync(join(root, "samples.log"));
+			status(key, value);
+		};
+		await writeFile(join(root, "sample"), "");
+		await starting;
+		assert.equal(beforeFeed, true);
+		await writeFile(join(root, "more"), "");
+		await waitFor(async () => (await readProcessRows(join(root, "samples.log"))).length >= 2, "did not feed both zero blocks");
+		await micme();
+		assert.equal(ready().length, 1);
+		assert.match(ready()[0].value, /digital zero/);
+		assert.deepEqual(await readProcessRows(join(root, "samples.log")), ["1 100", "1 100", "finish 200"]);
+	});
+});
+
+test("live decoder death before ACK preserves the entire verified WAV without replaying a partial", { skip: process.platform === "win32" }, async (t) => {
+	const tail = [0x77, 0x38, 0x28, 0x6a];
+	const remove = RecordingDirectory.prototype.remove;
+	let recovered;
+	t.mock.method(RecordingDirectory.prototype, "remove", async function () {
+		if (this.path.includes("micme-verified-")) {
+			const name = (await readdir(this.filesPath)).find((entry) => entry.startsWith("verified-"));
+			if (name) recovered = await readFile(join(this.filesPath, name));
+		}
+		return remove.call(this);
+	});
+	await withLiveFixture(t, {
+		worker: ({ root }) => ({ hangAck: true, sampleLog: join(root, "samples.log"), exitGate: join(root, "worker-exit") }),
+		recorder: { tail },
+	}, async ({ root, harness, micme }) => {
+		await micme();
+		await waitFor(async () => (await readProcessRows(join(root, "samples.log"))).length === 1, "first feed did not reach the decoder");
+		await writeFile(join(root, "worker-exit"), "");
+		await waitFor(() => harness.owner.getPhase() === "idle", "decoder failure did not finish");
+		const expected = testWav(1024 + tail.length, 0x12);
+		expected.set(tail, 1024);
+		assert.deepEqual(recovered, expected);
+		await micme("last");
+		assert.deepEqual(harness.sentMessages, []);
+		assert.equal(harness.uiCalls.some(({ method }) => method === "pasteToEditor" || method === "setEditorText"), false);
+	});
+});
+
+test("RPC cancel during an unacknowledged feed never takes a recovery snapshot", { skip: process.platform === "win32" }, async (t) => {
+	const snapshot = t.mock.method(RecordingDirectory.prototype, "createPrivateFile");
+	await withLiveFixture(t, {
+		worker: ({ root }) => ({ hangAck: true, sampleLog: join(root, "samples.log") }),
+		env: { MICME_AUTO_SUBMIT: "1" },
+	}, async ({ root, scratch, log, harness, micme }) => {
+		harness.ctx.mode = "rpc";
+		await micme();
+		await waitFor(async () => (await readProcessRows(join(root, "samples.log"))).length === 1, "first feed did not reach the decoder");
+		await micme("cancel");
+		assert.equal(snapshot.mock.callCount(), 0);
+		assert.equal(harness.owner.getPhase(), "idle");
+		assert.equal(latestRecordingWidget(harness), undefined);
+		assert.deepEqual(harness.sentMessages, []);
+		assert.deepEqual(await readdir(scratch), []);
+		await assertProcessesStopped(await readProcessRows(log));
+	});
+});
+
 function captureWidgetRecording(t) {
 	let primary;
 	const startWidget = RecordingWidget.prototype.start;
@@ -2288,9 +2369,7 @@ test("failed recorder startup reports rejected directory cleanup without masking
 	});
 });
 
-test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
-	t.after(() => rm(root, { recursive: true, force: true }));
+async function writeCloseOnlyRecording(root) {
 	const recorder = join(root, "recorder.mjs");
 	const ready = join(root, "ready");
 	await writeFile(
@@ -2307,12 +2386,18 @@ writeFileSync(ready, "ready");
 setInterval(() => {}, 1_000);
 `,
 	);
+	return { ready, record: `exec ${shellQuote(process.execPath)} ${shellQuote(recorder)} {audio} ${shellQuote(ready)}` };
+}
 
+test("stopping a custom clip recorder that exits 255 pastes its transcript", { skip: process.platform === "win32" && "requires POSIX SIGINT handling" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-extension-custom-signal-stop-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const { ready, record } = await writeCloseOnlyRecording(root);
 	await withEnv(
 		{
 			PI_CODING_AGENT_DIR: join(root, "agent"),
 			MICME_TRANSCRIPTION_MODE: "clip",
-			MICME_RECORD_COMMAND: `exec ${shellQuote(process.execPath)} ${shellQuote(recorder)} {audio} ${shellQuote(ready)}`,
+			MICME_RECORD_COMMAND: record,
 			MICME_TRANSCRIBE_BACKEND: "custom",
 			MICME_TRANSCRIBE_COMMAND: "test -s {audio} && printf 'custom stop transcript'",
 			MICME_PROCESS_AUDIO: "0",
@@ -2333,12 +2418,118 @@ setInterval(() => {}, 1_000);
 				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "error"), []);
 				assert.deepEqual(harness.uiCalls.filter((entry) => entry.method === "pasteToEditor"), [{ method: "pasteToEditor", value: "custom stop transcript " }]);
 				assert.equal(harness.sentMessages.length, 0);
+				assert.ok(harness.uiCalls.some(({ value }) => typeof value === "string" && value.includes("Recorder running; stop to finish")));
+				assert.equal(harness.uiCalls.some(({ value }) => typeof value === "string" && value.startsWith("● recording")), false);
+				await rm(ready);
+				await command.handler("", harness.ctx);
+				await waitFor(async () => (await readProcessRows(ready)).length > 0, "next recorder did not become stoppable");
+				await command.handler("", harness.ctx);
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.equal(harness.uiCalls.filter(({ method }) => method === "pasteToEditor").length, 2);
+				assert.equal(harness.sentMessages.length, 0);
 			} finally {
 				await emit(harness, "session_shutdown", { reason: "quit" });
 			}
 		},
 	);
 });
+
+test("new interactive actions are discoverable but refuse RPC without opening a view", async () => {
+	const harness = createExtensionHarness(tmpdir());
+	const command = harness.commands.get("micme");
+	harness.ctx.mode = "rpc";
+	const actions = ["setup", "history", "import", "polish", "preview"];
+	const completions = await command.getArgumentCompletions("");
+	for (const action of [...actions, "cancel"]) assert.ok(completions.some(({ value }) => value === action));
+	await command.handler("help", harness.ctx);
+	for (const action of [...actions, "cancel"]) assert.ok(harness.uiCalls.at(-1).message.includes(action));
+	for (const action of actions) await command.handler(action, harness.ctx);
+	assert.deepEqual(harness.uiCalls.slice(1).map(({ message }) => message), actions.map((action) => `/micme ${action} requires interactive TUI mode.`));
+	assert.equal(harness.owner.getPhase(), "idle");
+	assert.deepEqual(harness.sentMessages, []);
+});
+
+test("clip recorder startup without bytes is stoppable but does not mark the input ready", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-clip-delayed-samples-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const gate = join(root, "audio-ready");
+	const log = join(root, "children");
+	await writeFfmpegProcess(join(root, "ffmpeg"), { audioGate: gate });
+	await withEnv({
+		TMPDIR: root, PI_CODING_AGENT_DIR: root, PATH: `${root}${delimiter}${process.env.PATH ?? ""}`, MICME_TEST_PROCESS_LOG: log,
+		MICME_TRANSCRIPTION_MODE: "clip", MICME_RECORD_COMMAND: undefined, MICME_KEEP_AUDIO: "0",
+	}, async () => {
+		const harness = createExtensionHarness(root);
+		const micme = (args = "") => harness.commands.get("micme").handler(args, harness.ctx);
+		try {
+			await micme();
+			assert.equal(harness.owner.getPhase(), "recording");
+			assert.match(harness.uiCalls.findLast(({ method }) => method === "setStatus").value, /Waiting for samples/);
+			assert.equal(harness.uiCalls.some(({ value }) => typeof value === "string" && value.startsWith("● recording")), false);
+			await writeFile(gate, "");
+			await waitFor(() => harness.uiCalls.some(({ value }) => typeof value === "string" && value.startsWith("● recording")), "clip did not reflect observed samples");
+			await micme("cancel");
+			assert.equal(latestRecordingWidget(harness), undefined);
+		} finally {
+			await emit(harness, "session_shutdown");
+		}
+	});
+});
+
+for (const kind of ["sample", "mic"]) {
+	test(`Try It ${kind} reviews installed Whisper only and preserves the ordinary replay`, { skip: process.platform === "win32" }, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "micme-extension-trial-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const { ready, record } = await writeCloseOnlyRecording(root);
+		const binary = join(root, "whisper-cli");
+		const model = join(root, "ggml-base.bin");
+		const sample = join(root, "sample.wav");
+		await Promise.all([
+			writeFile(model, "installed model fixture"),
+			writeFile(sample, testWav(1024, 0x23)),
+			writeExecutable(binary, "#!/bin/sh\ntest -s \"$2\" && test -s \"$4\" || exit 1\nprintf 'public review\\033[0m words\\n'\n"),
+		]);
+		await withEnv({
+			TMPDIR: root, PI_CODING_AGENT_DIR: join(root, "agent"), MICME_TRANSCRIPTION_MODE: "clip", MICME_RECORD_COMMAND: record,
+			MICME_TRANSCRIBE_BACKEND: "custom", MICME_TRANSCRIBE_COMMAND: "printf 'previous replay'", MICME_AUTO_SUBMIT: "1",
+			MICME_WHISPER_CPP_BIN: binary, MICME_WHISPER_CPP_MODEL: model, MICME_PROCESS_AUDIO: "0", MICME_VALIDATE_AUDIO: "0", MICME_KEEP_AUDIO: "0",
+		}, async () => {
+			const harness = createExtensionHarness(root);
+			const micme = (args = "") => harness.commands.get("micme").handler(args, harness.ctx);
+			try {
+				await micme();
+				await waitFor(() => existsSync(ready), "ordinary recorder did not start");
+				await micme();
+				await rm(ready);
+				assert.deepEqual(harness.sentMessages, [{ message: "previous replay", options: undefined }]);
+				const before = harness.uiCalls.length;
+				let review;
+				harness.ctx.ui.custom = async (factory) => {
+					let done = false;
+					const view = factory({ terminal: { rows: 22 }, requestRender() {} }, theme, {}, () => { done = true; });
+					review = view.render(40);
+					view.handleInput("\u001b");
+					assert.equal(done, true);
+				};
+				const input = kind === "sample" ? { kind, file: sample } : { kind };
+				await harness.owner.startReviewTrial(harness.ctx, input, new AbortController().signal);
+				if (kind === "mic") {
+					assert.equal(harness.owner.getPhase(), "recording");
+					await waitFor(() => existsSync(ready), "review recorder did not start");
+					await micme();
+				} else assert.equal(existsSync(ready), false);
+				assert.deepEqual(review, ["Try It · Review only", "public review words", "Enter/Esc close"]);
+				assert.equal(harness.owner.getPhase(), "idle");
+				assert.equal(harness.uiCalls.slice(before).some(({ method }) => method === "pasteToEditor" || method === "setEditorText"), false);
+				assert.equal(harness.sentMessages.length, 1);
+				await micme("last");
+				assert.deepEqual(harness.sentMessages.map(({ message }) => message), ["previous replay", "previous replay"]);
+			} finally {
+				await emit(harness, "session_shutdown");
+			}
+		});
+	});
+}
 
 for (const autoSubmit of [false, true]) {
 	test(`truncated clip stdout is not delivered in ${autoSubmit ? "auto-submit" : "paste-for-review"} mode`, { skip: process.platform === "win32" && "requires POSIX executable fixtures" }, async (t) => {
