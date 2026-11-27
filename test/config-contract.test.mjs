@@ -386,6 +386,38 @@ test("only an effective invalid transfer setting blocks work; a malformed saved 
 	});
 });
 
+test("concurrent config saves cannot publish a conflicting artifact and legacy backend", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-transfer-config-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "micme.json");
+	await writeFile(path, '{"metadata":{"preserve":true}}\n');
+	await withEnvironment({ PI_CODING_AGENT_DIR: root, ...UNSET_TRANSFER_OPTIONS, MICME_TRANSCRIBE_BACKEND: undefined, MICME_TRANSCRIBE_COMMAND: undefined, MICME_WHISPER_CPP_MODEL: undefined }, async () => {
+		const [first, second] = await Promise.allSettled([
+			writeMicmeConfigValues({ MICME_ARTIFACT: "variant" }),
+			writeMicmeConfigValues({ MICME_TRANSCRIBE_BACKEND: "python", MICME_LANGUAGE: "de" }),
+		]);
+		assert.equal(first.status, "fulfilled");
+		assert.equal(second.status, "rejected");
+		assert.match(second.reason.message, /MICME_ARTIFACT.*MICME_TRANSCRIBE_BACKEND/);
+		assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { metadata: { preserve: true }, MICME_ARTIFACT: "variant" });
+		assert.equal(getTransferOptions().MICME_ARTIFACT, "variant");
+	});
+});
+
+test("config saves check the whole edit and respect shell precedence for artifact conflicts", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-transfer-config-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "micme.json");
+	await writeFile(path, '{"MICME_TRANSCRIBE_BACKEND":"python"}\n');
+	await withEnvironment({ PI_CODING_AGENT_DIR: root, ...UNSET_TRANSFER_OPTIONS, MICME_TRANSCRIBE_BACKEND: "custom", MICME_TRANSCRIBE_COMMAND: undefined, MICME_WHISPER_CPP_MODEL: undefined }, async () => {
+		const switchToArtifact = { MICME_ARTIFACT: "variant", MICME_TRANSCRIBE_BACKEND: "auto" };
+		await assert.rejects(writeMicmeConfigValues(switchToArtifact), /MICME_ARTIFACT.*MICME_TRANSCRIBE_BACKEND/);
+		assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { MICME_TRANSCRIBE_BACKEND: "python" });
+		await withEnvironment({ MICME_TRANSCRIBE_BACKEND: undefined }, () => writeMicmeConfigValues(switchToArtifact));
+		assert.deepEqual(JSON.parse(await readFile(path, "utf8")), switchToArtifact);
+	});
+});
+
 test("the atomic writer rejects malformed transfer values without replacing the file", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-transfer-config-"));
 	t.after(() => rm(root, { recursive: true, force: true }));

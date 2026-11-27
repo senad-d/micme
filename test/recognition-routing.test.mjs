@@ -4,8 +4,8 @@ import { closeSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
-import { reloadMicmeConfig } from "../src/config.ts";
+import { beforeEach, test } from "node:test";
+import { getMicmeConfigPath, reloadMicmeConfig } from "../src/config.ts";
 import { referenceRows } from "../src/transfer/catalog.ts";
 import { createRecognitionService } from "../src/transfer/recognition.ts";
 import { RecognitionQueue } from "../src/transfer/jobs.ts";
@@ -19,6 +19,17 @@ const label = { id: "vulkan-b", label: "Measured device B" };
 const traits = { stream: false, batch: true, longForm: false, nativeLid: false, bias: false, translateEn: false, languages: ["en"],
 	vad: "off", actualCompute: "vulkan", boundDevice: label };
 const sha = (buffer) => createHash("sha256").update(buffer).digest("hex");
+
+beforeEach(async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "micme-recognition-test-"));
+	const originalEnvironment = process.env;
+	t.after(async () => {
+		process.env = originalEnvironment;
+		await rm(dir, { recursive: true, force: true });
+	});
+	process.env = { PI_CODING_AGENT_DIR: dir };
+	reloadMicmeConfig();
+});
 
 function audio(pcm, expected = null) {
 	const wav = Buffer.concat([wavHeader(pcm.length), pcm]);
@@ -78,18 +89,10 @@ async function finishTake(recognizer, pcm, active = signal) {
 	return recognizer.finish(audio(pcm), active);
 }
 
-test("an explicit Whisper backend rejects an interactive native artifact before inference but not an independent CLI choice", async (t) => {
-	const dir = await mkdtemp(join(tmpdir(), "micme-recognition-backend-"));
-	const originalEnvironment = process.env;
-	t.after(async () => {
-		process.env = originalEnvironment;
-		reloadMicmeConfig();
-		await rm(dir, { recursive: true, force: true });
-	});
-	process.env = { PI_CODING_AGENT_DIR: dir };
+test("an explicit Whisper backend rejects an interactive native artifact before inference but not an independent CLI choice", async () => {
 	const chosen = referenceRows().find(({ id }) => id === "parakeet-tdt-0.6b-v3").variants.find(({ quant }) => quant === "Q4_K_M");
 	const choice = { ...base, variantId: chosen.id };
-	const config = join(dir, "micme.json");
+	const config = getMicmeConfigPath();
 	const writeBackend = (backend) => writeFileSync(config, JSON.stringify({ MICME_ARTIFACT: chosen.id, MICME_DETECTOR: "off", MICME_TRANSCRIBE_BACKEND: backend }));
 	let loads = 0;
 	const api = createRecognitionService({ load: async () => { loads++; return new FakeNative(); } });
