@@ -2507,6 +2507,36 @@ test("stopping a custom clip recorder that exits 255 pastes its transcript", { s
 	);
 });
 
+test("Alt+3 opens saved-final preview without using the composer or replacing the recording toggle", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-preview-shortcut-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await withEnv({ PI_CODING_AGENT_DIR: root, MICME_SHORTCUT: undefined, MICME_AUTO_SUBMIT: "1" }, async () => {
+		const harness = createExtensionHarness(root);
+		assert.ok(harness.shortcuts.has("alt+m"));
+		const shortcut = harness.shortcuts.get("alt+3");
+		assert.ok(shortcut, "register the preview on a non-submitting Pi shortcut");
+		await shortcut.handler(harness.ctx);
+		assert.match(harness.uiCalls.at(-1)?.message ?? "", /No saved live final to preview/);
+		assert.equal(harness.uiCalls.some(({ method }) => method === "setEditorText" || method === "pasteToEditor"), false);
+		assert.deepEqual(harness.sentMessages, []);
+		await harness.commands.get("micme").handler("help", harness.ctx);
+		assert.match(harness.uiCalls.at(-1)?.message ?? "", /alt\+3.*\/micme preview.*empty composer/i);
+	});
+});
+
+test("a configured Alt+3 recording toggle keeps its key and moves preview to Alt+7", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-preview-key-conflict-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await withEnv({ PI_CODING_AGENT_DIR: root, MICME_SHORTCUT: "AlT+3" }, async () => {
+		const harness = createExtensionHarness(root);
+		assert.match(harness.shortcuts.get("AlT+3")?.description ?? "", /toggle local voice recording/);
+		assert.equal(harness.shortcuts.has("alt+3"), false);
+		assert.match(harness.shortcuts.get("alt+7")?.description ?? "", /preview/);
+		await harness.commands.get("micme").handler("help", harness.ctx);
+		assert.match(harness.uiCalls.at(-1)?.message ?? "", /alt\+7.*\/micme preview.*empty composer/i);
+	});
+});
+
 test("new interactive actions are discoverable but refuse RPC without opening a view", async () => {
 	const harness = createExtensionHarness(tmpdir());
 	const command = harness.commands.get("micme");
