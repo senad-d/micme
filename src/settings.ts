@@ -1,5 +1,5 @@
-import { DynamicBorder, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { basename } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolve } from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
 	env,
@@ -15,6 +15,7 @@ import {
 	getRecordSampleRate,
 	getRecordSync,
 	getShortcutSettingValue,
+	getTransferOptions,
 	getStreamFinalizeWithClip,
 	getTranslateToEnglishLanguage,
 	getTranscribeSampleRate,
@@ -26,11 +27,15 @@ import {
 } from "./config.ts";
 import { discoverAudioDevices, LIVE_CAPTURE_RATE } from "./audio.ts";
 import { formatBackendLabel, resolveTranscriptionPlan } from "./backends.ts";
-import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "./models.ts";
+import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, getWhisperCppModelNameFromPath, getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
 import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
-import { type Component, Container, decodeKittyPrintable, fuzzyFilter, Key, matchesKey, parseKey, type SelectItem, SelectList, type SettingItem, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
+import { type Component, Container, decodeKittyPrintable, fuzzyFilter, Input, Key, matchesKey, parseKey, type SettingItem, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
+import { MODEL_IDLE_MODES, SCRIPTS, type TransferOptionKey } from "./transfer/contracts.ts";
+import { getManagedCatalogVariant } from "./transfer/catalog.ts";
+import { getEngineEvidence } from "./transfer/engine-evidence.ts";
+import { checkSetupModelSelection, cleanSettingText, configuredModelLabel, createSettingsPicker, discoverAdvancedRuntime, getPrintableInput, LANGUAGE_LABELS, managedWhisperName, sensitiveOptionsSummary, TRANSLATE_FROM_VALUE_LABELS, TRANSCRIPTION_LANGUAGE_VALUES, TRANSLATION_SOURCE_LANGUAGE_VALUES, whisperModelCompatibility, type AdvancedRuntime } from "./transfer/settings.ts";
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
@@ -66,27 +71,10 @@ const CONFIGURATION_CATEGORIES: ConfigurationCategory[] = [
 
 const TWO_PANE_MIN_WIDTH = 72;
 const MAX_SETTINGS_ROWS = 10;
-const LANGUAGE_LABELS: Record<string, string> = {
-	auto: "Auto detect",
-	en: "English",
-	bs: "Bosnian",
-	hr: "Croatian",
-	sr: "Serbian",
-	de: "German",
-	es: "Spanish",
-	fr: "French",
-	it: "Italian",
-	pt: "Portuguese",
-	nl: "Dutch",
-	pl: "Polish",
-	tr: "Turkish",
-};
-const TRANSCRIPTION_LANGUAGE_VALUES = ["en", "auto", "bs", "hr", "sr", "de", "es", "fr", "it", "pt", "nl", "pl", "tr"];
-const TRANSLATION_SOURCE_LANGUAGE_VALUES = ["bs", "hr", "sr", "de", "es", "fr", "it", "pt", "nl", "pl", "tr"];
-const TRANSLATE_FROM_VALUE_LABELS: Record<string, string> = {
-	off: "Off",
-	...Object.fromEntries(TRANSLATION_SOURCE_LANGUAGE_VALUES.map((language) => [language, `${LANGUAGE_LABELS[language] ?? language} → English`])),
-};
+const ADVANCED_SETTING_ID = "micme-advanced";
+const SENSITIVE_SETTING_KEYS = new Set([
+	"MICME_TRANSCRIBE_COMMAND", "MICME_RECORD_COMMAND", "MICME_WORDS", "MICME_FILLERS", "MICME_POLISH_ENDPOINT", "MICME_POLISH_MODEL", "MICME_POLISH_PROMPT", "MICME_POLISH_KEY_ENV", "MICME_OUTPUT_HOOK",
+]);
 
 type ConfigurationDiscoveryKey = "audio devices" | "whisper.cpp models" | "Python Whisper models";
 
@@ -125,6 +113,7 @@ export async function showConfiguration(ctx: ExtensionContext, sessionSignal?: A
 				pendingSave = saveConfigurationValue(ctx, id, newValue, { signal: controller.signal });
 				return pendingSave.then(() => buildConfigurationView(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme));
 			},
+			onDiscoverAdvanced: canDiscover ? () => discoverAdvancedRuntime(controller.signal) : async () => ({ installed: [], compute: [] }),
 			requestRender: () => tui.requestRender(),
 			statusText: canDiscover ? formatDiscoveryStatus(discovery.pending) : "Fix Micme config and reopen settings to run discovery.",
 		});
@@ -232,6 +221,11 @@ class ConfigurationScreen implements Component {
 	private editingShortcutItem: ConfigurationItem | null = null;
 	private pendingShortcutValue = "";
 	private saving = false;
+	private advanced = false;
+	private advancedRuntime: AdvancedRuntime = { installed: [], compute: [] };
+	private advancedItems: ConfigurationItem[] = [];
+	private advancedWork?: Promise<AdvancedRuntime>;
+	private readonly onDiscoverAdvanced: () => Promise<AdvancedRuntime>;
 	private statusText = "";
 	private closed = false;
 
@@ -242,6 +236,7 @@ class ConfigurationScreen implements Component {
 		onDone: () => void;
 		onError: (error: unknown) => void;
 		onSave: (id: string, newValue: string) => Promise<ConfigurationView>;
+		onDiscoverAdvanced: () => Promise<AdvancedRuntime>;
 		requestRender: () => void;
 		statusText?: string;
 	}) {
@@ -251,6 +246,7 @@ class ConfigurationScreen implements Component {
 		this.onDone = options.onDone;
 		this.onError = options.onError;
 		this.onSave = options.onSave;
+		this.onDiscoverAdvanced = options.onDiscoverAdvanced;
 		this.requestRender = options.requestRender;
 		this.statusText = options.statusText ?? "";
 		for (const category of CONFIGURATION_CATEGORIES) this.selectedByCategory.set(category.id, 0);
@@ -259,6 +255,7 @@ class ConfigurationScreen implements Component {
 	updateDiscoveredItems(view: ConfigurationView, statusText: string) {
 		if (this.closed) return;
 		this.view = view;
+		this.refreshAdvancedItems();
 		this.clampSelections();
 		if (!this.saving && (!this.statusText || this.statusText.startsWith("Loading "))) {
 			this.statusText = statusText;
@@ -534,15 +531,15 @@ class ConfigurationScreen implements Component {
 		const lead = this.statusText || search;
 		const description = selected?.description ?? this.currentCategory().description;
 		const footer = lead ? `${lead} • ${selection} • ${description}` : `${selection} • ${description}`;
-		const lines = this.focusedPane === "settings" && selected?.details
-			? [footer, ...selected.details].filter(Boolean).flatMap((line) => wrapTextWithAnsi(sanitizeTerminalText(line), width - 2))
-			: [footer];
+		const details = this.focusedPane === "settings" ? selected?.details ?? [] : [];
+		const lines = [footer, ...details].filter(Boolean).flatMap((line) => wrapTextWithAnsi(cleanSettingText(line), width - 2));
 		return lines.map((line) => this.renderFullLine(width, line));
 	}
 
 	private formatValue(item: ConfigurationItem, width: number) {
 		if (width <= 0) return "";
 		if (this.editingShortcutItem?.id === item.id) return this.pendingShortcutValue ? this.theme.fg("accent", fitAnsi(this.pendingShortcutValue, width)) : "";
+		if (item.id === ADVANCED_SETTING_ID) return this.advanced ? "Shown" : "Hidden";
 		const raw = item.rawValue;
 		if (!raw) return this.theme.fg("dim", fitAnsi(item.emptyLabel ?? displayConfigurationValue(item.id, raw), width));
 
@@ -596,15 +593,12 @@ class ConfigurationScreen implements Component {
 	}
 
 	private getCategoryItems(categoryId = this.currentCategory().id) {
-		return this.view.items.filter((item) => item.categoryId === categoryId && this.isItemVisible(item));
+		return this.getVisibleItems().filter((item) => item.categoryId === categoryId);
 	}
 
 	private getVisibleItems() {
-		return this.view.items.filter((item) => this.isItemVisible(item));
-	}
-
-	private isItemVisible(item: ConfigurationItem) {
-		return item.visibleWhen ? item.visibleWhen(this.view.plan) : true;
+		const items = this.advanced ? [...this.view.items, ...this.advancedItems] : this.view.items;
+		return items.filter((item) => !item.visibleWhen || item.visibleWhen(this.view.plan));
 	}
 
 	private getDisplaySettings() {
@@ -651,6 +645,11 @@ class ConfigurationScreen implements Component {
 		const item = displayItems[this.getSelectedSettingIndex(displayItems.length)];
 		if (!item) return;
 
+		if (item.id === ADVANCED_SETTING_ID) {
+			this.toggleAdvanced();
+			return;
+		}
+
 		if (item.id === "MICME_SHORTCUT") {
 			this.startShortcutCapture(item);
 			return;
@@ -669,6 +668,30 @@ class ConfigurationScreen implements Component {
 		const currentIndex = item.values.indexOf(item.rawValue);
 		const nextValue = item.values[(currentIndex + 1) % item.values.length] ?? item.values[0] ?? "";
 		this.saveSetting(item, nextValue);
+	}
+
+	private toggleAdvanced() {
+		this.advanced = !this.advanced;
+		this.statusText = this.advanced ? "Advanced controls shown for this visit" : "Advanced controls hidden";
+		if (!this.advanced) return;
+		this.refreshAdvancedItems();
+		this.advancedWork ??= this.onDiscoverAdvanced();
+		void this.advancedWork.then((runtime) => {
+			if (this.closed || !this.advanced) return;
+			this.advancedRuntime = runtime;
+			this.refreshAdvancedItems();
+			this.requestRender();
+		}, () => {
+			if (this.closed || !this.advanced) return;
+			this.statusText = "Optional runtime unavailable; no experimental choices enabled";
+			this.requestRender();
+		});
+	}
+
+	private refreshAdvancedItems() {
+		if (!this.advanced) return;
+		try { this.advancedItems = buildAdvancedItems(this.view.plan, this.advancedRuntime, this.theme); }
+		catch { this.advancedItems = []; }
 	}
 
 	private startShortcutCapture(item: ConfigurationItem) {
@@ -724,6 +747,7 @@ class ConfigurationScreen implements Component {
 			.then((view) => {
 				if (this.closed) return;
 				this.view = view;
+				this.refreshAdvancedItems();
 				this.clampSelections();
 				this.statusText = formatSaveStatus(item.id, nextValue);
 			})
@@ -894,7 +918,8 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 			label: "ASR model",
 			description: "Whisper.cpp model for speech recognition in clip and live dictation.",
 			details: [
-				model.exists ? currentModelPath : `ASR model file is missing: ${currentModelPath}`,
+				model.exists ? `Found, not verified here: ${currentModelPath}` : `ASR model file is missing: ${currentModelPath}`,
+				"Use /micme setup for the model catalog, integrity and repair.",
 				shellOverrideHint("MICME_WHISPER_CPP_MODEL"),
 				liveLanguage,
 			],
@@ -1090,6 +1115,10 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 			emptyLabel: "not set",
 		},
 		{
+			id: ADVANCED_SETTING_ID, categoryId: "general", label: "Advanced controls", rawValue: "", currentValue: "Hidden",
+			description: "Show optional controls in their applicable contexts for this visit. No settings change until edited.",
+		},
+		{
 			id: "MICME_STREAM_DIAGNOSTICS",
 			categoryId: "general",
 			label: "Stream diagnostics",
@@ -1102,6 +1131,108 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 		},
 	];
 	return { plan, items };
+}
+
+function buildAdvancedItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRuntime, theme: MicmeTheme): ConfigurationItem[] {
+	const options = getTransferOptions();
+	const config = (id: TransferOptionKey, label: string, description: string, more?: Partial<ConfigurationItem>): ConfigurationItem => {
+		const rawValue = env(id) ?? "";
+		return { id, label, description, categoryId: "general", rawValue, currentValue: displayConfigurationValue(id, rawValue), ...more,
+			details: [...(more?.details ?? []), shellOverrideHint(id)] };
+	};
+	const flag = (id: TransferOptionKey, label: string, description: string, enabled: boolean) => config(id, label, description, {
+		displayKind: "boolean", rawValue: flagValue(enabled), values: ["0", "1"],
+	});
+	const list = (id: TransferOptionKey, label: string, description: string) => config(id, label, description, {
+		submenu: (_raw, done) => createListSettingEditor(label, theme, done),
+	});
+	const items = [
+		flag("MICME_HISTORY", "Local take history", "Opt-in storage of local audio and text. Confirm retention changes in /micme history.", options.MICME_HISTORY),
+		{ id: "micme-sensitive", categoryId: "general" as const, label: "Final processing", rawValue: "", currentValue: "Explicit only",
+			emptyLabel: "Explicit only", description: "Optional provider and hook configuration (redacted). No test request is sent here.", details: sensitiveOptionsSummary() },
+	];
+	if (plan.effectiveBackend === "whisper.cpp") {
+		items.push(
+			list("MICME_PREFERRED_LANGUAGES", "Preferred languages", "JSON array of language tags. Manual language takes precedence."),
+			list("MICME_WORDS", "Local word list", "JSON array of literal phrases. Saved text is not displayed."),
+			flag("MICME_REMOVE_FILLERS", "Remove local fillers", "Optional local finishing for eligible speech. Never edits live commits.", options.MICME_REMOVE_FILLERS),
+			config("MICME_SCRIPT", "Chinese script", "Apply only to eligible local text. Raw words remain separately available.", {
+				rawValue: options.MICME_SCRIPT, values: [...SCRIPTS],
+				valueLabels: { "as-spoken": "As spoken", simplified: "Simplified", taiwan: "Traditional (Taiwan)", "hong-kong": "Traditional (Hong Kong)" },
+			}),
+		);
+		if (options.MICME_REMOVE_FILLERS) items.push(list("MICME_FILLERS", "Local filler list", "JSON array of literal fillers. Saved text is not displayed."));
+	}
+	items.push(...buildArtifactItems(plan, runtime, theme, config));
+	return items;
+}
+
+type AdvancedRow = (id: TransferOptionKey, label: string, description: string, more?: Partial<ConfigurationItem>) => ConfigurationItem;
+
+function buildArtifactItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRuntime, theme: MicmeTheme, row: AdvancedRow): ConfigurationItem[] {
+	const options = getTransferOptions();
+	const translation = getTranslateToEnglishLanguage();
+	const task = translation ? "translate-en" : "transcribe";
+	const language = translation ?? (env("MICME_LANGUAGE")?.trim().toLowerCase() || "en");
+	const available = runtime.installed.flatMap(({ variantId }) => {
+		if (plan.requestedBackend === "whisper.cpp" && !variantId.startsWith("whisper.cpp/")) return [];
+		const evidence = getEngineEvidence(variantId);
+		const observed = evidence?.traits;
+		if (!observed || observed.actualCompute === "unknown") return [];
+		for (const { rig } of evidence.measurements) {
+			const qualified = getManagedCatalogVariant(variantId, { rig, actualCompute: observed.actualCompute, device: observed.boundDevice }, task, language);
+			if (qualified) return [qualified];
+		}
+		return [];
+	});
+	const selected = options.MICME_ARTIFACT;
+	const canSelect = !env("MICME_WHISPER_CPP_MODEL")?.trim() && plan.requestedBackend !== "python" && plan.requestedBackend !== "custom"
+		&& !(plan.requestedBackend === "auto" && env("MICME_TRANSCRIBE_COMMAND")?.trim());
+	const status = { id: "micme-runtime", categoryId: "transcription" as const, label: "Optional runtime", rawValue: "", currentValue: "Unavailable",
+		emptyLabel: "Unavailable", description: "No installed artifact has qualified evidence for the current task and language. Legacy Whisper remains available where configured." };
+	if (!selected && (!canSelect || !available.length)) return [status];
+	const choices = [{ value: "", label: "Legacy dictation" }, ...available.map(({ id }) => ({ value: id, label: id.split("@")[0]! }))];
+	const result = [row("MICME_ARTIFACT", "Qualified artifact", "Select an installed exact variant, or return to legacy dictation.", {
+		categoryId: "transcription", rawValue: selected ?? "", emptyLabel: "Legacy dictation",
+		valueLabels: selected ? { [selected]: selected.split("@")[0]! } : undefined,
+		submenu: (value, done) => createSettingsPicker({ title: "Qualified artifact", rows: choices, cursor: { selected: value } }, theme, done),
+	})];
+	const evidence = available.find(({ id }) => id === selected);
+	const traits = evidence?.traits;
+	if (!traits) return [...result, status];
+	const identity = traits.boundDevice;
+	const computeValues = ["auto", ...runtime.compute.filter(({ backend, device }) => backend === traits.actualCompute
+		&& (device?.id ?? null) === (identity?.id ?? null) && (device?.label ?? null) === (identity?.label ?? null))
+		.map(({ backend, device }) => device?.id ?? backend)];
+	result.push(
+		row("MICME_COMPUTE", "Requested compute", "Only devices with matching runtime observation are selectable. No device is probed by this preference.", {
+			categoryId: "transcription", rawValue: options.MICME_COMPUTE, values: uniqueStrings(computeValues),
+			details: [`Prior loaded evidence: ${traits.actualCompute} / ${identity ? [identity.label, identity.id].filter(Boolean).join(" / ") : "unknown device"}. Current binding: not observed here.`,
+				`Observed rig: ${evidence.measurements.find((cell) => cell.task === task && cell.language === language)?.rig ?? "unknown"}.`],
+		}),
+		row("MICME_MODEL_IDLE", "Unload model after", "Controls model residency only; it never keeps a microphone open.", {
+			categoryId: "transcription", rawValue: options.MICME_MODEL_IDLE, values: [...MODEL_IDLE_MODES], valueLabels: { immediate: "Immediately", "5min": "5 minutes", never: "Never" },
+		}),
+		row("MICME_DETECTOR", "Speech detector", "Only the model's observed detector is offered here. Other detectors and local LID require separate qualification.", {
+			categoryId: "streaming", rawValue: options.MICME_DETECTOR, values: ["model"], details: [`Previously loaded detector: ${traits.vad}.`],
+		}),
+	);
+	if (traits.batch && !traits.longForm) result.push(row("MICME_CHUNKING", "Chunk long takes", "Chunking is for batch models without native long-form support.", {
+		categoryId: "transcription", displayKind: "boolean", rawValue: flagValue(options.MICME_CHUNKING), values: ["0", "1"],
+	}));
+	return result;
+}
+
+function createListSettingEditor(label: string, theme: MicmeTheme, done: (value?: string) => void): Component {
+	const input = new Input();
+	input.focused = true;
+	input.onSubmit = (value) => done(value.trim() || undefined);
+	input.onEscape = () => done();
+	const view = new Container();
+	view.addChild(new Text(theme.fg("accent", theme.bold(label)), 1, 0));
+	view.addChild(new Text("Enter a JSON array, e.g. [\"word\"]. [] clears the saved list. Esc cancels.", 1, 0));
+	view.addChild(input);
+	return { render: (width) => view.render(width), invalidate: () => view.invalidate(), handleInput: (data) => input.handleInput(data) };
 }
 
 function buildMicrophoneItem(audioDevices: AudioDeviceCandidate[]): ConfigurationItem {
@@ -1158,54 +1289,43 @@ function flagValue(enabled: boolean) {
 }
 
 export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTheme, done: (selectedValue?: string) => void): Component {
-	const items: SelectItem[] = candidates.map((candidate) => {
-		const label = sanitizeTerminalText(candidate.label) || "model";
-		return {
+	return createSettingsPicker({
+		title: "Select whisper.cpp model",
+		heading: ["✓ found, not verified · ○ missing", "Missing managed models download if auto-download is on."],
+		searchHint: "Type to search models",
+		maxVisible: 12,
+		rows: candidates.map((candidate) => ({
 			value: candidate.value,
-			label: candidate.installed ? `✓ ${label}` : `○ ${label}`,
-			description: sanitizeTerminalText(candidate.description),
-		};
-	});
-
-	const container = new Container();
-	container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-	container.addChild(new Text(theme.fg("accent", theme.bold("Select whisper.cpp model")), 1, 0));
-	container.addChild(new Text(theme.fg("dim", "✓ found locally • ○ missing; selecting downloads automatically when enabled"), 1, 0));
-
-	const list = new SelectList(items, Math.min(items.length, 16), {
-		selectedPrefix: (text) => theme.fg("accent", text),
-		selectedText: (text) => theme.fg("accent", text),
-		description: (text) => theme.fg("muted", text),
-		scrollInfo: (text) => theme.fg("dim", text),
-		noMatch: (text) => theme.fg("warning", text),
-	});
-	list.onSelect = (item) => done(item.value);
-	list.onCancel = () => done(undefined);
-	container.addChild(list);
-	container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to search • enter select • esc back"), 1, 0));
-	container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
-	return {
-		render(width: number) {
-			return container.render(width);
-		},
-		invalidate() {
-			container.invalidate();
-		},
-		handleInput(data: string) {
-			list.handleInput(data);
-		},
-	};
+			label: `${candidate.installed ? "✓" : "○"} ${candidate.label}`,
+			description: candidate.description,
+		})),
+	}, theme, done);
 }
 
 export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string, options: { signal?: AbortSignal } = {}): Promise<Record<string, string>> {
 	if (!id.startsWith("MICME_")) return {};
 	options.signal?.throwIfAborted();
 	requireValidMicmeConfig();
+	const selectedArtifact = getTransferOptions().MICME_ARTIFACT;
+	if (id === "MICME_TRANSCRIBE_BACKEND" && selectedArtifact && (
+		value === "python" || value === "custom" || (value === "auto" && env("MICME_TRANSCRIBE_COMMAND")?.trim())
+		|| (value === "whisper.cpp" && !selectedArtifact.startsWith("whisper.cpp/"))
+	)) throw new Error("Clear the selected artifact in Advanced controls before changing to this backend.");
 
 	const valuesToWrite = getConfigurationValuesToWrite(id, value);
 	if (id === "MICME_WHISPER_CPP_MODEL" && value) {
-		await ensureWhisperCppModel(expandConfigPath(value), ctx, { signal: options.signal });
+		const path = expandConfigPath(value);
+		const managedName = managedWhisperName(path);
+		const explicit = env(id)?.trim();
+		const manual = explicit && resolve(path) === resolve(expandConfigPath(explicit));
+		const problem = whisperModelCompatibility(getWhisperCppModelNameFromPath(path));
+		if (problem) throw new Error(problem);
+		checkSetupModelSelection(managedName && !manual ? "whisper" : "manual");
+		await ensureWhisperCppModel(path, ctx, { signal: options.signal });
+		if (managedName && !manual) {
+			valuesToWrite.MICME_WHISPER_CPP_MODEL = undefined;
+			valuesToWrite.MICME_DEFAULT_WHISPER_CPP_MODEL = managedName;
+		}
 	}
 
 	options.signal?.throwIfAborted();
@@ -1218,10 +1338,10 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 }
 
 export function displayConfigurationValue(id: string, value: string) {
-	if (id === "MICME_WHISPER_CPP_MODEL") return value ? sanitizeTerminalText(basename(value)) || "model" : "not set";
-	if (id === "MICME_TRANSCRIBE_COMMAND" || id === "MICME_RECORD_COMMAND") return value ? "configured" : "not set";
+	if (id === "MICME_WHISPER_CPP_MODEL") return value ? configuredModelLabel(value) : "not set";
+	if (SENSITIVE_SETTING_KEYS.has(id)) return value && value !== "[]" ? "configured (hidden)" : "not set";
 	if (id === "MICME_AUDIO_FILTER") return sanitizeTerminalText(value) || "<empty>";
-	return sanitizeTerminalText(value) || "not set";
+	return cleanSettingText(value) || "not set";
 }
 
 function getUiBackendValue(plan: ResolvedTranscriptionPlan): "whisper.cpp" | "python" {
@@ -1241,7 +1361,7 @@ export function uniqueStrings(values: string[]) {
 	return output.length > 0 ? output : [""];
 }
 
-function getConfigurationValuesToWrite(id: string, value: string) {
+function getConfigurationValuesToWrite(id: string, value: string): Record<string, string | undefined> {
 	if (id === "MICME_TRANSCRIPTION_MODE") return getTranscriptionModeProfile(value === "stream" ? "stream" : "clip");
 	if (id === "MICME_SHORTCUT") return { MICME_SHORTCUT: value, MICME_PRINTABLE_SHORTCUTS: undefined };
 	if (id === "MICME_WHISPER_CPP_MODEL" && !value) return { MICME_WHISPER_CPP_MODEL: undefined };
@@ -1304,10 +1424,3 @@ function getShortcutInput(data: string) {
 	return decodeKittyPrintable(data) ?? getPrintableInput(data);
 }
 
-function getPrintableInput(data: string) {
-	if (!data || data.includes("\x1b")) return "";
-	if (matchesKey(data, Key.space)) return " ";
-	if (matchesKey(data, Key.enter) || matchesKey(data, Key.tab) || matchesKey(data, Key.backspace) || matchesKey(data, Key.delete)) return "";
-	if (/^[^\x00-\x1F\x7F]+$/u.test(data)) return data;
-	return "";
-}

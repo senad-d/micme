@@ -698,6 +698,58 @@ test("configuration renders a selected Python discovery label without terminal s
 	}));
 });
 
+test("advanced settings are hidden at entry, and their diagnostics redact saved content when revealed", async (t) => {
+	await withTempAgent(t, async (root) => {
+		const privateText = "CANARY stored transcript";
+		const key = "CANARY-not-a-real-key";
+		const configPath = join(root, "micme.json");
+		const stored = JSON.stringify({ MICME_WORDS: JSON.stringify([privateText]), MICME_POLISH_PROMPT: privateText,
+			MICME_POLISH_MODEL: key, MICME_POLISH_ENDPOINT: `https://example.invalid/${key}`, MICME_POLISH_KEY_ENV: "MICME_TEST_KEY" });
+		await writeFile(configPath, stored);
+		await withEnv({ MICME_TEST_KEY: key }, async () => {
+			const harness = createHarness(root);
+			await showConfiguration(harness.ctx);
+			const { component } = harness;
+			component.handleInput("\r");
+			const before = component.render(80).join("\n");
+			assert.match(before, /Advanced controls\s+Hidden/);
+			assert.doesNotMatch(before, /Local take history|Final processing|Qualified artifact/);
+			component.handleInput("/");
+			typeText(component, "Advanced controls");
+			component.handleInput("\r");
+			component.handleInput("/");
+			typeText(component, "Final processing");
+			const after = component.render(80).join("\n");
+			assert.match(after, /credential source, hook path and text lists are[\s│]+hidden/);
+			assert.ok(!after.includes(privateText) && !after.includes(key));
+			component.handleInput("q");
+			assert.equal(await readFile(configPath, "utf8"), stored);
+		});
+	});
+});
+
+test("an opted-in language list can be edited by keyboard without prefilling saved text", async (t) => {
+	await withTempAgent(t, async (root) => {
+		const path = join(root, "micme.json");
+		await writeFile(path, JSON.stringify({ MICME_WHISPER_CPP_BIN: process.execPath, MICME_PREFERRED_LANGUAGES: '["de"]' }));
+		const harness = createHarness(root);
+		await showConfiguration(harness.ctx);
+		const { component } = harness;
+		component.handleInput("/");
+		typeText(component, "Advanced controls");
+		component.handleInput("\r");
+		component.handleInput("/");
+		typeText(component, "Preferred languages");
+		component.handleInput("\r");
+		assert.doesNotMatch(component.render(40).join("\n"), /\["de"\]/);
+		typeText(component, '["fr","en"]');
+		component.handleInput("\r");
+		await waitFor(async () => JSON.parse(await readFile(path, "utf8")).MICME_PREFERRED_LANGUAGES === '["fr","en"]', "language preferences did not save");
+		assert.match(component.render(80).join("\n"), /Preferred languages/);
+		component.handleInput("q");
+	});
+});
+
 test("model selector sanitizes labels and returns selected or cancelled values", () => {
 	const selected = [];
 	const selector = createModelSelector(

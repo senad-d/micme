@@ -5,6 +5,7 @@ export {
 	Text,
 	decodeKittyPrintable,
 	fuzzyFilter,
+	Input,
 	matchesKey,
 	parseKey,
 	sliceByColumn,
