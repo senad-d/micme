@@ -314,15 +314,89 @@ async function evaluate(assets, worker, clip, output) {
 	return result.status === "passed" ? 0 : 1;
 }
 
+const transferModes = new Set(["--transfer", "--transfer-report", "--transfer-prepare", "--transfer-engine", "--transfer-catalog", "--pi-local"]);
+const usage = `Usage: npm run test:live-native -- ASSETS_DIR MICME_LIVE WHISPER_CLI RESULTS_JSON
+       npm run test:live-native -- --prepare ASSETS_DIR WAV_DIRECTORY
+       npm run test:live-native -- --transfer MANIFEST OUTPUT
+       npm run test:live-native -- --transfer-report ROOT REPORT [--baseline-only]
+       npm run test:live-native -- --transfer-prepare ASSETS_DIR WAV_DIRECTORY [PUBLIC_SOURCES_JSON]
+       npm run test:live-native -- --transfer-engine MANIFEST VARIANT_ID OUTPUT
+       npm run test:live-native -- --transfer-catalog PINNED_CATALOG DEST
+       npm run test:live-native -- --pi-local [MANIFEST]`;
+
+async function optionalTransferExport(module, names) {
+	let adapter;
+	try {
+		adapter = await import(module);
+	} catch (error) {
+		if (error.code === "ERR_MODULE_NOT_FOUND" && error.url === new URL(module, import.meta.url).href) {
+			throw new Error(`Optional adapter ${module.slice(2)} is not present in this checkout`, { cause: error });
+		}
+		throw error;
+	}
+	for (const name of names) if (typeof adapter[name] === "function") return adapter[name];
+	throw new Error(`Optional adapter ${module.slice(2)} does not export ${names[0]}`);
+}
+
+async function transferCommand([mode, first, second, option, ...extra]) {
+	const validArg = (s) => typeof s === "string" && s.trim() && !s.startsWith("--");
+	if (mode === "--pi-local" && (first === undefined || validArg(first)) && second === undefined) {
+		const launch = await optionalTransferExport("./live-native/transfer-pi-local.mjs", ["launchPiLocal", "runPiLocal"]);
+		await launch(...(first === undefined ? [] : [resolve(first)]));
+		return 0;
+	}
+	if (!validArg(first) || !validArg(second) || extra.length) return 2;
+	if (mode === "--transfer" && option === undefined) {
+		const { runTransfer, withInterrupts } = await import("./live-native/transfer-runner.mjs");
+		let interrupted = false;
+		const totals = await withInterrupts(async (signal) => {
+			const result = await runTransfer(resolve(first), resolve(second), { signal });
+			interrupted = signal.aborted;
+			return result;
+		});
+		console.log(`Recorded transfer slots: ${JSON.stringify(totals)}`);
+		return interrupted ? 130 : 0;
+	}
+	if (mode === "--transfer-report" && (option === undefined || option === "--baseline-only")) {
+		const { writeTransferReport } = await import("./live-native/transfer-report.mjs");
+		await writeTransferReport(resolve(first), resolve(second), { baselineOnly: option === "--baseline-only" });
+		return 0;
+	}
+	if (mode === "--transfer-prepare" && (option === undefined || validArg(option))) {
+		const { prepareTransferFixtures } = await import("./live-native/transfer-fixtures.mjs");
+		await prepareTransferFixtures(resolve(first), resolve(second), option === undefined ? null : resolve(option));
+		return 0;
+	}
+	if (mode === "--transfer-engine" && validArg(option)) {
+		const qualify = await optionalTransferExport("./live-native/transfer-engine.mjs", ["qualifyEngine"]);
+		await qualify(resolve(first), second, resolve(option));
+		return 0;
+	}
+	if (mode === "--transfer-catalog" && option === undefined) {
+		const build = await optionalTransferExport("./live-native/transfer-catalog.mjs", ["buildCatalog", "buildTransferCatalog", "generateCatalog", "regenerateCatalog"]);
+		await build(resolve(first), resolve(second));
+		return 0;
+	}
+	return 2;
+}
+
 const args = process.argv.slice(2);
-if (args.length === 3 && args[0] === "--prepare") {
+if (transferModes.has(args[0])) {
+	try {
+		process.exitCode = await transferCommand(args);
+		if (process.exitCode === 2) console.error(usage);
+	} catch (error) {
+		console.error(`Transfer: ${describe(error).replace(/[\r\n]+/g, " ")}`);
+		process.exitCode = 1;
+	}
+} else if (args.length === 3 && args[0] === "--prepare") {
 	const destination = resolve(args[2]);
 	await mkdir(destination, { recursive: true });
 	const cases = await prepareCorpus(resolve(args[1]), destination);
 	await writeFile(join(destination, "corpus.json"), `${JSON.stringify(cases, null, 2)}\n`);
-} else if (args.length === 4) {
+} else if (args.length === 4 && !args[0].startsWith("--")) {
 	process.exitCode = await evaluate(...args.map((p) => resolve(p)));
 } else {
-	console.error("Usage: npm run test:live-native -- ASSETS_DIR MICME_LIVE WHISPER_CLI RESULTS_JSON\n       npm run test:live-native -- --prepare ASSETS_DIR WAV_DIRECTORY");
+	console.error(usage);
 	process.exitCode = 2;
 }
