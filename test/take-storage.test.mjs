@@ -106,6 +106,25 @@ check("confirmed count:0 returns a pruned null and later updates cannot recreate
 	assert.deepEqual(await readdir(files.store), ["history.sqlite3"]);
 });
 
+check("a failed WAV deletion after a combined count:0 save throws instead of returning null", async (t) => {
+	const files = await fixture(t);
+	await apply(await preview("count:0"));
+	const failed = runChild(`
+		import assert from 'node:assert/strict';
+		const unlink = PosixDirectory.prototype.unlinkFile;
+		PosixDirectory.prototype.unlinkFile = function (name) {
+			if (name.endsWith('.deleting')) throw new Error('simulated unlink failure');
+			unlink.call(this, name);
+		};
+		await assert.rejects(library.saveTake(${JSON.stringify(final)}, 'clip', 'ready', audio, 'clip-model', signal,
+			'Polished text.'), /simulated unlink failure/);
+	`);
+	assert.equal(failed.status, 0, failed.stderr);
+	await start();
+	assert.deepEqual(await rows(), []);
+	assert.deepEqual(await readdir(files.store), ["history.sqlite3"]);
+});
+
 check("a confirmed never policy stops a previously confirmed count policy", async (t) => {
 	await fixture(t);
 	await apply(await preview("count:0"));
@@ -305,6 +324,27 @@ check("restart finishes deletion of the claimed original without touching a new 
 	assert.deepEqual(await rows(), []);
 	await assert.rejects(lstat(claimed), { code: "ENOENT" });
 	assert.equal(await readFile(files.wav(id), "utf8"), "replacement");
+});
+
+check("restart completes a confirmed prune interrupted after unlink without claiming a replacement", async (t) => {
+	const files = await fixture(t);
+	const id = await save();
+	const crashed = runChild(`
+		const unlink = PosixDirectory.prototype.unlinkFile;
+		PosixDirectory.prototype.unlinkFile = function (name) {
+			unlink.call(this, name);
+			if (name === ${JSON.stringify(`${id}.deleting`)}) process.kill(process.pid, 'SIGKILL');
+		};
+		await retention.applyPrune(await retention.previewPrune('count:0'), signal);
+	`);
+	assert.equal(crashed.signal, "SIGKILL", crashed.stderr);
+	await assert.rejects(lstat(files.wav(id)), { code: "ENOENT" });
+	await writeFile(files.wav(id), "replacement", { mode: 0o600 });
+	const started = runChild(`await retention.enforceActiveRetention(signal);`);
+	assert.equal(started.status, 0, started.stderr);
+	assert.deepEqual(await rows(), []);
+	assert.equal(await readFile(files.wav(id), "utf8"), "replacement");
+	assert.equal(await save(null), null);
 });
 
 check("after restart an unfinished import without published audio is interrupted, not retryable", async (t) => {
