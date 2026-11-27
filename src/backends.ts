@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { TranscribeBackend, TranscriptionMode, ResolvedTranscriptionPlan, ResolvedWhisperCppModel } from "./types.ts";
 import { DEFAULT_TRANSCRIBE_BACKEND } from "./constants.ts";
 import { env, expandConfigPath, getTranscribeBackend, getTranslateToEnglishLanguage, isTranscribeBackend } from "./config.ts";
-import { getPythonWhisperModelName, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
+import { discoverWhisperCppModels, getPythonWhisperModelName, getWhisperCppModelNameFromPath, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
+import { getWhisperVariant } from "./transfer/catalog.ts";
 import { resolveLivePlanDetails } from "./live-plan.ts";
 import { findExecutable, isExecutableFile } from "./processes.ts";
 
@@ -63,6 +65,21 @@ export function getWhisperCppBinary() {
 	const configured = env("MICME_WHISPER_CPP_BIN")?.trim();
 	if (configured) return resolveExecutableConfig(configured, "MICME_WHISPER_CPP_BIN");
 	return findExecutable(["whisper-cli", "whisper-cpp"]);
+}
+
+/** Resolve only discovery-backed local choices; an arbitrary ID never becomes a filename. */
+export function installedWhisperModels() {
+	const binary = getWhisperCppBinary();
+	if (!binary) return [];
+	const models = new Map<string, { id: string; name: string | undefined; path: string; binary: string }>();
+	for (const candidate of discoverWhisperCppModels(process.cwd())) {
+		if (!candidate.installed) continue;
+		const path = resolve(candidate.value);
+		const name = getWhisperCppModelNameFromPath(path);
+		const id = candidate.kind === "model-name" && name ? getWhisperVariant(name)?.id ?? path : path;
+		models.set(id, { id, name, path, binary: resolve(binary) });
+	}
+	return [...models.values()];
 }
 
 export function getPythonWhisperBinary() {
