@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { RECORDING_WIDGET_KEY } from "../src/constants.ts";
 import { RecordingWidget } from "../src/recording-widget.ts";
+import { initialCapture } from "../src/transfer/capture.ts";
 
 function createWidgetHarness(mode = "rpc") {
 	const widget = new RecordingWidget();
@@ -18,7 +19,7 @@ function createWidgetHarness(mode = "rpc") {
 		},
 	};
 	return {
-		start: (active = { startedAt: Date.now(), audioLevel: () => 0.5 }) => widget.start(ctx, active),
+		start: (active = { startedAt: Date.now(), audioLevel: () => 0.5 }, capture) => widget.start(ctx, active, capture),
 		clear: () => widget.clear(ctx),
 		lines: () => widgets.get(RECORDING_WIDGET_KEY),
 		line: () => widgets.get(RECORDING_WIDGET_KEY)?.[0],
@@ -97,6 +98,21 @@ test("TUI resizes the single-line draft to preserve its Unicode tail without cha
 	t.mock.timers.tick(120);
 	assert.equal(harness.lines()[1], `Live: ${liveDraft}`);
 	assert.equal(active.liveDraft, liveDraft);
+});
+
+test("opaque recorder status does not read a WAV or pretend to know the input", (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setInterval"] });
+	const harness = createWidgetHarness();
+	const openFile = t.mock.fn();
+	const level = t.mock.fn(() => 0.5);
+	t.after(harness.clear);
+	harness.start({ startedAt: Date.now(), audioPath: "raw.wav", directory: { openFile }, audioLevel: level },
+		() => ({ ...initialCapture("custom"), stage: "opaque-running" }));
+	t.mock.timers.tick(120);
+	assert.match(harness.line(), /^Recorder running · ○/);
+	assert.match(harness.lines()[1], /Custom · Device unknown, channel unknown/);
+	assert.equal(level.mock.callCount(), 0);
+	assert.equal(openFile.mock.callCount(), 0);
 });
 
 test("a zero live PCM reading never reopens the spool file for metering", (t) => {
