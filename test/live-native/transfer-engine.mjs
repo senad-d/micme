@@ -1,9 +1,9 @@
 // Opt-in integrated P4 collector. Only disposable Pi state and hash-pinned public
 // fixtures enter this driver; the old Whisper runner remains independent.
 import { closeSync, createReadStream, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { arch, cpus, version } from "node:os";
+import { arch, cpus, loadavg, version } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -44,7 +44,7 @@ function qualificationTrials(protocol, frozen, manifestSha256, variant, local) {
 				actualBackend: "unknown", actualDevice: null, requestedDevice: "cpu", threads: null, mic: "Paced public file; no real mic", hostVersion: null },
 			build: { product: t.product, tag: null, commit: null, binarySha256: local?.recognizerSha256 ?? null, engineRevision: engineSource,
 				backend: "micme-recognizer", modelRevision: variant.blobs[0].revision, modelFile: variant.blobs[0].path,
-				modelSha256: variant.blobs[0].sha256, quant: variant.quant, vad: "off", chunkPolicy: "chunked: pause near 30s, hard bound 40s" } });
+				modelSha256: variant.blobs[0].sha256, quant: variant.quant, vad: null, chunkPolicy: null } });
 	}
 	return [...unique.values()].sort((a, b) => (a.fixture === "jfk" ? -1 : b.fixture === "jfk" ? 1 : a.fixture.localeCompare(b.fixture) || a.width - b.width));
 }
@@ -185,6 +185,8 @@ function projectTake(take, window, metadata, comparison) {
 	if (loaded) {
 		const { traits } = loaded;
 		Object.assign(take.trial.rig, { actualBackend: traits.actualCompute, actualDevice: traits.boundDevice, threads: loaded.threads });
+		take.trial.build.vad = traits.vad;
+		take.trial.build.chunkPolicy = traits.stream ? "native incremental stream" : traits.longForm ? "whole take: loaded long-form" : "pause near 30s, hard bound 40s or loaded limit";
 		take.events.push({ stage: "modelLoaded", ms: rel(loaded.t) });
 	}
 	let previous = "";
@@ -220,6 +222,9 @@ function projectTake(take, window, metadata, comparison) {
 	}
 	projectTarget(take, ui, frames, rel, clock);
 	if (window.replayed && take.cleaned !== null) take.replayed = window.replayed;
+	if (loaded && loaded.fresh === (take.trial.cache === "warm-model")) {
+		take.gaps.push({ stage: "modelLoaded", code: "identity-mismatch", detail: "Observed model reuse did not match the planned cache condition." });
+	}
 	if (window.fault || error || !last || !closed || !full) {
 		take.outcome = window.injectedMs === undefined ? "failed" : window.fault === "hung" ? "timeout" : "lost";
 		take.gaps.push({ stage: null, code: "no-result", detail: window.injectedMs === undefined ? error ?? "Missing native completion or recorder close." :
@@ -247,6 +252,7 @@ async function driveTake(state, pi, trial, fixture, native, helper, signal, { fa
 	if (prefix) await waitFor(() => promptOnScreen(pi.frames.at(-1)?.lines ?? [], prefix), signal, "Public sentinel did not render in the isolated prompt");
 	const frameStart = pi.frames.length;
 	window.trigger = clock.trigger();
+	window.hostLoadAtTrigger = loadavg()[0];
 	pi.send(alternateM);
 	const trace = async () => (await traceRows(native)).slice(nativeStart);
 	let pid;
@@ -308,13 +314,15 @@ async function observeReplay(pi, state, text, signal) {
 }
 
 async function replayGroup(trials, p, sidecar, signal, metadata, comparison) {
-	const entry = join(p.local.workDir, `p4-${p.id.split("/")[0]}-observer.mjs`);
-	const native = join(p.local.workDir, `p4-${p.id.split("/")[0]}-observer.jsonl`);
-	await writeFile(entry, wrapper(native));
-	await writeFile(native, "");
-	const state = await isolatedPi({ root: p.local.workDir, entry, signal });
+	const root = await mkdtemp(join(p.local.workDir, "p4-"));
+	const entry = join(root, "observer.mjs");
+	const native = join(root, "native.jsonl");
+	let state;
 	const results = [];
 	try {
+		await writeFile(entry, wrapper(native), { mode: 0o600 });
+		await writeFile(native, "", { mode: 0o600 });
+		state = await isolatedPi({ root, entry, signal });
 		const models = join(state.work, "models");
 		await mkdir(models, { mode: 0o700 });
 		await copyFile(p.blob.file, join(models, basename(p.blob.blobPath)));
@@ -362,7 +370,22 @@ async function replayGroup(trials, p, sidecar, signal, metadata, comparison) {
 			if (take.native && first) take.native.workerCleanExit = wire.some(({ kind, pid, evidence }) => kind === "released" && pid === first.pid && evidence.workerCleanExit);
 		}
 		return results;
-	} finally { await closePi(state); }
+	} finally {
+		try { if (state) await closePi(state); }
+		finally { await rm(root, { recursive: true, force: true }); }
+	}
+}
+
+function streamObservation(window) {
+	if (!window?.wire.some(({ kind, traits }) => kind === "loaded" && traits.stream)) return null;
+	const end = window.capture.find(({ type }) => type === "capture-end");
+	const ack = end && window.wire.findLast(({ kind, t }) => kind === "ack" && t <= end.t);
+	return {
+		// This is lag at the recorder's last write, not peak lag. PTY frames
+		// in the B take remain the only source of scored visible drafts.
+		lagAtCaptureEndSamples: end ? end.samples - (ack?.through ?? 0) : null,
+		drafts: window.wire.filter(({ kind }) => kind === "draft").map((draft) => ({ ms: window.rel(draft.t), ...wireEvent(draft) })),
+	};
 }
 
 async function unloadFromPi(pi, native, signal) {
@@ -419,6 +442,7 @@ async function collectEngine(manifestPath, variant, output, signal) {
 				await destination.writeFile(`${JSON.stringify(take)}\n`);
 				const score = scoreTake(take);
 				receipts.push({ pairId: take.trial.pairId, score: score.status, gates: score.gates, wer: score.wer,
+					hostLoadAtTrigger: window?.hostLoadAtTrigger ?? null, stream: streamObservation(window),
 					fault: window?.fault ? { kind: window.fault, error: window.error, injectedMs: window.injectedMs ?? null, confirmMs: window.confirmMs ?? null,
 						wire: window.wire.filter(({ kind }) => ["loaded", "failed", "released", "snapshot", "final"].includes(kind)).map(({ t, ...event }) => ({ ms: window.rel(t), ...event })),
 						capture: window.capture.map(({ t, ...event }) => ({ ms: window.rel(t), ...event })), mutations: take.mutations } : null });

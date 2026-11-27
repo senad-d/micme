@@ -7,7 +7,7 @@ import { hasNonzeroPcm } from "../audio-level.ts";
 import { installedWhisperModels } from "../backends.ts";
 import { env, expandConfigPath, getTranscribeBackend, getTransferOptions } from "../config.ts";
 import { LIVE_CAPTURE_RATE as RATE } from "../constants.ts";
-import { assertLoadedBinding, loadedRecognitionRoute } from "../live-plan.ts";
+import { loadedRecognitionRoute } from "../live-plan.ts";
 import { isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName } from "../models.ts";
 import { findExecutable, normalizeTranscript } from "../processes.ts";
 import { transcribeInstalledWhisper } from "../transcription.ts";
@@ -17,6 +17,7 @@ import { listCompute as enumerateNative, loadEngine, type EngineProvisioning, ty
 import { getEngineEvidence } from "./engine-evidence.ts";
 import { RecognitionQueue, recognitionQueue } from "./jobs.ts";
 import { finishLocal, resolveLanguage } from "./language.ts";
+import { decodeTransferOptions } from "./options.ts";
 import { invalidRecognitionAudio, joinChunks, PauseChunks, withVerifiedPcm, type VerifiedPcm } from "./recognition-audio.ts";
 
 type Idle = TransferOptions["MICME_MODEL_IDLE"];
@@ -25,6 +26,7 @@ type Evidence = ReturnType<NativeEngine["evidence"]>;
 type Observation = NativeEvent
 	| { kind: "loaded"; fresh: boolean; traits: Traits; pid: number | undefined; sha256: string; threads: number; evidence: Evidence }
 	| { kind: "batch"; from: number; to: number; text: string; evidence: Evidence }
+	| { kind: "draft"; from: number; to: number; text: string; catchUp: boolean }
 	| { kind: "snapshot"; samples: number; pcmSha256: string }
 	| { kind: "final"; final: Final; evidence: Evidence | null; inputSamples: number; inputPcmSha256: string }
 	| { kind: "released"; resident: boolean; pid: number | undefined; evidence: Evidence }
@@ -33,9 +35,10 @@ type Observation = NativeEvent
 type ServiceOptions = {
 	load?: (choice: Choice, signal: Signal, observe: (event: NativeEvent) => void) => Promise<NativeEngine>;
 	queue?: RecognitionQueue;
-	settings?: () => Pick<TransferOptions, "MICME_MODEL_IDLE" | "MICME_PREFERRED_LANGUAGES" | "MICME_WORDS">;
+	settings?: () => Partial<RecognitionSettings>;
 	observe?: (event: Observation) => void;
 };
+type RecognitionSettings = Pick<TransferOptions, "MICME_MODEL_IDLE" | "MICME_PREFERRED_LANGUAGES" | "MICME_WORDS" | "MICME_FILLERS" | "MICME_REMOVE_FILLERS" | "MICME_SCRIPT">;
 type FileOptions = { whole?: boolean; onCpuRecovery?: () => void };
 const EMPTY = Buffer.alloc(0);
 const FIVE_MINUTES = 300_000;
@@ -194,16 +197,19 @@ function takeLanguage(choice: Choice, engine: NativeEngine, preferences: readonl
 	throw new Error("The loaded recognition model does not support the selected language.");
 }
 
-function finalText(raw: string, language: SpeechLanguage, source: Final["source"], nativeBias: boolean) {
-	const final = finishLocal(normalizeTranscript(raw), language === "auto" ? null : language, source);
-	if (!nativeBias) return final;
-	return { ...final, rules: [...final.rules.filter(({ rule }) => rule !== "bias"), { rule: "bias", result: "applied", reason: "applied" }] } satisfies Final;
+function finalText(raw: string, language: SpeechLanguage, source: Final["source"], task: Choice["task"], settings: RecognitionSettings, nativeBias = false) {
+	return finishLocal(normalizeTranscript(raw), language === "auto" ? null : language, source, { task, settings, nativeBias });
+}
+
+function takeSettings(read?: ServiceOptions["settings"]): RecognitionSettings {
+	const settings = read ? { ...decodeTransferOptions(() => undefined), ...read() } : getTransferOptions();
+	return { ...settings, MICME_PREFERRED_LANGUAGES: [...settings.MICME_PREFERRED_LANGUAGES], MICME_WORDS: [...settings.MICME_WORDS], MICME_FILLERS: [...settings.MICME_FILLERS] };
 }
 
 function engineKey(choice: Choice) { return JSON.stringify([choice.variantId, choice.compute, choice.requestedDeviceId, choice.detector, choice.task, choice.language]); }
 
-type Slot = { engine: NativeEngine; key: string; timer?: NodeJS.Timeout };
-type Lease = { engine: NativeEngine; release: (good: boolean, idle: Idle, signal: Signal) => Promise<void> };
+type Slot = { engine: NativeEngine; key: string; timer?: NodeJS.Timeout; transientOwner?: symbol };
+type Lease = { engine: NativeEngine; release: (good: boolean, idle: Idle, signal: Signal, transientOwner?: symbol) => Promise<void> };
 
 class ModelPool {
 	private idle?: Slot;
@@ -236,12 +242,12 @@ class ModelPool {
 		return { engine, release: this.release.bind(this, engine, key, generation) };
 	}
 
-	private async release(engine: NativeEngine, key: string, generation: number, good: boolean, idle: Idle, signal: Signal) {
+	private async release(engine: NativeEngine, key: string, generation: number, good: boolean, idle: Idle, signal: Signal, transientOwner?: symbol) {
 		if (good && idle !== "immediate" && !signal.aborted && generation === this.unloadGeneration) {
 			try {
 				await engine.reset(signal);
 				if (!signal.aborted && generation === this.unloadGeneration) {
-					const slot: Slot = { engine, key };
+					const slot: Slot = { engine, key, transientOwner };
 					this.idle = slot;
 					if (idle === "5min") slot.timer = setTimeout(() => { void this.unload().catch(() => {}); }, FIVE_MINUTES).unref();
 					this.observe({ kind: "released", resident: true, pid: engine.pid, evidence: engine.evidence() });
@@ -264,6 +270,12 @@ class ModelPool {
 		return slot;
 	}
 
+	async unloadTransient(owner: symbol) {
+		if (this.idle?.transientOwner !== owner) return;
+		const slot = this.takeIdle();
+		if (slot) await this.close(slot.engine);
+	}
+
 	async unload() {
 		this.unloadGeneration++;
 		const slot = this.takeIdle();
@@ -279,6 +291,7 @@ class Dictation implements Recognizer {
 	private readonly chunks?: PauseChunks;
 	private through = 0;
 	private raw = "";
+	private pendingDraft?: WordUpdate;
 	private busy = false;
 	private ended = false;
 	private release?: Promise<void>;
@@ -286,19 +299,21 @@ class Dictation implements Recognizer {
 	private readonly route: Route;
 	private readonly language: SpeechLanguage;
 	private readonly nativeBias: boolean;
-	private readonly idle: Idle;
+	private readonly task: Choice["task"];
+	private readonly settings: RecognitionSettings;
 	private readonly onText: (update: WordUpdate) => void;
 	private readonly observe: (event: Observation) => void;
 	private readonly giveBack: () => void;
 	private readonly owner: Signal;
 
-	constructor(lease: Lease, route: Route, language: SpeechLanguage, nativeBias: boolean, idle: Idle, onText: (update: WordUpdate) => void,
-		observe: (event: Observation) => void, giveBack: () => void, owner: Signal) {
+	constructor(lease: Lease, route: Route, language: SpeechLanguage, nativeBias: boolean, task: Choice["task"], settings: RecognitionSettings,
+		onText: (update: WordUpdate) => void, observe: (event: Observation) => void, giveBack: () => void, owner: Signal) {
 		this.lease = lease;
 		this.route = route;
 		this.language = language;
 		this.nativeBias = nativeBias;
-		this.idle = idle;
+		this.task = task;
+		this.settings = settings;
 		this.onText = onText;
 		this.observe = observe;
 		this.giveBack = giveBack;
@@ -315,7 +330,7 @@ class Dictation implements Recognizer {
 	private async settle(good: boolean) {
 		this.ended = true;
 		this.owner.removeEventListener("abort", this.cancel);
-		this.release ??= this.lease.release(good, this.idle, this.signal).finally(this.giveBack);
+		this.release ??= this.lease.release(good, this.settings.MICME_MODEL_IDLE, this.signal).finally(this.giveBack);
 		return this.release;
 	}
 
@@ -357,7 +372,18 @@ class Dictation implements Recognizer {
 				const draining = catchUp || block.length >= 2 * RATE;
 				const updates = await this.lease.engine.feed(from, block, false, active, draining);
 				active.throwIfAborted();
-				if (!draining) for (const update of updates) if (update.kind === "draft") { active.throwIfAborted(); this.onText(update); }
+				for (const update of updates) {
+					if (update.kind !== "draft") continue;
+					this.pendingDraft = update;
+					this.observe({ ...update, kind: "draft", catchUp: draining });
+				}
+				// The engine returns changes only. Retain the newest withheld draft
+				// until a fresh ACK, even if that ACK reports no text change.
+				if (!draining && this.pendingDraft) {
+					active.throwIfAborted();
+					this.onText(this.pendingDraft);
+					this.pendingDraft = undefined;
+				}
 			} else if (this.chunks) await this.chunks.append(block, (offset, chunk) => this.decode(offset, chunk, active));
 			this.hash.update(block);
 			this.through += block.length / 2;
@@ -384,7 +410,7 @@ class Dictation implements Recognizer {
 					if (file.total > engine.maxInputSamples) throw new Error("The take exceeds the loaded model's whole-file limit. Enable chunking for long takes.");
 					await this.decode(0, await file.read(0, file.total, active), active);
 				}
-				return { final: finalText(this.raw, this.language, "live", this.nativeBias), inputPcmSha256 };
+				return { final: finalText(this.raw, this.language, "live", this.task, this.settings, this.nativeBias), inputPcmSha256 };
 			});
 			this.observe({ kind: "final", ...final, evidence: engine.evidence(), inputSamples: this.through });
 			await this.settle(true);
@@ -426,7 +452,6 @@ export function assertInteractiveArtifactBackend(variantId: string) {
 
 export function createRecognitionService(options: ServiceOptions = {}) {
 	const observe = (event: Observation) => options.observe && publish(options.observe, event);
-	const settings = options.settings ?? getTransferOptions;
 	const queue = options.queue ?? new RecognitionQueue();
 	const cliQueue = new RecognitionQueue();
 	const load = options.load ?? loadInstalledNative;
@@ -435,7 +460,7 @@ export function createRecognitionService(options: ServiceOptions = {}) {
 
 	const openRecognizer: OpenRecognizer = async (requested, onText, signal) => {
 		const choice = { ...requested };
-		const prefs = settings();
+		const prefs = takeSettings(options.settings);
 		assertInteractiveArtifactBackend(choice.variantId);
 		const giveBack = await queue.acquire("foreground", signal);
 		let lease: Lease | undefined;
@@ -447,7 +472,7 @@ export function createRecognitionService(options: ServiceOptions = {}) {
 			const words = engine.traits.bias ? prefs.MICME_WORDS : [];
 			if (route === "stream") await engine.begin(language, words, signal);
 			signal.throwIfAborted();
-			return new Dictation(lease, route, language, route === "stream" && words.length > 0, prefs.MICME_MODEL_IDLE, onText, observe, giveBack, signal);
+			return new Dictation(lease, route, language, route === "stream" && words.length > 0, choice.task, prefs, onText, observe, giveBack, signal);
 		} catch (error) {
 			try { await lease?.release(false, "immediate", signal); } finally { giveBack(); }
 			throw error;
@@ -458,7 +483,7 @@ export function createRecognitionService(options: ServiceOptions = {}) {
 		fileOptions: FileOptions = {}): Promise<RecognizedFile> {
 		signal.throwIfAborted();
 		const choice = { ...requested };
-		const prefs = settings();
+		const prefs = takeSettings(options.settings);
 		const runQueue = job === "cli" ? cliQueue : queue;
 		const runPool = job === "cli" ? cliPool : pool;
 		const priority = job === "cli" ? "foreground" : job;
@@ -478,7 +503,7 @@ export function createRecognitionService(options: ServiceOptions = {}) {
 				signal.throwIfAborted();
 				// One fresh same-model attempt is the retry. CPU is allowed only for
 				// unpinned Auto, an inference failure, and a host that labels the change.
-				if (!(error instanceof RetryableInference) || job !== "retry" || selected.compute !== "auto" ||
+				if (!(error instanceof RetryableInference) || error.actualCompute === "cpu" || job !== "retry" || selected.compute !== "auto" ||
 					selected.requestedDeviceId !== null || !fileOptions.onCpuRecovery) throw error;
 				fileOptions.onCpuRecovery();
 				signal.throwIfAborted();
@@ -492,12 +517,17 @@ export function createRecognitionService(options: ServiceOptions = {}) {
 }
 
 class RetryableInference extends Error {
-	constructor(cause: unknown) { super("Local inference failed before a complete result.", { cause }); }
+	readonly actualCompute: Traits["actualCompute"];
+
+	constructor(cause: unknown, actualCompute: Traits["actualCompute"]) {
+		super("Local inference failed before a complete result.", { cause });
+		this.actualCompute = actualCompute;
+	}
 }
 
 type FileContext = {
 	file: VerifiedPcm; queue: RecognitionQueue; pool: ModelPool; priority: "foreground" | "retry" | "import"; signal: Signal;
-	prefs: ReturnType<NonNullable<ServiceOptions["settings"]>>; observe: (event: Observation) => void; onProgress: (through: number) => void;
+	prefs: RecognitionSettings; observe: (event: Observation) => void; onProgress: (through: number) => void;
 	whole: boolean; legacy?: ReturnType<typeof legacyModels>[number];
 };
 
@@ -510,65 +540,61 @@ async function fileAttempt(context: FileContext, choice: Choice, fresh: boolean)
 	let raw = "";
 	let bindingObserved = false;
 	let evidence: Evidence | null = null;
-	const decode = async (from: number, pcm: Buffer) => {
-		const unlock = await queue.acquire(priority, signal);
-		let lease: Lease | undefined;
-		let good = false;
-		try {
-			signal.throwIfAborted();
-			let text: string;
-			let compute: Traits["actualCompute"];
-			let device: DeviceIdentity | null;
-			if (legacy) {
-				const result = await whisperChunk(legacy, file, pcm, choice, signal);
-				({ text, actualCompute: compute, boundDevice: device } = result);
-			} else {
-				lease = await pool.acquire(choice, signal, fresh && from === 0);
-				const { engine } = lease;
-				loadedRecognitionRoute(choice, engine);
-				assertLoadedBinding(choice, engine.traits);
-				language = takeLanguage(choice, engine, prefs.MICME_PREFERRED_LANGUAGES);
-				if (!engine.traits.batch || pcm.length / 2 > engine.maxInputSamples) throw new Error("The loaded model cannot recognize this bounded whole-file input.");
-				try { text = await nativeBatch(engine, pcm, language, from, observe, signal); }
-				catch (error) { throw new RetryableInference(error); }
-				evidence = engine.evidence();
-				({ actualCompute: compute, boundDevice: device } = engine.traits);
-			}
-			signal.throwIfAborted();
-			if (!legacy || hasNonzeroPcm(pcm)) {
-				if (bindingObserved && (actualCompute !== compute || !sameDevice(boundDevice, device))) throw new Error("Loaded compute binding changed during file recognition.");
-				bindingObserved = true;
-				actualCompute = compute;
-				boundDevice = device;
-			}
-			raw = joinChunks(raw, normalizeTranscript(text));
-			input.update(pcm);
-			good = true;
-		} finally {
-			const moreChunks = from + pcm.length / 2 < file.total;
-			const idle = moreChunks && prefs.MICME_MODEL_IDLE === "immediate" ? "5min" : prefs.MICME_MODEL_IDLE;
-			try { await lease?.release(good, idle, signal); }
-			finally { unlock(); }
-		}
-		context.onProgress(from + pcm.length / 2);
-	};
+	const owner = Symbol("file inference");
 	try {
-		if (context.whole) {
-			// Comparator only; bound allocation independently of the supplied file.
-			if (file.total > 120 * RATE) throw invalidRecognitionAudio("the whole-file comparator exceeds 120 seconds");
-			await decode(0, await file.read(0, file.total, signal));
-		} else {
-			const chunks = new PauseChunks(40 * RATE);
-			for (let from = 0; from < file.total; from += RATE) {
-				await chunks.append(await file.read(from, Math.min(RATE, file.total - from), signal), decode);
+		// Comparator only; bound allocation independently of the supplied file.
+		if (context.whole && file.total > 120 * RATE) throw invalidRecognitionAudio("the whole-file comparator exceeds 120 seconds");
+		let through = 0;
+		while (through < file.total) {
+			const from = through;
+			const unlock = await queue.acquire(priority, signal);
+			let lease: Lease | undefined;
+			let good = false;
+			try {
+				signal.throwIfAborted();
+				let text: string;
+				let compute: Traits["actualCompute"];
+				let device: DeviceIdentity | null;
+				if (!legacy) lease = await pool.acquire(choice, signal, fresh && from === 0);
+				const engine = lease?.engine;
+				if (engine) {
+					loadedRecognitionRoute(choice, engine);
+					language = takeLanguage(choice, engine, prefs.MICME_PREFERRED_LANGUAGES);
+					if (!engine.traits.batch || (context.whole && file.total > engine.maxInputSamples)) throw new Error("The loaded model cannot recognize this bounded whole-file input.");
+				}
+				const pcm = context.whole ? await file.read(from, file.total, signal) : await file.nextChunk(from, engine?.maxInputSamples ?? Infinity, signal);
+				if (legacy) {
+					({ text, actualCompute: compute, boundDevice: device } = await whisperChunk(legacy, file, pcm, choice, signal));
+				} else if (engine) {
+					({ actualCompute: compute, boundDevice: device } = engine.traits);
+					try { text = await nativeBatch(engine, pcm, language, from, observe, signal); }
+					catch (error) { throw new RetryableInference(error, compute); }
+					evidence = engine.evidence();
+				} else throw new Error("The selected model did not load.");
+				signal.throwIfAborted();
+				if (!legacy || hasNonzeroPcm(pcm)) {
+					if (bindingObserved && (actualCompute !== compute || !sameDevice(boundDevice, device))) throw new Error("Loaded compute binding changed during file recognition.");
+					bindingObserved = true;
+					actualCompute = compute;
+					boundDevice = device;
+				}
+				raw = joinChunks(raw, normalizeTranscript(text));
+				input.update(pcm);
+				through += pcm.length / 2;
+				good = true;
+			} finally {
+				const transient = through < file.total && prefs.MICME_MODEL_IDLE === "immediate";
+				try { await lease?.release(good, transient ? "5min" : prefs.MICME_MODEL_IDLE, signal, transient ? owner : undefined); }
+				finally { unlock(); }
 			}
-			await chunks.finish(decode);
+			context.onProgress(through);
 		}
-		const final = finalText(raw, language, "import", false);
+		signal.throwIfAborted();
+		const final = finalText(raw, language, "import", choice.task, prefs);
 		observe({ kind: "final", final, evidence, inputSamples: file.total, inputPcmSha256: input.digest("hex") });
 		return { ...final, actualCompute, boundDevice };
 	} finally {
-		if (prefs.MICME_MODEL_IDLE === "immediate" && !context.whole) await pool.unload();
+		await pool.unloadTransient(owner);
 	}
 }
 

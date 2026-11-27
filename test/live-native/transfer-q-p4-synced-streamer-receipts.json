@@ -1,0 +1,3462 @@
+{
+  "variantId": "moonshine-streaming-tiny/Q8_0@3b75b3ab1d29bee2112deb73514de0657337db559134956af809d3dd70231174",
+  "sourceSha256": "c3f677da7e67028372db135cc65dd813f34c1c3f74e352272a3a6253ec1af3df",
+  "manifestSha256": "d7ed1856d22869925c07f847fe34d34c819429279d5a5d85ce54d15f16e5d367",
+  "comparison": {
+    "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9": {
+      "raw": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "compute": "cpu",
+      "device": {
+        "id": null,
+        "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+      },
+      "pcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9"
+    },
+    "ff58760aeeeb52e6a61a850e9934207a7a4b4667f1a4e7255ad773efd8978bc7": {
+      "raw": "But now it doesn't seem to matter very much. My uncle was delighted. For myself, Moody and DeSataside, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee. Give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word-plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch in the press newspaper June 13, 1863.",
+      "compute": "cpu",
+      "device": {
+        "id": null,
+        "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+      },
+      "pcmSha256": "ff58760aeeeb52e6a61a850e9934207a7a4b4667f1a4e7255ad773efd8978bc7"
+    }
+  },
+  "receipts": [
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-jfk-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 2.77,
+      "stream": {
+        "lagAtCaptureEndSamples": 70720,
+        "drafts": [
+          {
+            "ms": 2285.471112987816,
+            "kind": "draft",
+            "from": 0,
+            "to": 8640,
+            "text": "1.",
+            "catchUp": false
+          },
+          {
+            "ms": 2712.611991009533,
+            "kind": "draft",
+            "from": 0,
+            "to": 16640,
+            "text": "And so",
+            "catchUp": false
+          },
+          {
+            "ms": 2878.593011996567,
+            "kind": "draft",
+            "from": 0,
+            "to": 23360,
+            "text": "And so my",
+            "catchUp": false
+          },
+          {
+            "ms": 3484.2789160225984,
+            "kind": "draft",
+            "from": 0,
+            "to": 27520,
+            "text": "And so my fellow",
+            "catchUp": false
+          },
+          {
+            "ms": 3835.5209509943124,
+            "kind": "draft",
+            "from": 0,
+            "to": 35520,
+            "text": "And so my fellow America",
+            "catchUp": false
+          },
+          {
+            "ms": 5236.579300007641,
+            "kind": "draft",
+            "from": 0,
+            "to": 41280,
+            "text": "And so, my fellow America!",
+            "catchUp": false
+          },
+          {
+            "ms": 6774.955890021145,
+            "kind": "draft",
+            "from": 0,
+            "to": 57280,
+            "text": "And so my fellow America",
+            "catchUp": true
+          },
+          {
+            "ms": 7784.482966027081,
+            "kind": "draft",
+            "from": 0,
+            "to": 73280,
+            "text": "And so, my fellow Americans, ask not",
+            "catchUp": true
+          },
+          {
+            "ms": 8462.941262028038,
+            "kind": "draft",
+            "from": 0,
+            "to": 89280,
+            "text": "And so, my fellow Americans, ask not to",
+            "catchUp": true
+          },
+          {
+            "ms": 10401.71990098697,
+            "kind": "draft",
+            "from": 0,
+            "to": 105280,
+            "text": "And so, my fellow Americans, ask not what your country",
+            "catchUp": true
+          },
+          {
+            "ms": 12736.521190008938,
+            "kind": "draft",
+            "from": 0,
+            "to": 121280,
+            "text": "And so, my fellow Americans, ask not what your country can do for you.",
+            "catchUp": true
+          },
+          {
+            "ms": 14466.636755010903,
+            "kind": "draft",
+            "from": 0,
+            "to": 137280,
+            "text": "And so, my fellow Americans, ask not what your country can do for you,",
+            "catchUp": true
+          },
+          {
+            "ms": 15033.98938103658,
+            "kind": "draft",
+            "from": 0,
+            "to": 153280,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+            "catchUp": true
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-jfk-80-warm",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 4.4,
+      "stream": {
+        "lagAtCaptureEndSamples": 25920,
+        "drafts": [
+          {
+            "ms": 1502.9314069904322,
+            "kind": "draft",
+            "from": 0,
+            "to": 8320,
+            "text": "10.",
+            "catchUp": false
+          },
+          {
+            "ms": 1939.3621599830622,
+            "kind": "draft",
+            "from": 0,
+            "to": 16960,
+            "text": "And so",
+            "catchUp": false
+          },
+          {
+            "ms": 2409.173508957767,
+            "kind": "draft",
+            "from": 0,
+            "to": 24320,
+            "text": "And so my",
+            "catchUp": false
+          },
+          {
+            "ms": 2844.818254963302,
+            "kind": "draft",
+            "from": 0,
+            "to": 31680,
+            "text": "And so my fellow",
+            "catchUp": false
+          },
+          {
+            "ms": 3573.595787004375,
+            "kind": "draft",
+            "from": 0,
+            "to": 38400,
+            "text": "And so, my fellow America!",
+            "catchUp": false
+          },
+          {
+            "ms": 4576.990086988353,
+            "kind": "draft",
+            "from": 0,
+            "to": 50240,
+            "text": "And so, my fellow Americans!",
+            "catchUp": false
+          },
+          {
+            "ms": 4858.179524973773,
+            "kind": "draft",
+            "from": 0,
+            "to": 66240,
+            "text": "And so, my fellow Americans, ask",
+            "catchUp": true
+          },
+          {
+            "ms": 5555.134750977897,
+            "kind": "draft",
+            "from": 0,
+            "to": 70720,
+            "text": "And so, my fellow Americans, ask not to",
+            "catchUp": false
+          },
+          {
+            "ms": 5776.281705991172,
+            "kind": "draft",
+            "from": 0,
+            "to": 81920,
+            "text": "And so, my fellow Americans, ask not",
+            "catchUp": false
+          },
+          {
+            "ms": 6175.937406972789,
+            "kind": "draft",
+            "from": 0,
+            "to": 89600,
+            "text": "And so, my fellow Americans, ask not to",
+            "catchUp": false
+          },
+          {
+            "ms": 6338.948143974685,
+            "kind": "draft",
+            "from": 0,
+            "to": 93440,
+            "text": "And so, my fellow Americans, ask not what",
+            "catchUp": false
+          },
+          {
+            "ms": 6634.533015982055,
+            "kind": "draft",
+            "from": 0,
+            "to": 97280,
+            "text": "And so, my fellow Americans, ask not what your",
+            "catchUp": false
+          },
+          {
+            "ms": 6904.4085740007395,
+            "kind": "draft",
+            "from": 0,
+            "to": 101120,
+            "text": "And so, my fellow Americans, ask not what your country",
+            "catchUp": false
+          },
+          {
+            "ms": 7735.440576986217,
+            "kind": "draft",
+            "from": 0,
+            "to": 109440,
+            "text": "And so, my fellow Americans, ask not what your country can",
+            "catchUp": false
+          },
+          {
+            "ms": 7920.619774953269,
+            "kind": "draft",
+            "from": 0,
+            "to": 116800,
+            "text": "And so, my fellow Americans, ask not what your country can do for you.",
+            "catchUp": false
+          },
+          {
+            "ms": 10935.87128497734,
+            "kind": "draft",
+            "from": 0,
+            "to": 150080,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you are.",
+            "catchUp": true
+          },
+          {
+            "ms": 13260.281004980945,
+            "kind": "draft",
+            "from": 0,
+            "to": 166080,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+            "catchUp": true
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-jfk-80-reload",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 5.05,
+      "stream": {
+        "lagAtCaptureEndSamples": 110720,
+        "drafts": [
+          {
+            "ms": 2343.6576880356515,
+            "kind": "draft",
+            "from": 0,
+            "to": 9920,
+            "text": "10.",
+            "catchUp": false
+          },
+          {
+            "ms": 3074.9551980039323,
+            "kind": "draft",
+            "from": 0,
+            "to": 21760,
+            "text": "And so, my",
+            "catchUp": false
+          },
+          {
+            "ms": 4208.487114026233,
+            "kind": "draft",
+            "from": 0,
+            "to": 33280,
+            "text": "And so, my fellow America.",
+            "catchUp": false
+          },
+          {
+            "ms": 6535.278765036746,
+            "kind": "draft",
+            "from": 0,
+            "to": 49280,
+            "text": "And so, my fellow Americans!",
+            "catchUp": true
+          },
+          {
+            "ms": 9944.50003398864,
+            "kind": "draft",
+            "from": 0,
+            "to": 65280,
+            "text": "And so, my fellow Americans, ask",
+            "catchUp": true
+          },
+          {
+            "ms": 12575.40346403329,
+            "kind": "draft",
+            "from": 0,
+            "to": 81280,
+            "text": "And so, my fellow Americans, ask not",
+            "catchUp": true
+          },
+          {
+            "ms": 15717.085416986629,
+            "kind": "draft",
+            "from": 0,
+            "to": 97280,
+            "text": "And so, my fellow Americans, ask not what your",
+            "catchUp": true
+          },
+          {
+            "ms": 23261.91908802002,
+            "kind": "draft",
+            "from": 0,
+            "to": 113280,
+            "text": "And so, my fellow Americans, ask not what your country can do.",
+            "catchUp": true
+          },
+          {
+            "ms": 29171.71234501808,
+            "kind": "draft",
+            "from": 0,
+            "to": 129280,
+            "text": "And so, my fellow Americans, ask not what your country can do for you.",
+            "catchUp": true
+          },
+          {
+            "ms": 34023.8995090267,
+            "kind": "draft",
+            "from": 0,
+            "to": 145280,
+            "text": "And so, my fellow Americans, ask not what your country can do for you as but",
+            "catchUp": true
+          },
+          {
+            "ms": 37950.520142032794,
+            "kind": "draft",
+            "from": 0,
+            "to": 161280,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for",
+            "catchUp": true
+          },
+          {
+            "ms": 42153.68700803726,
+            "kind": "draft",
+            "from": 0,
+            "to": 176000,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+            "catchUp": false
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-jfk-80-kill",
+      "score": "fail",
+      "gates": {
+        "outcome": {
+          "state": "fail",
+          "message": "lost"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "take: no-result"
+        },
+        "pcm": {
+          "state": "unverified",
+          "message": "Need captured, closed and consumed PCM length/digest from the actual route"
+        },
+        "wire": {
+          "state": "unverified",
+          "message": "No native route/transport trace"
+        },
+        "loads": {
+          "state": "unverified",
+          "message": "Missing native inference/model/VAD counts"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "unverified",
+          "message": "Need human reference and observed raw final"
+        },
+        "seams": {
+          "state": "unverified",
+          "message": "Missing native endpoint/seam observer"
+        },
+        "target": {
+          "state": "unverified",
+          "message": "Need independently observed target and send/queue/insertion counts"
+        }
+      },
+      "wer": null,
+      "hostLoadAtTrigger": 7.83,
+      "stream": {
+        "lagAtCaptureEndSamples": 40000,
+        "drafts": [
+          {
+            "ms": 1722.2019929928938,
+            "kind": "draft",
+            "from": 0,
+            "to": 11840,
+            "text": "And",
+            "catchUp": false
+          },
+          {
+            "ms": 1886.1438239855925,
+            "kind": "draft",
+            "from": 0,
+            "to": 15680,
+            "text": "And so",
+            "catchUp": false
+          },
+          {
+            "ms": 2421.7384460015455,
+            "kind": "draft",
+            "from": 0,
+            "to": 23680,
+            "text": "And so my",
+            "catchUp": false
+          },
+          {
+            "ms": 2695.0987869544188,
+            "kind": "draft",
+            "from": 0,
+            "to": 27520,
+            "text": "And so my fellow",
+            "catchUp": false
+          },
+          {
+            "ms": 3178.4080109639326,
+            "kind": "draft",
+            "from": 0,
+            "to": 35520,
+            "text": "And so, my fellow Ameri-",
+            "catchUp": false
+          },
+          {
+            "ms": 3915.326973979012,
+            "kind": "draft",
+            "from": 0,
+            "to": 40000,
+            "text": "And so, my fellow America!",
+            "catchUp": false
+          },
+          {
+            "ms": 4093.48217899038,
+            "kind": "draft",
+            "from": 0,
+            "to": 48960,
+            "text": "And so, my fellow Americans!",
+            "catchUp": false
+          },
+          {
+            "ms": 4717.021203999058,
+            "kind": "draft",
+            "from": 0,
+            "to": 57920,
+            "text": "And so my fellow America",
+            "catchUp": false
+          },
+          {
+            "ms": 4897.659634952084,
+            "kind": "draft",
+            "from": 0,
+            "to": 61760,
+            "text": "And so my fellow America, as",
+            "catchUp": false
+          },
+          {
+            "ms": 5355.723266963498,
+            "kind": "draft",
+            "from": 0,
+            "to": 65600,
+            "text": "And so my fellow Americans, as",
+            "catchUp": false
+          },
+          {
+            "ms": 6365.880508963601,
+            "kind": "draft",
+            "from": 0,
+            "to": 72320,
+            "text": "And so, my fellow Americans, ask not to",
+            "catchUp": false
+          },
+          {
+            "ms": 7551.480646972195,
+            "kind": "draft",
+            "from": 0,
+            "to": 100800,
+            "text": "And so, my fellow Americans, ask not what your country",
+            "catchUp": false
+          },
+          {
+            "ms": 10094.217550997273,
+            "kind": "draft",
+            "from": 0,
+            "to": 120000,
+            "text": "And so, my fellow Americans, ask not what your country can do for you for you.",
+            "catchUp": false
+          },
+          {
+            "ms": 11598.318704967038,
+            "kind": "draft",
+            "from": 0,
+            "to": 136000,
+            "text": "And so, my fellow Americans, ask not what your country can do for you.",
+            "catchUp": true
+          }
+        ]
+      },
+      "fault": {
+        "kind": "killed",
+        "error": null,
+        "injectedMs": 11832.259623999998,
+        "confirmMs": 11888.213313,
+        "wire": [
+          {
+            "ms": 742.1362129492918,
+            "rss": null,
+            "kind": "loaded",
+            "fresh": true,
+            "traits": {
+              "stream": true,
+              "batch": true,
+              "longForm": false,
+              "nativeLid": false,
+              "bias": false,
+              "translateEn": false,
+              "languages": [
+                "en"
+              ],
+              "vad": "off",
+              "actualCompute": "cpu",
+              "boundDevice": {
+                "id": null,
+                "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+              }
+            },
+            "pid": 777186,
+            "sha256": "75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a",
+            "threads": 4,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 73846784,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 11844.830776993767,
+            "rss": null,
+            "kind": "failed"
+          },
+          {
+            "ms": 11845.86014396383,
+            "rss": null,
+            "kind": "released",
+            "resident": false,
+            "pid": 777186,
+            "evidence": {
+              "asrCalls": 20,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 164564992,
+              "inputSamples": 136000,
+              "inputPcmSha256": "bd481440043f79a5e322209ac1b27729f543b60362e9dd5e55124665778adf3b",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 12762.186292950646,
+            "rss": null,
+            "kind": "loaded",
+            "fresh": true,
+            "traits": {
+              "stream": true,
+              "batch": true,
+              "longForm": false,
+              "nativeLid": false,
+              "bias": false,
+              "translateEn": false,
+              "languages": [
+                "en"
+              ],
+              "vad": "off",
+              "actualCompute": "cpu",
+              "boundDevice": {
+                "id": null,
+                "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+              }
+            },
+            "pid": 778976,
+            "sha256": "75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a",
+            "threads": 4,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 74244096,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 17003.049689952866,
+            "rss": 70922240,
+            "kind": "released",
+            "resident": true,
+            "pid": 778976,
+            "evidence": {
+              "asrCalls": 1,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 158375936,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 17003.568178002373,
+            "rss": null,
+            "kind": "final",
+            "final": {
+              "raw": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+              "local": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+              "language": "en",
+              "source": "import",
+              "rules": [
+                {
+                  "rule": "bias",
+                  "result": "skipped",
+                  "reason": "off"
+                },
+                {
+                  "rule": "vocabulary",
+                  "result": "skipped",
+                  "reason": "off"
+                },
+                {
+                  "rule": "fillers",
+                  "result": "skipped",
+                  "reason": "off"
+                },
+                {
+                  "rule": "echo",
+                  "result": "skipped",
+                  "reason": "off"
+                },
+                {
+                  "rule": "script",
+                  "result": "skipped",
+                  "reason": "off"
+                }
+              ]
+            },
+            "evidence": {
+              "asrCalls": 1,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 158375936,
+              "inputSamples": 176000,
+              "inputPcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9",
+              "workerCleanExit": false
+            },
+            "inputSamples": 176000,
+            "inputPcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9"
+          }
+        ],
+        "capture": [
+          {
+            "ms": 830.114178006188,
+            "type": "capture-start"
+          },
+          {
+            "ms": 851.093683962361,
+            "type": "capture-first",
+            "samples": 320
+          },
+          {
+            "ms": 11830.809780005948,
+            "type": "capture-end",
+            "samples": 176000,
+            "maxPaceDelayMs": 19.989169001579285
+          },
+          {
+            "ms": 11853.64284098579,
+            "type": "capture-close",
+            "samples": 176000
+          }
+        ],
+        "mutations": [
+          {
+            "ms": 17008.534992,
+            "text": "PUBLIC BENCHMARK: And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. "
+          }
+        ]
+      }
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-jfk-80-kill-next",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 7.16,
+      "stream": {
+        "lagAtCaptureEndSamples": 56320,
+        "drafts": [
+          {
+            "ms": 1698.2843260090158,
+            "kind": "draft",
+            "from": 0,
+            "to": 8640,
+            "text": "1.",
+            "catchUp": false
+          },
+          {
+            "ms": 2102.931379012327,
+            "kind": "draft",
+            "from": 0,
+            "to": 14080,
+            "text": "And",
+            "catchUp": false
+          },
+          {
+            "ms": 2583.194050959806,
+            "kind": "draft",
+            "from": 0,
+            "to": 18560,
+            "text": "And so",
+            "catchUp": false
+          },
+          {
+            "ms": 3431.136586002569,
+            "kind": "draft",
+            "from": 0,
+            "to": 26240,
+            "text": "And so my f-",
+            "catchUp": false
+          },
+          {
+            "ms": 5124.313957981329,
+            "kind": "draft",
+            "from": 0,
+            "to": 39680,
+            "text": "And so, my fellow America.",
+            "catchUp": false
+          },
+          {
+            "ms": 6008.13236498044,
+            "kind": "draft",
+            "from": 0,
+            "to": 55680,
+            "text": "And so my fellow America",
+            "catchUp": true
+          },
+          {
+            "ms": 7175.450202993612,
+            "kind": "draft",
+            "from": 0,
+            "to": 71680,
+            "text": "And so, my fellow Americans, ask not to",
+            "catchUp": true
+          },
+          {
+            "ms": 8506.712123982172,
+            "kind": "draft",
+            "from": 0,
+            "to": 87680,
+            "text": "And so, my fellow Americans, ask not",
+            "catchUp": true
+          },
+          {
+            "ms": 9772.609506956796,
+            "kind": "draft",
+            "from": 0,
+            "to": 103680,
+            "text": "And so, my fellow Americans, ask not what your country",
+            "catchUp": true
+          },
+          {
+            "ms": 11501.917164973478,
+            "kind": "draft",
+            "from": 0,
+            "to": 119680,
+            "text": "And so, my fellow Americans, ask not what your country can do for you.",
+            "catchUp": true
+          },
+          {
+            "ms": 13265.067700974207,
+            "kind": "draft",
+            "from": 0,
+            "to": 151680,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+            "catchUp": true
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-jfk-80-hang",
+      "score": "fail",
+      "gates": {
+        "outcome": {
+          "state": "fail",
+          "message": "timeout"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "take: no-result"
+        },
+        "pcm": {
+          "state": "unverified",
+          "message": "Need captured, closed and consumed PCM length/digest from the actual route"
+        },
+        "wire": {
+          "state": "unverified",
+          "message": "No native route/transport trace"
+        },
+        "loads": {
+          "state": "unverified",
+          "message": "Missing native inference/model/VAD counts"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "unverified",
+          "message": "Need human reference and observed raw final"
+        },
+        "seams": {
+          "state": "unverified",
+          "message": "Missing native endpoint/seam observer"
+        },
+        "target": {
+          "state": "unverified",
+          "message": "Need independently observed target and send/queue/insertion counts"
+        }
+      },
+      "wer": null,
+      "hostLoadAtTrigger": 7.29,
+      "stream": {
+        "lagAtCaptureEndSamples": 49600,
+        "drafts": [
+          {
+            "ms": 1598.5149469884927,
+            "kind": "draft",
+            "from": 0,
+            "to": 11520,
+            "text": "And",
+            "catchUp": false
+          },
+          {
+            "ms": 1882.2122079643304,
+            "kind": "draft",
+            "from": 0,
+            "to": 15360,
+            "text": "And so",
+            "catchUp": false
+          },
+          {
+            "ms": 2510.951785972982,
+            "kind": "draft",
+            "from": 0,
+            "to": 23360,
+            "text": "And so my",
+            "catchUp": false
+          },
+          {
+            "ms": 2616.829280963808,
+            "kind": "draft",
+            "from": 0,
+            "to": 27840,
+            "text": "And so my fellow",
+            "catchUp": false
+          },
+          {
+            "ms": 3126.8678949984605,
+            "kind": "draft",
+            "from": 0,
+            "to": 35840,
+            "text": "And so, my fellow Ameriant",
+            "catchUp": false
+          },
+          {
+            "ms": 3320.1370130094583,
+            "kind": "draft",
+            "from": 0,
+            "to": 39680,
+            "text": "And so, my fellow America!",
+            "catchUp": false
+          },
+          {
+            "ms": 3609.3766299995477,
+            "kind": "draft",
+            "from": 0,
+            "to": 43520,
+            "text": "And so, my fellow Americans!",
+            "catchUp": false
+          },
+          {
+            "ms": 4638.744224956899,
+            "kind": "draft",
+            "from": 0,
+            "to": 60160,
+            "text": "And so my fellow America,",
+            "catchUp": false
+          },
+          {
+            "ms": 4886.673348954588,
+            "kind": "draft",
+            "from": 0,
+            "to": 64000,
+            "text": "And so my fellow Americans, as",
+            "catchUp": false
+          },
+          {
+            "ms": 5107.332118979364,
+            "kind": "draft",
+            "from": 0,
+            "to": 67840,
+            "text": "And so, my fellow Americans, ask...",
+            "catchUp": false
+          },
+          {
+            "ms": 5334.395879975229,
+            "kind": "draft",
+            "from": 0,
+            "to": 71680,
+            "text": "And so, my fellow Americans, ask not to",
+            "catchUp": false
+          },
+          {
+            "ms": 5584.928861966997,
+            "kind": "draft",
+            "from": 0,
+            "to": 75520,
+            "text": "And so, my fellow Americans, ask not",
+            "catchUp": false
+          },
+          {
+            "ms": 6402.466903975874,
+            "kind": "draft",
+            "from": 0,
+            "to": 88960,
+            "text": "And so, my fellow Americans, ask not to",
+            "catchUp": false
+          },
+          {
+            "ms": 6664.354968956381,
+            "kind": "draft",
+            "from": 0,
+            "to": 93120,
+            "text": "And so, my fellow Americans, ask not what",
+            "catchUp": false
+          },
+          {
+            "ms": 7669.259779981046,
+            "kind": "draft",
+            "from": 0,
+            "to": 97280,
+            "text": "And so, my fellow Americans, ask not what your",
+            "catchUp": false
+          },
+          {
+            "ms": 8927.089467993646,
+            "kind": "draft",
+            "from": 0,
+            "to": 110400,
+            "text": "And so, my fellow Americans, ask not what your country can",
+            "catchUp": false
+          },
+          {
+            "ms": 10789.418929985433,
+            "kind": "draft",
+            "from": 0,
+            "to": 126400,
+            "text": "And so, my fellow Americans, ask not what your country can do for you.",
+            "catchUp": true
+          }
+        ]
+      },
+      "fault": {
+        "kind": "hung",
+        "error": null,
+        "injectedMs": 11757.914030999993,
+        "confirmMs": 15825.202955999994,
+        "wire": [
+          {
+            "ms": 664.5227039965685,
+            "rss": null,
+            "kind": "loaded",
+            "fresh": true,
+            "traits": {
+              "stream": true,
+              "batch": true,
+              "longForm": false,
+              "nativeLid": false,
+              "bias": false,
+              "translateEn": false,
+              "languages": [
+                "en"
+              ],
+              "vad": "off",
+              "actualCompute": "cpu",
+              "boundDevice": {
+                "id": null,
+                "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+              }
+            },
+            "pid": 780796,
+            "sha256": "75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a",
+            "threads": 4,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 75612160,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 15808.001460960775,
+            "rss": null,
+            "kind": "released",
+            "resident": false,
+            "pid": 780796,
+            "evidence": {
+              "asrCalls": 25,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 158404608,
+              "inputSamples": 126400,
+              "inputPcmSha256": "9dea3639573ebecdf34d2678888b384f45036c37e7ce68a7193efc4ef49a7196",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 15808.100521973043,
+            "rss": null,
+            "kind": "failed"
+          },
+          {
+            "ms": 16286.729196003347,
+            "rss": null,
+            "kind": "loaded",
+            "fresh": true,
+            "traits": {
+              "stream": true,
+              "batch": true,
+              "longForm": false,
+              "nativeLid": false,
+              "bias": false,
+              "translateEn": false,
+              "languages": [
+                "en"
+              ],
+              "vad": "off",
+              "actualCompute": "cpu",
+              "boundDevice": {
+                "id": null,
+                "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+              }
+            },
+            "pid": 783026,
+            "sha256": "75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a",
+            "threads": 4,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 76464128,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 16528.46838097897,
+            "rss": 70971392,
+            "kind": "released",
+            "resident": true,
+            "pid": 783026,
+            "evidence": {
+              "asrCalls": 1,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 158404608,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 16528.936516991525,
+            "rss": null,
+            "kind": "final",
+            "final": {
+              "raw": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+              "local": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+              "language": "en",
+              "source": "import",
+              "rules": [
+                {
+                  "rule": "bias",
+                  "result": "skipped",
+                  "reason": "off"
+                },
+                {
+                  "rule": "vocabulary",
+                  "result": "skipped",
+                  "reason": "off"
+                },
+                {
+                  "rule": "fillers",
+                  "result": "skipped",
+                  "reason": "off"
+                },
+                {
+                  "rule": "echo",
+                  "result": "skipped",
+                  "reason": "off"
+                },
+                {
+                  "rule": "script",
+                  "result": "skipped",
+                  "reason": "off"
+                }
+              ]
+            },
+            "evidence": {
+              "asrCalls": 1,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 158404608,
+              "inputSamples": 176000,
+              "inputPcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9",
+              "workerCleanExit": false
+            },
+            "inputSamples": 176000,
+            "inputPcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9"
+          }
+        ],
+        "capture": [
+          {
+            "ms": 749.4762999924715,
+            "type": "capture-start"
+          },
+          {
+            "ms": 770.443698993593,
+            "type": "capture-first",
+            "samples": 320
+          },
+          {
+            "ms": 11753.585385969549,
+            "type": "capture-end",
+            "samples": 176000,
+            "maxPaceDelayMs": 19.927388966083527
+          },
+          {
+            "ms": 11771.3836359891,
+            "type": "capture-close",
+            "samples": 176000
+          }
+        ],
+        "mutations": [
+          {
+            "ms": 16532.808374999993,
+            "text": "PUBLIC BENCHMARK: And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. "
+          }
+        ]
+      }
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-jfk-80-hang-next",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 6.16,
+      "stream": {
+        "lagAtCaptureEndSamples": 52480,
+        "drafts": [
+          {
+            "ms": 1599.748399021133,
+            "kind": "draft",
+            "from": 0,
+            "to": 11520,
+            "text": "And",
+            "catchUp": false
+          },
+          {
+            "ms": 1809.2370790262066,
+            "kind": "draft",
+            "from": 0,
+            "to": 15680,
+            "text": "And so",
+            "catchUp": false
+          },
+          {
+            "ms": 2292.6847389955365,
+            "kind": "draft",
+            "from": 0,
+            "to": 23680,
+            "text": "And so my",
+            "catchUp": false
+          },
+          {
+            "ms": 2614.3036950249516,
+            "kind": "draft",
+            "from": 0,
+            "to": 28480,
+            "text": "And so my fellow",
+            "catchUp": false
+          },
+          {
+            "ms": 3117.7607089896046,
+            "kind": "draft",
+            "from": 0,
+            "to": 36800,
+            "text": "And so my fellow Ameriant",
+            "catchUp": false
+          },
+          {
+            "ms": 3452.4578390140377,
+            "kind": "draft",
+            "from": 0,
+            "to": 41600,
+            "text": "And so, my fellow America!",
+            "catchUp": false
+          },
+          {
+            "ms": 3709.9109350461804,
+            "kind": "draft",
+            "from": 0,
+            "to": 45760,
+            "text": "And so, my fellow Americans!",
+            "catchUp": false
+          },
+          {
+            "ms": 4753.563010038837,
+            "kind": "draft",
+            "from": 0,
+            "to": 58560,
+            "text": "And so my fellow America",
+            "catchUp": false
+          },
+          {
+            "ms": 4993.3041099924885,
+            "kind": "draft",
+            "from": 0,
+            "to": 64000,
+            "text": "And so my fellow America, as",
+            "catchUp": false
+          },
+          {
+            "ms": 5325.910023035511,
+            "kind": "draft",
+            "from": 0,
+            "to": 67840,
+            "text": "And so, my fellow Americans, ask...",
+            "catchUp": false
+          },
+          {
+            "ms": 5767.813524009689,
+            "kind": "draft",
+            "from": 0,
+            "to": 72960,
+            "text": "And so, my fellow Americans, ask not to",
+            "catchUp": false
+          },
+          {
+            "ms": 6480.018354000553,
+            "kind": "draft",
+            "from": 0,
+            "to": 80320,
+            "text": "And so, my fellow Americans, ask not",
+            "catchUp": false
+          },
+          {
+            "ms": 7754.271017016872,
+            "kind": "draft",
+            "from": 0,
+            "to": 91520,
+            "text": "And so my fellow Americans, ask not why",
+            "catchUp": false
+          },
+          {
+            "ms": 9004.858182014927,
+            "kind": "draft",
+            "from": 0,
+            "to": 107520,
+            "text": "And so, my fellow Americans, ask not what your country",
+            "catchUp": true
+          },
+          {
+            "ms": 10700.972810031875,
+            "kind": "draft",
+            "from": 0,
+            "to": 123520,
+            "text": "And so, my fellow Americans, ask not what your country can do for you.",
+            "catchUp": true
+          },
+          {
+            "ms": 13317.58226901482,
+            "kind": "draft",
+            "from": 0,
+            "to": 155520,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do.",
+            "catchUp": true
+          },
+          {
+            "ms": 14123.644474031433,
+            "kind": "draft",
+            "from": 0,
+            "to": 171520,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+            "catchUp": true
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-continuous-40",
+      "score": "fail",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "fail",
+          "message": "Stale or irrelevant drafts at checkpoints"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 112,
+        "substitutions": 8,
+        "deletions": 2,
+        "insertions": 0,
+        "wer": 0.08928571428571429
+      },
+      "hostLoadAtTrigger": 6.72,
+      "stream": {
+        "lagAtCaptureEndSamples": 291680,
+        "drafts": [
+          {
+            "ms": 2748.8474859907,
+            "kind": "draft",
+            "from": 0,
+            "to": 13120,
+            "text": "But tonight,",
+            "catchUp": false
+          },
+          {
+            "ms": 3557.8556830002635,
+            "kind": "draft",
+            "from": 0,
+            "to": 25920,
+            "text": "But now it doesn't",
+            "catchUp": false
+          },
+          {
+            "ms": 4523.562925012287,
+            "kind": "draft",
+            "from": 0,
+            "to": 38720,
+            "text": "But now it doesn't seem to matter.",
+            "catchUp": false
+          },
+          {
+            "ms": 5121.185548992333,
+            "kind": "draft",
+            "from": 0,
+            "to": 54080,
+            "text": "But now it doesn't seem to matter very much.",
+            "catchUp": false
+          },
+          {
+            "ms": 5605.989621968445,
+            "kind": "draft",
+            "from": 0,
+            "to": 63680,
+            "text": "But now it doesn't seem to matter very much. My uncle was the one who was the",
+            "catchUp": false
+          },
+          {
+            "ms": 7330.63470199841,
+            "kind": "draft",
+            "from": 0,
+            "to": 71360,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted.",
+            "catchUp": false
+          },
+          {
+            "ms": 8986.891095967469,
+            "kind": "draft",
+            "from": 0,
+            "to": 87360,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted for myself.",
+            "catchUp": true
+          },
+          {
+            "ms": 10761.077662975964,
+            "kind": "draft",
+            "from": 0,
+            "to": 103360,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted for myself, Moody and D'esault",
+            "catchUp": true
+          },
+          {
+            "ms": 12592.038259000954,
+            "kind": "draft",
+            "from": 0,
+            "to": 119360,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted for myself, Moody and dissatisfied.",
+            "catchUp": true
+          },
+          {
+            "ms": 12924.277228982624,
+            "kind": "draft",
+            "from": 0,
+            "to": 135360,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself, Moody and DeSantiside, I appeared almost to a",
+            "catchUp": true
+          },
+          {
+            "ms": 13479.745152981457,
+            "kind": "draft",
+            "from": 0,
+            "to": 151360,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted, for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of the glimpse of the.",
+            "catchUp": true
+          },
+          {
+            "ms": 13758.349552006897,
+            "kind": "draft",
+            "from": 0,
+            "to": 167360,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of the ghost of Hamlet.",
+            "catchUp": true
+          },
+          {
+            "ms": 14038.503488989052,
+            "kind": "draft",
+            "from": 0,
+            "to": 183360,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of the ghost of Hamlet, Mr. Morton seemed to.",
+            "catchUp": true
+          },
+          {
+            "ms": 14888.723404975113,
+            "kind": "draft",
+            "from": 0,
+            "to": 199360,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of the ghost of Hamlet, Mr. Morton seemed particularly strong.",
+            "catchUp": true
+          },
+          {
+            "ms": 15204.652558000264,
+            "kind": "draft",
+            "from": 0,
+            "to": 215360,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet, Mr. Morton seemed particularly struck with the account of way the.",
+            "catchUp": true
+          },
+          {
+            "ms": 17147.216276974854,
+            "kind": "draft",
+            "from": 0,
+            "to": 224960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet, Mr. Morton seemed particularly struck with the account of Waverley's visits.",
+            "catchUp": false
+          },
+          {
+            "ms": 19035.819739968952,
+            "kind": "draft",
+            "from": 0,
+            "to": 240960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Bean.",
+            "catchUp": true
+          },
+          {
+            "ms": 22565.040356011566,
+            "kind": "draft",
+            "from": 0,
+            "to": 256960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give him a",
+            "catchUp": true
+          },
+          {
+            "ms": 30860.39397898453,
+            "kind": "draft",
+            "from": 0,
+            "to": 272960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arm.",
+            "catchUp": true
+          },
+          {
+            "ms": 36124.65821102398,
+            "kind": "draft",
+            "from": 0,
+            "to": 288960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam, weave, give me my horse and arms and wait for.",
+            "catchUp": true
+          },
+          {
+            "ms": 49727.68357297915,
+            "kind": "draft",
+            "from": 0,
+            "to": 304960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam, Weave, give me my horse and arms and wait for me here. I will.",
+            "catchUp": true
+          },
+          {
+            "ms": 53529.91762897509,
+            "kind": "draft",
+            "from": 0,
+            "to": 320960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this.",
+            "catchUp": true
+          },
+          {
+            "ms": 58894.64456299084,
+            "kind": "draft",
+            "from": 0,
+            "to": 336960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and.",
+            "catchUp": true
+          },
+          {
+            "ms": 61805.18772998589,
+            "kind": "draft",
+            "from": 0,
+            "to": 352960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive.",
+            "catchUp": true
+          },
+          {
+            "ms": 62383.5634000017,
+            "kind": "draft",
+            "from": 0,
+            "to": 368960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep.",
+            "catchUp": true
+          },
+          {
+            "ms": 63197.73817697304,
+            "kind": "draft",
+            "from": 0,
+            "to": 384960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep his word-plighted.",
+            "catchUp": true
+          },
+          {
+            "ms": 63930.66853699225,
+            "kind": "draft",
+            "from": 0,
+            "to": 400960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep his word plighted to so great a great",
+            "catchUp": true
+          },
+          {
+            "ms": 64789.63322702187,
+            "kind": "draft",
+            "from": 0,
+            "to": 416960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in",
+            "catchUp": true
+          },
+          {
+            "ms": 65720.29350200432,
+            "kind": "draft",
+            "from": 0,
+            "to": 432960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangataar.",
+            "catchUp": true
+          },
+          {
+            "ms": 66570.45268097657,
+            "kind": "draft",
+            "from": 0,
+            "to": 448960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canada District of the",
+            "catchUp": true
+          },
+          {
+            "ms": 68289.66579696673,
+            "kind": "draft",
+            "from": 0,
+            "to": 464960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province.",
+            "catchUp": true
+          },
+          {
+            "ms": 70027.88094499844,
+            "kind": "draft",
+            "from": 0,
+            "to": 480960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of",
+            "catchUp": true
+          },
+          {
+            "ms": 74076.85545799273,
+            "kind": "draft",
+            "from": 0,
+            "to": 496960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and at New Zealand,",
+            "catchUp": true
+          },
+          {
+            "ms": 75725.53528902069,
+            "kind": "draft",
+            "from": 0,
+            "to": 512960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Bean. Weave, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatada district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch,",
+            "catchUp": true
+          },
+          {
+            "ms": 76607.63601800933,
+            "kind": "draft",
+            "from": 0,
+            "to": 528960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch in the press newspaper.",
+            "catchUp": true
+          },
+          {
+            "ms": 77571.12882396713,
+            "kind": "draft",
+            "from": 0,
+            "to": 544960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied. I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee. Give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province as it then was of New Zealand, and appeared at Christchurch in the press newspaper June thirteenth,",
+            "catchUp": true
+          },
+          {
+            "ms": 79670.9918200089,
+            "kind": "draft",
+            "from": 0,
+            "to": 560960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied. I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee. Give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province as it then was of New Zealand, and appeared at Christchurch in the press newspaper June thirteenth, eighteen sixteen, eighteen sixteen, eighteen sixteen, eighteen sixteen, eighteen sixteen, eighteen sixteen, eighteenteen, eighteen sixteen, eighteenteen, eighteenteen, eighteenteenteen, eighteen",
+            "catchUp": true
+          },
+          {
+            "ms": 80788.99313500657,
+            "kind": "draft",
+            "from": 0,
+            "to": 576960,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted. For myself, Moody and DeSataside, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch in the press newspaper June 13, 1863.",
+            "catchUp": true
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-continuous-80",
+      "score": "fail",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "fail",
+          "message": "Stale or irrelevant drafts at checkpoints"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 112,
+        "substitutions": 8,
+        "deletions": 2,
+        "insertions": 0,
+        "wer": 0.08928571428571429
+      },
+      "hostLoadAtTrigger": 5.89,
+      "stream": {
+        "lagAtCaptureEndSamples": 417760,
+        "drafts": [
+          {
+            "ms": 1484.0341499978094,
+            "kind": "draft",
+            "from": 0,
+            "to": 11520,
+            "text": "But",
+            "catchUp": false
+          },
+          {
+            "ms": 1829.23175197182,
+            "kind": "draft",
+            "from": 0,
+            "to": 16000,
+            "text": "But now...",
+            "catchUp": false
+          },
+          {
+            "ms": 2046.2230600052862,
+            "kind": "draft",
+            "from": 0,
+            "to": 19840,
+            "text": "But now we're-",
+            "catchUp": false
+          },
+          {
+            "ms": 2547.4178870254545,
+            "kind": "draft",
+            "from": 0,
+            "to": 23680,
+            "text": "But now it doesn't.",
+            "catchUp": false
+          },
+          {
+            "ms": 2608.6109629803686,
+            "kind": "draft",
+            "from": 0,
+            "to": 29440,
+            "text": "But now it doesn't seem",
+            "catchUp": false
+          },
+          {
+            "ms": 2854.7567700081854,
+            "kind": "draft",
+            "from": 0,
+            "to": 33280,
+            "text": "But now it doesn't seem to be",
+            "catchUp": false
+          },
+          {
+            "ms": 3133.49468302069,
+            "kind": "draft",
+            "from": 0,
+            "to": 37120,
+            "text": "But now it doesn't seem to matter.",
+            "catchUp": false
+          },
+          {
+            "ms": 3601.0501050287276,
+            "kind": "draft",
+            "from": 0,
+            "to": 45120,
+            "text": "But now it doesn't seem to matter very very",
+            "catchUp": false
+          },
+          {
+            "ms": 3854.1633909874945,
+            "kind": "draft",
+            "from": 0,
+            "to": 49280,
+            "text": "But now it doesn't seem to matter very much.",
+            "catchUp": false
+          },
+          {
+            "ms": 4634.797887020686,
+            "kind": "draft",
+            "from": 0,
+            "to": 61120,
+            "text": "But now it doesn't seem to matter very much. My uncle was a",
+            "catchUp": false
+          },
+          {
+            "ms": 4897.278242998698,
+            "kind": "draft",
+            "from": 0,
+            "to": 65280,
+            "text": "But now it doesn't seem to matter very much. My uncle was still there.",
+            "catchUp": false
+          },
+          {
+            "ms": 5882.089061015227,
+            "kind": "draft",
+            "from": 0,
+            "to": 69440,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted.",
+            "catchUp": false
+          },
+          {
+            "ms": 10311.328712993243,
+            "kind": "draft",
+            "from": 0,
+            "to": 82880,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted for my son.",
+            "catchUp": false
+          },
+          {
+            "ms": 16549.06448399363,
+            "kind": "draft",
+            "from": 0,
+            "to": 98880,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted for myself, Moody.",
+            "catchUp": true
+          },
+          {
+            "ms": 20487.52968602715,
+            "kind": "draft",
+            "from": 0,
+            "to": 114880,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted for myself, Moody and dissatisfied.",
+            "catchUp": true
+          },
+          {
+            "ms": 23217.028639011958,
+            "kind": "draft",
+            "from": 0,
+            "to": 130880,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted for myself, Moody and dissatisfied, I appeared almost.",
+            "catchUp": true
+          },
+          {
+            "ms": 27920.85412000952,
+            "kind": "draft",
+            "from": 0,
+            "to": 146880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of.",
+            "catchUp": true
+          },
+          {
+            "ms": 33461.977756970504,
+            "kind": "draft",
+            "from": 0,
+            "to": 162880,
+            "text": "But now it doesn't seem to matter very much, my uncle was delighted, for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of the ghost of Hamlet.",
+            "catchUp": true
+          },
+          {
+            "ms": 39869.49808900891,
+            "kind": "draft",
+            "from": 0,
+            "to": 178880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of the ghost of Hamlet, Mr. Morton seemed to.",
+            "catchUp": true
+          },
+          {
+            "ms": 47454.0311059886,
+            "kind": "draft",
+            "from": 0,
+            "to": 194880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of the ghost of Hamlet, Mr. Morton seemed particularly.",
+            "catchUp": true
+          },
+          {
+            "ms": 55006.92028998671,
+            "kind": "draft",
+            "from": 0,
+            "to": 210880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself, Moody and DeSat aside, I appeared almost to expect a glimpse of the ghost of Hamlet, Mr. Morton seemed particularly struck with the account of the.",
+            "catchUp": true
+          },
+          {
+            "ms": 60667.702620976546,
+            "kind": "draft",
+            "from": 0,
+            "to": 226880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet, Mr. Morton seemed particularly struck with the account of Waverley's visit.",
+            "catchUp": true
+          },
+          {
+            "ms": 65805.20361899672,
+            "kind": "draft",
+            "from": 0,
+            "to": 242880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Bean.",
+            "catchUp": true
+          },
+          {
+            "ms": 67329.57011800347,
+            "kind": "draft",
+            "from": 0,
+            "to": 258880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me.",
+            "catchUp": true
+          },
+          {
+            "ms": 68200.56350302038,
+            "kind": "draft",
+            "from": 0,
+            "to": 274880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms.",
+            "catchUp": true
+          },
+          {
+            "ms": 68732.3393840128,
+            "kind": "draft",
+            "from": 0,
+            "to": 290880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam, weave, give me my horse and arms and wait for me.",
+            "catchUp": true
+          },
+          {
+            "ms": 77916.15938799916,
+            "kind": "draft",
+            "from": 0,
+            "to": 306880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will.",
+            "catchUp": true
+          },
+          {
+            "ms": 89902.48748999176,
+            "kind": "draft",
+            "from": 0,
+            "to": 322880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night.",
+            "catchUp": true
+          },
+          {
+            "ms": 104957.16085701523,
+            "kind": "draft",
+            "from": 0,
+            "to": 338880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and",
+            "catchUp": true
+          },
+          {
+            "ms": 118629.1947179967,
+            "kind": "draft",
+            "from": 0,
+            "to": 354880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive.",
+            "catchUp": true
+          },
+          {
+            "ms": 120136.40235000191,
+            "kind": "draft",
+            "from": 0,
+            "to": 370880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep him.",
+            "catchUp": true
+          },
+          {
+            "ms": 122708.61724298535,
+            "kind": "draft",
+            "from": 0,
+            "to": 386880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Beam. We give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep his word-plighted.",
+            "catchUp": true
+          },
+          {
+            "ms": 123928.84073298512,
+            "kind": "draft",
+            "from": 0,
+            "to": 402880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty.",
+            "catchUp": true
+          },
+          {
+            "ms": 124805.80675100622,
+            "kind": "draft",
+            "from": 0,
+            "to": 418880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in his",
+            "catchUp": true
+          },
+          {
+            "ms": 125625.84899502335,
+            "kind": "draft",
+            "from": 0,
+            "to": 434880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade.",
+            "catchUp": true
+          },
+          {
+            "ms": 126830.38543599186,
+            "kind": "draft",
+            "from": 0,
+            "to": 450880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canada District of the",
+            "catchUp": true
+          },
+          {
+            "ms": 127702.07036500511,
+            "kind": "draft",
+            "from": 0,
+            "to": 466880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as",
+            "catchUp": true
+          },
+          {
+            "ms": 128357.93865000544,
+            "kind": "draft",
+            "from": 0,
+            "to": 482880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of no",
+            "catchUp": true
+          },
+          {
+            "ms": 129328.85002701817,
+            "kind": "draft",
+            "from": 0,
+            "to": 498880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Bean. Weave, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and appeared in a",
+            "catchUp": true
+          },
+          {
+            "ms": 130259.60822599469,
+            "kind": "draft",
+            "from": 0,
+            "to": 514880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald Bean. Weave, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch,",
+            "catchUp": true
+          },
+          {
+            "ms": 131349.78559797344,
+            "kind": "draft",
+            "from": 0,
+            "to": 530880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch in the press newspaper.",
+            "catchUp": true
+          },
+          {
+            "ms": 132511.8532059723,
+            "kind": "draft",
+            "from": 0,
+            "to": 546880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied. I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee. Give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province as it then was of New Zealand, and appeared at Christchurch in the press newspaper June thirteenth, it was written in the upper Rangatade district of the Canterbury Province as it then was of New Zealand, and appeared at Christchurch in the press newspaper June thirteenth,",
+            "catchUp": true
+          },
+          {
+            "ms": 133563.34835600195,
+            "kind": "draft",
+            "from": 0,
+            "to": 562880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted for myself. Moody and dissatisfied. I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee. Give me my horse and arms and wait for me here. I will go in quest of this night and dead or alive. I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province as it then was of New Zealand, and appeared at Christchurch in the press newspaper June thirteenth, eighteen sixty eight hundred and sixty eight hundred.",
+            "catchUp": true
+          },
+          {
+            "ms": 134929.69028800068,
+            "kind": "draft",
+            "from": 0,
+            "to": 578880,
+            "text": "But now it doesn't seem to matter very much. My uncle was delighted. For myself, Moody and DeSataside, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee, give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch in the press newspaper June 13, 1863.",
+            "catchUp": true
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-immediate-80",
+      "score": "pass",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "pass",
+          "message": "No visible, committed, final or delivered words"
+        },
+        "speech": {
+          "state": "not-applicable",
+          "message": "Negative control"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Negative control must leave the target unchanged"
+        }
+      },
+      "wer": {
+        "words": 0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": null
+      },
+      "hostLoadAtTrigger": 8.54,
+      "stream": {
+        "lagAtCaptureEndSamples": 320,
+        "drafts": []
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-noise-80",
+      "score": "pass",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "pass",
+          "message": "No visible, committed, final or delivered words"
+        },
+        "speech": {
+          "state": "not-applicable",
+          "message": "Negative control"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Negative control must leave the target unchanged"
+        }
+      },
+      "wer": {
+        "words": 0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": null
+      },
+      "hostLoadAtTrigger": 7.93,
+      "stream": {
+        "lagAtCaptureEndSamples": 640,
+        "drafts": []
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-overload-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 7.04,
+      "stream": {
+        "lagAtCaptureEndSamples": 1280,
+        "drafts": [
+          {
+            "ms": 1526.6633439702564,
+            "kind": "draft",
+            "from": 0,
+            "to": 11520,
+            "text": "And",
+            "catchUp": false
+          },
+          {
+            "ms": 1905.3765699905925,
+            "kind": "draft",
+            "from": 0,
+            "to": 15360,
+            "text": "And so",
+            "catchUp": false
+          },
+          {
+            "ms": 2275.1401509685093,
+            "kind": "draft",
+            "from": 0,
+            "to": 23040,
+            "text": "And so my",
+            "catchUp": false
+          },
+          {
+            "ms": 2460.4925410193973,
+            "kind": "draft",
+            "from": 0,
+            "to": 26880,
+            "text": "And so my fellow",
+            "catchUp": false
+          },
+          {
+            "ms": 2983.347889010387,
+            "kind": "draft",
+            "from": 0,
+            "to": 34880,
+            "text": "And so, my fellow America.",
+            "catchUp": false
+          },
+          {
+            "ms": 3232.121450011211,
+            "kind": "draft",
+            "from": 0,
+            "to": 38720,
+            "text": "And so, my fellow America!",
+            "catchUp": false
+          },
+          {
+            "ms": 3467.644889001327,
+            "kind": "draft",
+            "from": 0,
+            "to": 42560,
+            "text": "And so, my fellow Americans!",
+            "catchUp": false
+          },
+          {
+            "ms": 5376.347809974628,
+            "kind": "draft",
+            "from": 0,
+            "to": 64320,
+            "text": "And so my fellow America, as",
+            "catchUp": true
+          },
+          {
+            "ms": 5461.416427020507,
+            "kind": "draft",
+            "from": 0,
+            "to": 74240,
+            "text": "And so, my fellow Americans, ask not",
+            "catchUp": false
+          },
+          {
+            "ms": 6458.443638984638,
+            "kind": "draft",
+            "from": 0,
+            "to": 90560,
+            "text": "And so my fellow Americans, ask not",
+            "catchUp": false
+          },
+          {
+            "ms": 6717.203709964233,
+            "kind": "draft",
+            "from": 0,
+            "to": 94400,
+            "text": "And so, my fellow Americans, ask not what you",
+            "catchUp": false
+          },
+          {
+            "ms": 6947.799404983001,
+            "kind": "draft",
+            "from": 0,
+            "to": 98240,
+            "text": "And so, my fellow Americans, ask not what your",
+            "catchUp": false
+          },
+          {
+            "ms": 7239.040045980888,
+            "kind": "draft",
+            "from": 0,
+            "to": 102400,
+            "text": "And so, my fellow Americans, ask not what your country",
+            "catchUp": false
+          },
+          {
+            "ms": 7708.012502018886,
+            "kind": "draft",
+            "from": 0,
+            "to": 110400,
+            "text": "And so, my fellow Americans, ask not what your country can",
+            "catchUp": false
+          },
+          {
+            "ms": 7980.542500023323,
+            "kind": "draft",
+            "from": 0,
+            "to": 114240,
+            "text": "And so, my fellow Americans, ask not what your country can do.",
+            "catchUp": false
+          },
+          {
+            "ms": 8246.564659003692,
+            "kind": "draft",
+            "from": 0,
+            "to": 118720,
+            "text": "And so, my fellow Americans, ask not what your country can do for you.",
+            "catchUp": false
+          },
+          {
+            "ms": 9454.176346008258,
+            "kind": "draft",
+            "from": 0,
+            "to": 138240,
+            "text": "And so, my fellow Americans, ask not what your country can do for you,",
+            "catchUp": false
+          },
+          {
+            "ms": 9781.74359602161,
+            "kind": "draft",
+            "from": 0,
+            "to": 142080,
+            "text": "And so, my fellow Americans, ask not what your country can do for you as",
+            "catchUp": false
+          },
+          {
+            "ms": 10287.197138969379,
+            "kind": "draft",
+            "from": 0,
+            "to": 145920,
+            "text": "And so, my fellow Americans, ask not what your country can do for you as what you",
+            "catchUp": false
+          },
+          {
+            "ms": 10469.670621995407,
+            "kind": "draft",
+            "from": 0,
+            "to": 152640,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+            "catchUp": false
+          },
+          {
+            "ms": 10619.455305997806,
+            "kind": "draft",
+            "from": 0,
+            "to": 156800,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do.",
+            "catchUp": false
+          },
+          {
+            "ms": 10938.563965980487,
+            "kind": "draft",
+            "from": 0,
+            "to": 160640,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for",
+            "catchUp": false
+          },
+          {
+            "ms": 11122.566815022903,
+            "kind": "draft",
+            "from": 0,
+            "to": 164480,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your",
+            "catchUp": false
+          },
+          {
+            "ms": 11374.944410983997,
+            "kind": "draft",
+            "from": 0,
+            "to": 168320,
+            "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+            "catchUp": false
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-pause-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 9,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 6.19,
+      "stream": {
+        "lagAtCaptureEndSamples": 17920,
+        "drafts": [
+          {
+            "ms": 1574.263693038898,
+            "kind": "draft",
+            "from": 0,
+            "to": 11520,
+            "text": "But",
+            "catchUp": false
+          },
+          {
+            "ms": 1760.8593249959522,
+            "kind": "draft",
+            "from": 0,
+            "to": 15360,
+            "text": "But now...",
+            "catchUp": false
+          },
+          {
+            "ms": 2014.96861899324,
+            "kind": "draft",
+            "from": 0,
+            "to": 19200,
+            "text": "But now we'll...",
+            "catchUp": false
+          },
+          {
+            "ms": 2257.611878041702,
+            "kind": "draft",
+            "from": 0,
+            "to": 23040,
+            "text": "But now we're dead.",
+            "catchUp": false
+          },
+          {
+            "ms": 2539.6558910054737,
+            "kind": "draft",
+            "from": 0,
+            "to": 26880,
+            "text": "But now it doesn't",
+            "catchUp": false
+          },
+          {
+            "ms": 2711.083431009727,
+            "kind": "draft",
+            "from": 0,
+            "to": 30720,
+            "text": "But now it doesn't...",
+            "catchUp": false
+          },
+          {
+            "ms": 4519.675096992927,
+            "kind": "draft",
+            "from": 0,
+            "to": 52800,
+            "text": "But now it doesn't seem to matter.",
+            "catchUp": false
+          },
+          {
+            "ms": 5410.135182027298,
+            "kind": "draft",
+            "from": 0,
+            "to": 60480,
+            "text": "But now it doesn't seem to matter very",
+            "catchUp": false
+          },
+          {
+            "ms": 6171.406982008892,
+            "kind": "draft",
+            "from": 0,
+            "to": 74880,
+            "text": "But now it doesn't seem to matter very much.",
+            "catchUp": false
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-quiet-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 9,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 5.91,
+      "stream": {
+        "lagAtCaptureEndSamples": 800,
+        "drafts": [
+          {
+            "ms": 1525.3739039823413,
+            "kind": "draft",
+            "from": 0,
+            "to": 11520,
+            "text": "But",
+            "catchUp": false
+          },
+          {
+            "ms": 1742.6533040329814,
+            "kind": "draft",
+            "from": 0,
+            "to": 15360,
+            "text": "But now...",
+            "catchUp": false
+          },
+          {
+            "ms": 1961.6383250281215,
+            "kind": "draft",
+            "from": 0,
+            "to": 19200,
+            "text": "But now we'll be",
+            "catchUp": false
+          },
+          {
+            "ms": 2283.532486014068,
+            "kind": "draft",
+            "from": 0,
+            "to": 23040,
+            "text": "But now we're dead.",
+            "catchUp": false
+          },
+          {
+            "ms": 2680.5785999819636,
+            "kind": "draft",
+            "from": 0,
+            "to": 26880,
+            "text": "But now it doesn't",
+            "catchUp": false
+          },
+          {
+            "ms": 2745.842007033527,
+            "kind": "draft",
+            "from": 0,
+            "to": 31680,
+            "text": "But now it doesn't seem",
+            "catchUp": false
+          },
+          {
+            "ms": 2992.45708899945,
+            "kind": "draft",
+            "from": 0,
+            "to": 35520,
+            "text": "But now it doesn't seem to matter.",
+            "catchUp": false
+          },
+          {
+            "ms": 3460.6179879829288,
+            "kind": "draft",
+            "from": 0,
+            "to": 43200,
+            "text": "But now it doesn't seem to matter very well.",
+            "catchUp": false
+          },
+          {
+            "ms": 3769.9759669825435,
+            "kind": "draft",
+            "from": 0,
+            "to": 47040,
+            "text": "But now it doesn't seem to matter very much.",
+            "catchUp": false
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-repeat-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 11,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 5.75,
+      "stream": {
+        "lagAtCaptureEndSamples": 1760,
+        "drafts": [
+          {
+            "ms": 1585.9657149633858,
+            "kind": "draft",
+            "from": 0,
+            "to": 12160,
+            "text": "But",
+            "catchUp": false
+          },
+          {
+            "ms": 1807.9549419602845,
+            "kind": "draft",
+            "from": 0,
+            "to": 16320,
+            "text": "But now...",
+            "catchUp": false
+          },
+          {
+            "ms": 2050.309147985885,
+            "kind": "draft",
+            "from": 0,
+            "to": 20160,
+            "text": "But now, the",
+            "catchUp": false
+          },
+          {
+            "ms": 2260.7045209726784,
+            "kind": "draft",
+            "from": 0,
+            "to": 24000,
+            "text": "But now, but now.",
+            "catchUp": false
+          },
+          {
+            "ms": 2568.3883279880974,
+            "kind": "draft",
+            "from": 0,
+            "to": 27840,
+            "text": "But now, but now,",
+            "catchUp": false
+          },
+          {
+            "ms": 2829.6261250099633,
+            "kind": "draft",
+            "from": 0,
+            "to": 31680,
+            "text": "But now, but now, with",
+            "catchUp": false
+          },
+          {
+            "ms": 3143.9719559869263,
+            "kind": "draft",
+            "from": 0,
+            "to": 35520,
+            "text": "But now, but now it doesn't.",
+            "catchUp": false
+          },
+          {
+            "ms": 3343.6494189819787,
+            "kind": "draft",
+            "from": 0,
+            "to": 39680,
+            "text": "But now, but now, it doesn't seem to be",
+            "catchUp": false
+          },
+          {
+            "ms": 3548.057983013103,
+            "kind": "draft",
+            "from": 0,
+            "to": 43520,
+            "text": "But now, but now, it doesn't seem to be.",
+            "catchUp": false
+          },
+          {
+            "ms": 3738.6706199964974,
+            "kind": "draft",
+            "from": 0,
+            "to": 47360,
+            "text": "But now, but now, it doesn't seem to matter.",
+            "catchUp": false
+          },
+          {
+            "ms": 4242.950325997779,
+            "kind": "draft",
+            "from": 0,
+            "to": 55040,
+            "text": "But now, but now, it doesn't seem to matter very, very.",
+            "catchUp": false
+          },
+          {
+            "ms": 4481.570803972194,
+            "kind": "draft",
+            "from": 0,
+            "to": 59200,
+            "text": "But now, but now, it doesn't seem to matter very much.",
+            "catchUp": false
+          },
+          {
+            "ms": 5265.291841002414,
+            "kind": "draft",
+            "from": 0,
+            "to": 70720,
+            "text": "But now, but now it doesn't seem to matter very much.",
+            "catchUp": false
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-short-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 2,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "hostLoadAtTrigger": 5.32,
+      "stream": {
+        "lagAtCaptureEndSamples": 371,
+        "drafts": [
+          {
+            "ms": 1582.7232280073804,
+            "kind": "draft",
+            "from": 0,
+            "to": 11840,
+            "text": "Thank you.",
+            "catchUp": false
+          }
+        ]
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-d7ed1856-silence-80",
+      "score": "pass",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "pass",
+          "message": "Digital silence requires zero native ASR calls"
+        },
+        "negatives": {
+          "state": "pass",
+          "message": "No visible, committed, final or delivered words"
+        },
+        "speech": {
+          "state": "not-applicable",
+          "message": "Negative control"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Negative control must leave the target unchanged"
+        }
+      },
+      "wer": {
+        "words": 0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": null
+      },
+      "hostLoadAtTrigger": 4.97,
+      "stream": {
+        "lagAtCaptureEndSamples": 640,
+        "drafts": []
+      },
+      "fault": null
+    }
+  ]
+}
