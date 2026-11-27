@@ -1,10 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { addAbortSignal } from "node:stream";
 import { AUDIO_VALIDATION_TIMEOUT_MS, LIVE_CAPTURE_RATE, MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import { env, envFlag, getAudioFilter, getAudioInputConfigKey, getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getConfiguredRecorderInput, getFlagSetting, getMinMaxVolumeDb, getRecordMeter, getRecordSampleRate, getRecordSync, getTranscribeSampleRate } from "./config.ts";
 import { appendCapped, findExecutable, formatProcessOutput, formatRunExit, runProcess, shellCommand, shellQuote } from "./processes.ts";
+import type { RecordingDirectory } from "./recording-dir.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { Component } from "./terminal-ui.ts";
 import type { AudioDeviceCandidate, AudioDiagnostics, AudioValidationOutcome, CommandSpec, RunResult } from "./types.ts";
@@ -830,15 +831,28 @@ export function buildLiveRecorderSpec(audioPath: string, tempDir: string, signal
 	return buildSelectedRecorderCommand(audioPath, tempDir, true, signal);
 }
 
+/** The observer uses the held path; only legacy temporary hooks get the old absolute placeholders/cwd. */
+export async function buildOwnedClipRecorderCommand(audioPath: string, directory: RecordingDirectory, keepAudio: boolean, signal: AbortSignal): Promise<CommandSpec> {
+	signal.throwIfAborted();
+	const custom = env("MICME_RECORD_COMMAND");
+	if (!keepAudio && custom?.trim()) {
+		return { ...buildCustomRecorder(custom, join(directory.path, basename(audioPath)), directory.path), useCallerCwd: true };
+	}
+	return buildRecorderCommand(audioPath, directory.filesPath, signal);
+}
+
+function buildCustomRecorder(template: string, audioPath: string, tempDir: string): CommandSpec {
+	return {
+		...shellCommand(template, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") }),
+		capture: { source: "custom", requested: null },
+		signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE],
+	};
+}
+
 async function buildSelectedRecorderCommand(audioPath: string, tempDir: string, live: boolean, signal?: AbortSignal): Promise<CommandSpec> {
 	signal?.throwIfAborted();
 	const custom = env("MICME_RECORD_COMMAND");
-	if (custom?.trim()) {
-		return {
-			...shellCommand(custom, { audio: audioPath, tempDir, transcript: join(tempDir, "transcript.txt") }),
-			signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE],
-		};
-	}
+	if (custom?.trim()) return buildCustomRecorder(custom, audioPath, tempDir);
 
 	const ffmpeg = findExecutable(["ffmpeg"]);
 	if (!ffmpeg) {
@@ -848,22 +862,27 @@ async function buildSelectedRecorderCommand(audioPath: string, tempDir: string, 
 	const recordSampleRate = live ? String(LIVE_CAPTURE_RATE) : getRecordSampleRate()?.toString();
 	const recordMeter = !live && getRecordMeter();
 	const filter = live && getFlagSetting("MICME_PROCESS_AUDIO", true) ? getAudioFilter() : "";
-	const { format, input, inputOptions, timingFilters } = await selectRecorderInput(ffmpeg, getRecordSync(), signal);
+	const requested = getConfiguredRecorderInput(process.platform);
+	const { format, input, inputOptions, timingFilters } = await selectRecorderInput(ffmpeg, requested, getRecordSync(), signal);
 	signal?.throwIfAborted();
 	const args = buildFfmpegRecorderArgs(format, input, audioPath, recordSampleRate, {
 		meter: recordMeter,
 		inputOptions,
 		audioFilters: filter ? [...timingFilters, filter] : timingFilters,
-		liveWav: live,
+		// Flush the owned WAV promptly in both modes, independent of the optional stdout meter.
+		observableWav: true,
 	});
-	return { command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`, meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE] };
+	return {
+		command: ffmpeg, args, display: `${ffmpeg} ${args.map(shellQuote).join(" ")}`,
+		capture: { source: "builtin", requested: requested || null },
+		meterFromStdout: recordMeter, stopInput: "q\n", signalStopExitCodes: [FFMPEG_SIGNAL_STOP_EXIT_CODE],
+	};
 }
 
 type RecorderInput = { format: string; input: string; inputOptions?: string[]; timingFilters: string[] };
 
-async function selectRecorderInput(ffmpeg: string, recordSync: boolean, signal?: AbortSignal): Promise<RecorderInput> {
+async function selectRecorderInput(ffmpeg: string, configured: string, recordSync: boolean, signal?: AbortSignal): Promise<RecorderInput> {
 	const timingFilters = recordSync ? [RECORD_TIMING_SYNC_FILTER] : [];
-	const configured = getConfiguredRecorderInput(process.platform);
 	if (process.platform === "darwin") {
 		return {
 			format: "avfoundation",
@@ -884,7 +903,7 @@ type FfmpegRecorderOptions = {
 	meter?: boolean;
 	inputOptions?: string[];
 	audioFilters?: string[];
-	liveWav?: boolean;
+	observableWav?: boolean;
 };
 
 function getAvfoundationAudioFilters(recordSync: boolean, avfoundationInputSampleRate: number | undefined) {
@@ -906,7 +925,7 @@ export function buildFfmpegRecorderArgs(inputFormat: string, input: string, audi
 		"-i",
 		input,
 	];
-	const wavOptions = options.liveWav ? ["-f", "wav", "-rf64", "never", "-flush_packets", "1"] : [];
+	const wavOptions = options.observableWav ? ["-f", "wav", "-rf64", "never", "-flush_packets", "1"] : [];
 	const fileOutputArgs = ["-ac", "1", ...formatOptionalSampleRateArgs(recordSampleRate), "-c:a", "pcm_s16le", "-vn", ...wavOptions, "-y", audioPath];
 	const audioFilters = (options.audioFilters ?? []).filter(Boolean);
 

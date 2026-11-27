@@ -1,5 +1,6 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import type { RecordingDirectory } from "./recording-dir.ts";
+import type { Capture } from "./transfer/contracts.ts";
 
 export type TranscriptionMode = "clip" | "stream";
 export type TranscribeBackend = "auto" | "whisper.cpp" | "python" | "custom";
@@ -46,6 +47,10 @@ export type CommandSpec = {
 	display: string;
 	spawnOptions?: Pick<SpawnOptions, "env" | "windowsVerbatimArguments">;
 	meterFromStdout?: boolean;
+	/** The selected recorder and its requested route, not evidence of a bound device. */
+	capture?: Pick<Capture, "source" | "requested">;
+	/** A legacy clip hook in a temporary directory keeps the caller's working directory. */
+	useCallerCwd?: true;
 	stopInput?: string;
 	signalStopExitCodes?: number[];
 };
@@ -95,6 +100,7 @@ export type Recording = OwnedProcess & {
 	tempDir: string;
 	directory?: RecordingDirectory;
 	startedAt: number;
+	startedAtMonotonic: number;
 	audioLevel: () => number;
 	/** The meter is authoritative even at zero; never reopen the spool for a fallback. */
 	livePcmMeter?: true;

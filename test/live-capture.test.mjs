@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import { appendFile, open, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { appendFile, link, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import * as capture from "../src/live-capture.ts";
-import { createLiveRecordingDirectory, createRecordingDirectory } from "../src/recording-dir.ts";
+import { createClipRecordingDirectory, createLiveRecordingDirectory, createRecordingDirectory } from "../src/recording-dir.ts";
+import { freezeAudio, initialCapture, noteLiveBlock, observeCapture } from "../src/transfer/capture.ts";
 
-async function makeDirectory(t) {
-	const directory = await createLiveRecordingDirectory(".", false, "micme-live-test-");
+async function makeDirectory(t, allocate = createLiveRecordingDirectory) {
+	const directory = await allocate(".", false, "micme-live-test-");
 	t.after(async () => {
 		try {
 			await directory.remove();
@@ -24,22 +26,23 @@ function pcm(samples) {
 	return bytes;
 }
 
-function wavHeader(dataBytes, { growing = false, ancillary = false, rate = 16_000 } = {}) {
+function wavHeader(dataBytes, { growing = false, ancillary = false, rate = 16_000, channels = 1, bits = 16, trailingBytes = 0 } = {}) {
 	const junk = ancillary ? Buffer.from([74, 85, 78, 75, 3, 0, 0, 0, 17, 34, 51, 0]) : Buffer.alloc(0); // odd padded JUNK chunk
 	const header = Buffer.alloc(44 + junk.length);
 	header.write("RIFF");
-	header.writeUInt32LE(growing ? 0xffffffff : header.length - 8 + dataBytes, 4);
+	header.writeUInt32LE(growing ? 0xffffffff : header.length - 8 + dataBytes + dataBytes % 2 + trailingBytes, 4);
 	header.write("WAVE", 8);
 	junk.copy(header, 12);
 	const fmt = 12 + junk.length;
 	header.write("fmt ", fmt);
 	header.writeUInt32LE(16, fmt + 4);
 	header.writeUInt16LE(1, fmt + 8);
-	header.writeUInt16LE(1, fmt + 10);
+	header.writeUInt16LE(channels, fmt + 10);
 	header.writeUInt32LE(rate, fmt + 12);
-	header.writeUInt32LE(rate * 2, fmt + 16);
-	header.writeUInt16LE(2, fmt + 20);
-	header.writeUInt16LE(16, fmt + 22);
+	const frameBytes = channels * bits / 8;
+	header.writeUInt32LE(rate * frameBytes, fmt + 16);
+	header.writeUInt16LE(frameBytes, fmt + 20);
+	header.writeUInt16LE(bits, fmt + 22);
 	header.write("data", fmt + 24);
 	header.writeUInt32LE(growing ? 0xffffffff : dataBytes, fmt + 28);
 	return header;
@@ -55,13 +58,37 @@ async function patchLengths(path, finalHeader) {
 	}
 }
 
-async function openReader(t, directory, path, signal = new AbortController().signal) {
-	const reader = await capture.openLivePcm(path, directory, signal);
+async function openReader(t, directory, path, signal = new AbortController().signal, recorder) {
+	const reader = await capture.openLivePcm(path, directory, signal, recorder);
 	t.after(() => reader.close());
 	return reader;
 }
 
 const caughtUp = { pcm: Buffer.alloc(0), availableThrough: 0 };
+const cleanExit = { code: 0, signal: null };
+const running = { code: null, signal: null };
+
+function recordingFixture(directory, audioPath, source = "builtin") {
+	return {
+		directory, audioPath, startedAtMonotonic: performance.now(),
+		command: { capture: { source, requested: "private-input" } },
+		getExit() { return this.exit ?? running; },
+		isSettled() { return this.exit !== undefined; },
+	};
+}
+
+function finishRecorder(recording, exit = cleanExit) {
+	recording.exit = exit;
+	recording.stopPromise = Promise.resolve(exit);
+}
+
+function ownedPath(target, path) {
+	return target.cwdFd === undefined ? path : join(target.path, path);
+}
+
+function sha256(bytes) {
+	return createHash("sha256").update(bytes).digest("hex");
+}
 
 test("partial RIFF and chunk headers, padding, and a split sample preserve the cursor through final drain", async (t) => {
 	const directory = await makeDirectory(t);
@@ -279,4 +306,289 @@ test("closing during a pending read defers handle close until the read settles a
 	await rejected;
 	reader.close();
 	assert.equal(close.mock.callCount(), 1);
+});
+
+test("live readiness latches the first nonempty zero block, independently of speech and later blocks", () => {
+	const waiting = { ...initialCapture("builtin", "private-input"), stage: "waiting" };
+	assert.equal(noteLiveBlock(waiting, Buffer.alloc(0), 20), waiting);
+	const zero = noteLiveBlock(waiting, pcm([0, 0]), 50);
+	assert.deepEqual(zero, { ...waiting, stage: "digital-zero", firstSampleMs: 50 });
+	assert.equal(noteLiveBlock(zero, pcm([0]), 70), zero);
+	assert.deepEqual(noteLiveBlock(zero, pcm([1]), 120), { ...zero, stage: "samples" });
+});
+
+test("clip observation waits through padded metadata and a partial stereo frame, then distinguishes zero from nonzero", { timeout: 3_000 }, async (t) => {
+	const directory = await makeDirectory(t, createClipRecordingDirectory);
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path);
+	const states = [];
+	const zero = Promise.withResolvers();
+	const observation = observeCapture(recording, "clip", "builtin", (state) => {
+		states.push(state);
+		if (state.stage === "digital-zero") zero.resolve();
+	}, t.signal);
+	const header = wavHeader(0, { growing: true, ancillary: true, rate: 48_000, channels: 2 });
+	await writeFile(path, Buffer.concat([header, pcm([0])]));
+	await delay(60);
+	assert.deepEqual(states, [{ ...initialCapture("builtin", "private-input"), stage: "waiting" }]);
+	await appendFile(path, pcm([0]));
+	await zero.promise;
+	await appendFile(path, pcm([0, 3]));
+	await observation;
+	assert.deepEqual(states.map(({ stage }) => stage), ["waiting", "digital-zero", "samples"]);
+	assert.ok(states[1].firstSampleMs > 0);
+	assert.equal(states[2].firstSampleMs, states[1].firstSampleMs);
+	assert.equal(states[2].actual, null);
+	assert.equal(states[2].fallback, null);
+	assert.equal(states[2].channel, null);
+});
+
+test("clip observation reports an exited device without publishing late PCM", { timeout: 3_000 }, async (t) => {
+	const directory = await makeDirectory(t);
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path);
+	const states = [];
+	const observation = observeCapture(recording, "clip", "builtin", (state) => states.push(state.stage), t.signal);
+	recording.exit = { code: 1, signal: null };
+	await writeFile(path, Buffer.concat([wavHeader(2), pcm([3])]));
+	await observation;
+	assert.deepEqual(states, ["waiting", "device-failed"]);
+});
+
+test("cancel prevents late clip observations even when samples arrive", { timeout: 3_000 }, async (t) => {
+	const directory = await makeDirectory(t);
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path);
+	const controller = new AbortController();
+	const states = [];
+	const observation = observeCapture(recording, "clip", "builtin", (state) => states.push(state.stage), controller.signal);
+	controller.abort();
+	await writeFile(path, Buffer.concat([wavHeader(2), pcm([3])]));
+	await observation;
+	assert.deepEqual(states, ["waiting"]);
+});
+
+test("opaque clip stays unknown until stop and freezes the completed bytes, not later edits of raw.wav", async (t) => {
+	const directory = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path, "custom");
+	const states = [];
+	await observeCapture(recording, "clip", "custom", (state) => states.push(state), t.signal);
+	assert.deepEqual(states, [{ ...initialCapture("custom"), stage: "opaque-running" }]);
+	const trailer = Buffer.from([74, 85, 78, 75, 1, 0, 0, 0, 6, 0]); // An odd, padded chunk after the data.
+	const wave = Buffer.concat([wavHeader(1, { rate: 22_050, bits: 8, trailingBytes: trailer.length }), Buffer.from([128, 0]), trailer]);
+	await writeFile(path, wave);
+	assert.equal(await freezeAudio(recording, null, t.signal), null, "a live producer is not a verified snapshot source");
+	finishRecorder(recording);
+	const snapshot = await freezeAudio(recording, null, t.signal);
+	assert.equal(snapshot?.bytes, wave.length);
+	assert.equal(snapshot.sha256, sha256(wave));
+	await writeFile(path, "different");
+	const copy = await snapshot.copyTo(target, t.signal);
+	assert.deepEqual(await readFile(ownedPath(target, copy)), wave);
+	assert.equal(states.length, 1);
+});
+
+test("clip freezing rejects a replaced leaf after observation pinned the original", { skip: process.platform === "win32", timeout: 3_000 }, async (t) => {
+	const directory = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path);
+	await writeFile(path, Buffer.concat([wavHeader(2), pcm([1])]));
+	await observeCapture(recording, "clip", "builtin", () => undefined, t.signal);
+	const archived = join(directory.path, "archived.wav");
+	await rename(path, archived);
+	await writeFile(path, Buffer.concat([wavHeader(2), pcm([2])]));
+	finishRecorder(recording);
+	assert.equal(await freezeAudio(recording, null, t.signal, target), null);
+	assert.deepEqual(await readdir(target.path), []);
+	assert.deepEqual(await readFile(archived), Buffer.concat([wavHeader(2), pcm([1])]), "debug capture is not removed");
+});
+
+test("a malformed closed clip is not published as verified audio", async (t) => {
+	const directory = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path, "custom");
+	await writeFile(path, Buffer.concat([wavHeader(4), pcm([3])]));
+	finishRecorder(recording);
+	assert.equal(await freezeAudio(recording, null, t.signal, target), null);
+	assert.deepEqual(await readdir(target.path), []);
+});
+
+test("copyTo discards a candidate if the private snapshot no longer matches its recorded hash", async (t) => {
+	const directory = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path, "custom");
+	await writeFile(path, Buffer.concat([wavHeader(2), pcm([3])]));
+	finishRecorder(recording);
+	const snapshot = await freezeAudio(recording, null, t.signal);
+	assert.ok(snapshot);
+	const privateFile = (await readdir(directory.path)).find((name) => name !== "raw.wav");
+	await writeFile(join(directory.path, privateFile), Buffer.concat([wavHeader(2), pcm([4])]));
+	await assert.rejects(snapshot.copyTo(target, t.signal), /digest check/);
+	assert.deepEqual(await readdir(target.path), []);
+});
+
+test("closing a retained clip directory removes its transient snapshot but preserves raw audio", async (t) => {
+	const directory = await createClipRecordingDirectory(".", false, "micme-retained-clip-test-");
+	t.after(async () => {
+		directory.close();
+		await rm(directory.path, { recursive: true, force: true });
+	});
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path, "custom");
+	const wave = Buffer.concat([wavHeader(2), pcm([3])]);
+	await writeFile(path, wave);
+	finishRecorder(recording);
+	assert.ok(await freezeAudio(recording, null, t.signal));
+	assert.equal((await readdir(directory.path)).length, 2);
+	directory.close();
+	assert.deepEqual(await readdir(directory.path), ["raw.wav"]);
+	assert.deepEqual(await readFile(path), wave);
+});
+
+test("a stopped live reader recovers the full WAV and unread tail without advancing the feed cursor or ACK gate", async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const consumer = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	const header = wavHeader(0, { growing: true, ancillary: true });
+	const prefix = pcm([720, 0, 0]);
+	const tail = pcm([0, -1833, 1955]);
+	const producer = recordingFixture(source, path);
+	await writeFile(path, Buffer.concat([header, prefix]));
+	const reader = await openReader(t, source, path, t.signal, producer);
+	assert.deepEqual((await reader.read(false)).pcm, prefix);
+	await appendFile(path, tail);
+	const closedHeader = wavHeader(prefix.length + tail.length, { ancillary: true });
+	await patchLengths(path, closedHeader);
+	finishRecorder(producer);
+	const expected = Buffer.concat([closedHeader, prefix, tail]);
+	const snapshot = await reader.writeRecoveryInput(target, t.signal);
+	assert.equal(snapshot?.bytes, expected.length);
+	assert.equal(snapshot.sha256, sha256(expected));
+	const copy = await snapshot.copyTo(consumer, t.signal);
+	assert.deepEqual(await readFile(ownedPath(consumer, copy)), expected);
+	await assert.rejects(reader.writeRefinementInput(target, (prefix.length + tail.length) / 2, t.signal), /fully drained.*acknowledged/);
+	assert.deepEqual((await reader.read(true)).pcm, tail);
+});
+
+test("a recovered snapshot cannot be copied after the take is canceled", async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const consumer = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	const producer = recordingFixture(source, path);
+	const controller = new AbortController();
+	await writeFile(path, Buffer.concat([wavHeader(2), pcm([3])]));
+	const reader = await openReader(t, source, path, controller.signal, producer);
+	finishRecorder(producer);
+	const snapshot = await reader.writeRecoveryInput(target, t.signal);
+	assert.ok(snapshot);
+	controller.abort();
+	await assert.rejects(snapshot.copyTo(consumer, t.signal), { name: "AbortError" });
+	assert.deepEqual(await readdir(consumer.path), []);
+});
+
+test("even a finalized WAV is not recoverable while its recorder tree is running", async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	await writeFile(path, Buffer.concat([wavHeader(2), pcm([3])]));
+	const reader = await openReader(t, source, path, t.signal, recordingFixture(source, path));
+	assert.equal(await reader.writeRecoveryInput(target, t.signal), null);
+	assert.deepEqual(await readdir(target.path), []);
+});
+
+test("live recovery rejects a replaced binding even when the held original still exists", { skip: process.platform === "win32" }, async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	const wave = Buffer.concat([wavHeader(4), pcm([1, 2])]);
+	const producer = recordingFixture(source, path);
+	await writeFile(path, wave);
+	const reader = await openReader(t, source, path, t.signal, producer);
+	await reader.read(false);
+	await rename(path, join(source.path, "old.wav"));
+	await writeFile(path, wave);
+	finishRecorder(producer);
+	assert.equal(await reader.writeRecoveryInput(target, t.signal), null);
+	assert.deepEqual(await readdir(target.path), []);
+});
+
+test("live recovery rejects an ambiguous hard-linked source", async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	const producer = recordingFixture(source, path);
+	await writeFile(path, Buffer.concat([wavHeader(2), pcm([1])]));
+	const reader = await openReader(t, source, path, t.signal, producer);
+	await link(path, join(source.path, "alias.wav"));
+	finishRecorder(producer);
+	assert.equal(await reader.writeRecoveryInput(target, t.signal), null);
+	assert.deepEqual(await readdir(target.path), []);
+});
+
+test("live recovery discards the candidate if the already-read prefix was rewritten in place", async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	const producer = recordingFixture(source, path);
+	await writeFile(path, Buffer.concat([wavHeader(0, { growing: true }), pcm([1, 2])]));
+	const reader = await openReader(t, source, path, t.signal, producer);
+	assert.deepEqual((await reader.read(false)).pcm, pcm([1, 2]));
+	await writeFile(path, Buffer.concat([wavHeader(6), pcm([3, 2, 4])]));
+	finishRecorder(producer);
+	assert.equal(await reader.writeRecoveryInput(target, t.signal), null);
+	assert.deepEqual(await readdir(target.path), []);
+});
+
+test("live recovery refuses a moved data offset even when the first read was during the final drain", async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	const producer = recordingFixture(source, path);
+	const samples = pcm([3, 7]);
+	await writeFile(path, Buffer.concat([wavHeader(samples.length), samples]));
+	const reader = await openReader(t, source, path, t.signal, producer);
+	finishRecorder(producer);
+	assert.deepEqual((await reader.read(true)).pcm, samples);
+	await writeFile(path, Buffer.concat([wavHeader(samples.length, { ancillary: true }), samples]));
+	assert.equal(await reader.writeRecoveryInput(target, t.signal), null);
+	assert.deepEqual(await readdir(target.path), []);
+});
+
+test("live recovery refuses an unpatched close", async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	const producer = recordingFixture(source, path);
+	await writeFile(path, Buffer.concat([wavHeader(0, { growing: true }), pcm([3])]));
+	const reader = await openReader(t, source, path, t.signal, producer);
+	finishRecorder(producer);
+	assert.equal(await reader.writeRecoveryInput(target, t.signal), null);
+	assert.deepEqual(await readdir(target.path), []);
+});
+
+test("cancel during live recovery discards the private candidate before publication", async (t) => {
+	const source = await makeDirectory(t);
+	const target = await makeDirectory(t);
+	const path = join(source.path, "raw.wav");
+	const producer = recordingFixture(source, path);
+	await writeFile(path, Buffer.concat([wavHeader(4), pcm([1, 7])]));
+	const reader = await openReader(t, source, path, t.signal, producer);
+	finishRecorder(producer);
+	const controller = new AbortController();
+	const openVerifiedFile = target.openVerifiedFile.bind(target);
+	t.mock.method(target, "openVerifiedFile", (name) => {
+		const file = openVerifiedFile(name);
+		controller.abort();
+		return file;
+	});
+	assert.equal(await reader.writeRecoveryInput(target, controller.signal), null);
+	assert.equal(controller.signal.aborted, true, "must reach the verification boundary before canceling");
+	assert.deepEqual(await readdir(target.path), []);
 });
