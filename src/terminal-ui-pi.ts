@@ -1,10 +1,12 @@
 export {
 	Container,
+	Editor,
 	Key,
 	SelectList,
 	Text,
 	decodeKittyPrintable,
 	fuzzyFilter,
+	isKeyRelease,
 	matchesKey,
 	parseKey,
 	sliceByColumn,
