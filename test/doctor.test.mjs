@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { WHISPER_VAD_MODEL } from "../src/constants.ts";
+import { referenceRows } from "../src/transfer/catalog.ts";
 
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 const packageRoot = dirname(packagePath);
@@ -318,4 +321,192 @@ test("clip doctor preserves auto priority for custom, cached whisper.cpp, and Py
 		}
 		if (backend === "whisper.cpp") assert.equal(getDoctorField(doctor, "effective model path"), modelPath);
 	}
+});
+
+function overrideStandardPin(name, bytes) {
+	// Replace only the ledger metadata in the child: exercise the real offline
+	// verifier with small test bytes, without model downloads or test-only APIs.
+	const source = new URL("../src/transfer/catalog-data.ts", import.meta.url).href;
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	const fixture = `
+		export * from ${JSON.stringify(source)};
+		import { STANDARD_WHISPER as rows } from ${JSON.stringify(source)};
+		export const STANDARD_WHISPER = rows.map((entry) => entry.name === ${JSON.stringify(name)}
+			? { ...entry, row: { ...entry.row, blobs: [{ ...entry.row.blobs[0], bytes: ${bytes.length}, sha256: ${JSON.stringify(sha256)} }] } }
+			: entry);
+	`;
+	return `data:text/javascript,${encodeURIComponent(`
+		import { registerHooks } from 'node:module';
+		registerHooks({ resolve(specifier, context, nextResolve) {
+			return nextResolve(specifier === './catalog-data.ts' ? ${JSON.stringify(`data:text/javascript,${encodeURIComponent(fixture)}`)} : specifier, context);
+		} });
+	`)}`;
+}
+
+test("doctor distinguishes verified, missing and corrupt managed files without repairing them", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-integrity-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const cliDir = join(root, "bin");
+	const modelDir = join(root, "models");
+	const name = "small.en";
+	const model = `ggml-${name}.bin`;
+	const path = join(modelDir, model);
+	await createWhisperCppFixture(cliDir);
+	const environment = {
+		...isolatedEnvironment(root, cliDir), MICME_DEFAULT_WHISPER_CPP_MODEL: name, MICME_MODEL_DIR: modelDir,
+		MICME_AUTO_DOWNLOAD_MODEL: "1",
+	};
+	const bytes = Buffer.from("model fixture");
+	const run = runNode.bind(undefined, ["--import", noDownload, "--import", overrideStandardPin(name, bytes), "scripts/doctor.mjs"], environment);
+	const missing = run();
+	assert.match(missing, /^! ASR integrity: missing;.*exact pinned/m);
+	assert.doesNotMatch(missing, /^✓ ASR integrity:/m);
+	await assert.rejects(access(modelDir), { code: "ENOENT" });
+
+	await mkdir(modelDir);
+	const corrupt = Buffer.alloc(bytes.length);
+	await writeFile(path, corrupt); // right size, wrong SHA-256
+	const rejected = run();
+	assert.match(rejected, /^! ASR integrity: corrupt;.*Micme-owned/m);
+	assert.doesNotMatch(rejected, /^✓ ASR integrity:/m);
+	assert.deepEqual(await readFile(path), corrupt);
+
+	await writeFile(path, bytes);
+	const verified = run();
+	assert.match(verified, /^✓ ASR integrity: verified.*size and SHA-256/m);
+	assert.match(getDoctorField(verified, "model reference measurement"), /transcribe.*en.*CPU.*WER.*xRT.*unknown/);
+	assert.match(getDoctorField(verified, "actual compute and bound device"), /unknown.*not loaded/);
+	assert.deepEqual(await readdir(modelDir), [model]);
+});
+
+test("a successful Worker v1 probe does not verify the default VAD weights", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-vad-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const vadPath = join(root, "vad", WHISPER_VAD_MODEL.file);
+	await mkdir(dirname(vadPath));
+	await writeFile(vadPath, "not the pinned VAD weights");
+	await createLoggedCommand(join(root, "micme-live"), 1);
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, root), MICME_TRANSCRIPTION_MODE: "stream", MICME_MODEL_DIR: root,
+	});
+	assert.match(output, /^✓ live worker protocol: Worker v1 available; model readiness and capture not tested/m);
+	assert.match(output, /^! VAD integrity: corrupt;/m);
+	assert.doesNotMatch(output, /^✓ VAD integrity:/m);
+	assert.equal(await readFile(vadPath, "utf8"), "not the pinned VAD weights");
+});
+
+test("doctor labels an explicit model in the managed cache as a user-managed override", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-manual-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "ggml-small.en.bin");
+	await writeFile(path, "user-owned fixture");
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, join(root, "bin")), MICME_MODEL_DIR: root, MICME_WHISPER_CPP_MODEL: path,
+	});
+	assert.match(getDoctorField(output, "ASR integrity"), /present.*user-managed.*not verified/);
+	assert.doesNotMatch(output, /^✓ ASR integrity:|^! ASR integrity: corrupt/m);
+});
+
+test("an explicit unqualified artifact is not reported as the legacy Worker v1 selection", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-catalog-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const artifact = referenceRows().flatMap(({ variants }) => variants).find((variant) => !variant.blobs.length);
+	assert.ok(artifact);
+	const worker = join(root, "micme-live");
+	await createLoggedCommand(worker, 1);
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, root), MICME_TRANSCRIPTION_MODE: "stream", MICME_ARTIFACT: artifact.id,
+		MICME_COMPUTE: "vulkan", MICME_TRANSLATE_TO_ENGLISH: "fr", MICME_DETECTOR: "off",
+	});
+	assert.equal(getDoctorField(output, "configured artifact"), artifact.id);
+	assert.match(getDoctorField(output, "artifact catalog status"), new RegExp(`rights: ${artifact.rights}; reference runtime: ${artifact.runtime}`));
+	assert.match(output, /^! ASR integrity: not verified;.*qualified/m);
+	assert.match(getDoctorField(output, "configured speech task"), /translate to English/);
+	assert.equal(getDoctorField(output, "requested compute"), "vulkan");
+	assert.match(getDoctorField(output, "configured recognition preferences"), /detector: off; not exercised/);
+	assert.doesNotMatch(output, /^✓ (?:effective backend|live worker protocol|ASR integrity):/m);
+	await assert.rejects(access(`${worker}.args`), { code: "ENOENT" });
+});
+
+test("doctor reports configured audio input but never invokes a recorder or claims observed routing", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-capture-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const recorder = join(root, "ffmpeg");
+	await createLoggedCommand(recorder);
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, root), MICME_PULSE_SOURCE: "fixture-in", MICME_AVFOUNDATION_INPUT: ":fixture-in",
+	});
+	assert.match(getDoctorField(output, "configured audio input"), /fixture-in/);
+	assert.match(getDoctorField(output, "capture readiness"), /not tested.*actual device, channel and fallback unknown/);
+	assert.doesNotMatch(output, /^- configured (?:recognition preferences|language rules):/m);
+	await assert.rejects(access(`${recorder}.args`), { code: "ENOENT" });
+});
+
+test("doctor redacts processing configuration and leaves hooks, network and saved settings untouched", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-processing-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const transcript = "dummy-private-transcript";
+	const keyName = "MICME_ONLY_FOR_FAKE_PROVIDER";
+	const key = "dummy-private-key";
+	const hook = join(root, "private-hook-name");
+	await createLoggedCommand(hook);
+	const values = JSON.stringify({
+		MICME_POLISH_PROVIDER: "custom-openai",
+		MICME_POLISH_ENDPOINT: `https://example.invalid/${key}`,
+		MICME_POLISH_MODEL: transcript,
+		MICME_POLISH_PROMPT: `Polish this: ${transcript}`,
+		MICME_POLISH_KEY_ENV: keyName,
+		MICME_OUTPUT_HOOK: hook,
+		MICME_WORDS: JSON.stringify([transcript]),
+		MICME_HISTORY: "1",
+		MICME_RETENTION: "count:0",
+		MICME_WHISPER_STREAM_BIN: "ignored-old-sdl-value",
+	});
+	const configPath = join(root, "micme.json");
+	await writeFile(configPath, values);
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], { ...isolatedEnvironment(root, root), [keyName]: key });
+	assert.match(getDoctorField(output, "final processing"), /custom-openai.*explicit action/);
+	assert.match(getDoctorField(output, "processing configuration"), /endpoint.*model.*prompt.*credential source.*hook.*redacted/);
+	assert.match(getDoctorField(output, "SDL migration"), /MICME_LIVE_BIN.*retain.*settings/i);
+	assert.match(getDoctorField(output, "configured history preferences"), /count:0; no library or active policy inspected/);
+	for (const privateValue of [transcript, key, keyName, hook, "example.invalid", "ignored-old-sdl-value"]) {
+		assert.equal(output.includes(privateValue), false, `exposed ${privateValue}`);
+	}
+	assert.equal(await readFile(configPath, "utf8"), values);
+	await assert.rejects(access(`${hook}.args`), { code: "ENOENT" });
+	assert.deepEqual((await readdir(root)).sort(), ["micme.json", "private-hook-name"]);
+});
+
+test("doctor does not probe the worker when configuration validation fails", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-invalid-config-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const worker = join(root, "micme-live");
+	await createLoggedCommand(worker, 1);
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, root), MICME_TRANSCRIPTION_MODE: "stream", MICME_POLISH_ENDPOINT: "https://user:invalid-secret@example.invalid",
+	});
+	assert.match(output, /^! micme\.json invalid: .*MICME_POLISH_ENDPOINT.*without credentials/m);
+	assert.match(getDoctorField(output, "configuration repair"), /correct.*probe/i);
+	assert.doesNotMatch(output, /invalid-secret|^✓ live worker protocol:/m);
+	await assert.rejects(access(`${worker}.args`), { code: "ENOENT" });
+});
+
+test("doctor uses the default config directory without attempting to load Pi peer modules", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-no-pi-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const configDir = join(root, ".pi", "agent");
+	await mkdir(configDir, { recursive: true });
+	await writeFile(join(configDir, "micme.json"), JSON.stringify({ MICME_MODEL_DIR: join(root, "models") }));
+	const environment = isolatedEnvironment(root, join(root, "bin"));
+	delete environment.PI_CODING_AGENT_DIR;
+	const forbidPi = `data:text/javascript,${encodeURIComponent(`
+		import { registerHooks } from 'node:module';
+		registerHooks({ resolve(specifier, context, nextResolve) {
+			if (specifier.startsWith('@earendil-works/pi-')) process.exit(87);
+			return nextResolve(specifier, context);
+		} });
+	`)}`;
+	const output = runNode(["--import", forbidPi, "scripts/doctor.mjs"], environment);
+	assert.match(output, /^✓ micme\.json loaded: /m);
+	assert.ok(output.includes(join(configDir, "micme.json")), output);
 });
