@@ -85,6 +85,14 @@ test("/micme help advertises a recording shortcut that OMP's stock editor does n
 	assert.equal(competingAction, undefined, `${chord} is already bound to ${competingAction} in OMP`);
 });
 
+test("OMP does not reserve a Pi-only preview shortcut", async (t) => {
+	const { commands, shortcuts } = await loadOmpExtension(t);
+	const messages = [];
+	await commands.get("micme").handler("help", { ui: { notify: (text) => messages.push(text) } });
+	assert.equal(shortcuts.has("alt+3"), false);
+	assert.doesNotMatch(messages[0], /opens live-final preview/);
+});
+
 function captureTerminalInput() {
 	const listeners = new Set();
 	return {

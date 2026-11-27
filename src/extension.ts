@@ -125,17 +125,24 @@ export function registerMicmeExtension(pi: ExtensionAPI) {
 	const terminalShortcut = getTerminalShortcut(hostDefaultShortcut);
 	const owner = new MicmeSessionOwner(pi, terminalShortcut);
 	registerDeviceMessageRenderer(pi);
+	const previewShortcut = isOmp ? undefined : terminalShortcut?.toLowerCase() === "alt+3" ? "alt+7" : "alt+3";
 
 	pi.registerCommand("micme", {
 		description: "Toggle local voice recording and paste the transcript into the editor",
 		getArgumentCompletions: getMicmeArgumentCompletions,
-		handler: async (args, ctx) => handleMicmeCommand(owner, pi, args, ctx),
+		handler: async (args, ctx) => handleMicmeCommand(owner, pi, args, ctx, previewShortcut),
 	});
 
 	if (terminalShortcut) {
 		pi.registerShortcut(terminalShortcut as Parameters<ExtensionAPI["registerShortcut"]>[0], {
 			description: "Micme: toggle local voice recording",
 			handler: async (ctx) => handleMicmeTerminalShortcut(owner, ctx),
+		});
+	}
+	if (previewShortcut) {
+		pi.registerShortcut(previewShortcut, {
+			description: "Micme: preview the saved live final without submitting the composer",
+			handler: (ctx) => owner.runTransferAction(ctx, "preview"),
 		});
 	}
 
@@ -599,7 +606,7 @@ function getMicmeArgumentCompletions(prefix: string) {
 	return matches.length ? matches.map((value) => ({ value, label: value })) : null;
 }
 
-async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, args: string, ctx: ExtensionContext) {
+async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, args: string, ctx: ExtensionContext, previewShortcut?: string) {
 	const action = args.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
 	try {
 		switch (action) {
@@ -632,7 +639,7 @@ async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, ar
 				owner.notifyLastAudioDirectory(ctx);
 				return;
 			case "help":
-				ctx.ui.notify(getHelpText(), "info");
+				ctx.ui.notify(getHelpText(previewShortcut), "info");
 				return;
 			default:
 				ctx.ui.notify(`Unknown micme action: ${sanitizeTerminalOutput(action) || "(empty)"}. Try /micme help`, "warning");
@@ -679,10 +686,13 @@ function formatOperationPhase(phase: MicmeOperation["phase"]) {
 	return phase.replaceAll("_", " ");
 }
 
-function getHelpText() {
+function getHelpText(previewShortcut?: string) {
 	const shortcut = sanitizeTerminalOutput(getShortcut(hostDefaultShortcut)) || "not set";
 	const actions = MICME_ACTIONS.filter((action) => action !== "help").join("|");
-	return `Usage: /micme [${actions}]. Shortcut: ${shortcut} toggles recording; tap once to start, tap again to stop/transcribe. /micme cancel stops without transcription or delivery.`;
+	const usage = `Usage: /micme [${actions}]. Shortcut: ${shortcut} toggles recording; tap once to start, tap again to stop/transcribe. /micme cancel stops without transcription or delivery.`;
+	return previewShortcut
+		? `${usage}\n${previewShortcut} opens live-final preview without submitting your draft. Use /micme preview only from an empty composer.`
+		: usage;
 }
 
 async function runSampleTrial(owner: MicmeSessionOwner, operation: MicmeOperation, path: string) {
