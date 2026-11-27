@@ -91,9 +91,10 @@ export async function showTakeReview(ctx: Ctx, title: string, text: string, sign
 }
 
 export async function selectedChoice(options: TransferOptions, signal: Signal): Promise<Choice> {
-	const { listInstalled, listCompute } = await import("./recognition.ts");
+	const { assertInteractiveArtifactBackend, listInstalled, listCompute } = await import("./recognition.ts");
 	signal.throwIfAborted();
 	const variantId = options.MICME_ARTIFACT;
+	if (variantId) assertInteractiveArtifactBackend(variantId);
 	if (!variantId || !(await listInstalled()).some((choice) => choice.variantId === variantId)) {
 		throw new Error("Micme could not use the selected artifact. Select an installed, qualified model in /micme setup.");
 	}

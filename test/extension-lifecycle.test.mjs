@@ -2043,13 +2043,14 @@ test("RPC cancel during an unacknowledged feed never takes a recovery snapshot",
 export let retryFixture;
 
 test("Pi announces only the CPU retry allowed by the verified recovery policy", { skip: process.platform === "win32" }, async (t) => {
-	const { createRecognitionService } = await import("../src/transfer/recognition.ts");
+	const { assertInteractiveArtifactBackend, createRecognitionService } = await import("../src/transfer/recognition.ts");
 	const variantId = "public-retry-fixture";
 	const device = { id: "fixture-vulkan", label: "Fixture Vulkan" };
 	const recorderPcm = Buffer.alloc(980, 0x12);
 	const recognition = new URL("../src/transfer/recognition.ts", import.meta.url).href;
 	const owners = new Set(["../src/extension.ts", "../src/transfer/host.ts"].map((file) => new URL(file, import.meta.url).href));
 	const facade = `import { retryFixture } from ${JSON.stringify(import.meta.url)};
+export const assertInteractiveArtifactBackend = (...args) => retryFixture.assertInteractiveArtifactBackend(...args);
 export const listInstalled = (...args) => retryFixture.listInstalled(...args);
 export const listCompute = (...args) => retryFixture.listCompute(...args);
 export const openRecognizer = (...args) => retryFixture.openRecognizer(...args);
@@ -2085,7 +2086,7 @@ export const recognizeVerifiedRetry = (audio, choice, progress, signal, onCpuRec
 				close: async () => {},
 			};
 		} });
-		retryFixture = { ...api, listInstalled: async () => [{ variantId }], listCompute: async () => [{ backend: "vulkan", device }] };
+		retryFixture = { ...api, assertInteractiveArtifactBackend, listInstalled: async () => [{ variantId }], listCompute: async () => [{ backend: "vulkan", device }] };
 		await withLiveFixture(caseTest, { env: {
 			MICME_TRANSCRIPTION_MODE: "clip", MICME_ARTIFACT: variantId, MICME_WHISPER_CPP_MODEL: undefined, MICME_TRANSCRIBE_COMMAND: undefined,
 			MICME_COMPUTE: scenario === "pinned" ? device.id : "auto", MICME_DETECTOR: "off", MICME_HISTORY: "0",
