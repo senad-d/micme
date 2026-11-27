@@ -1,4 +1,3 @@
-import type { TUI } from "@earendil-works/pi-tui";
 import { getTransferOptions } from "../config.ts";
 import { stripTerminalControlSequences } from "../terminal-text.ts";
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component } from "../terminal-ui.ts";
@@ -115,7 +114,7 @@ function displayText(text: string) {
 }
 
 type PanelOptions = {
-	tui: TUI;
+	tui: { terminal: { rows: number }; requestRender(): void };
 	theme: Ctx["ui"]["theme"];
 	action: ProcessingAction;
 	routes: Route[];
