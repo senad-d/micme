@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { constants, fstatSync } from "node:fs";
+import { constants, fstatSync, realpathSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -191,4 +191,11 @@ async function main() {
 	process.exitCode = result.code;
 }
 
-if (import.meta.main) await main();
+function isDirectEntry() {
+	if (!process.argv[1]) return false;
+	// Older supported Node releases lack import.meta.main; npm may invoke a bin symlink.
+	try { return realpathSync(process.argv[1]) === realpathSync(new URL(import.meta.url)); }
+	catch { return false; }
+}
+
+if (import.meta.main ?? isDirectEntry()) await main();

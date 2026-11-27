@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { transcribeWavCli } from "../scripts/transcribe.mjs";
 import { createLiveRecordingDirectory } from "../src/recording-dir.ts";
 import { TRANSCRIBE_CLI_EXIT as exit, TRANSCRIBE_CLI_FLAGS as flags } from "../src/transfer/contracts.ts";
@@ -37,6 +39,32 @@ function assertFailure(result, code, detail) {
 	assert.equal(result.stdout, "");
 	assert.match(result.stderr, detail);
 }
+
+test("CLI dispatches through a bin symlink and stays inert when imported", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-cli-entry-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const entry = new URL("../scripts/transcribe.mjs", import.meta.url);
+	const bin = join(root, "micme-transcribe");
+	await symlink(fileURLToPath(entry), bin);
+	const options = { cwd: root, encoding: "utf8", timeout: 15_000, env: { HOME: root, PATH: root, PI_CODING_AGENT_DIR: root, MICME_MODEL_DIR: root } };
+	const listed = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", bin, flags.listModels, flags.json], options);
+	assert.ifError(listed.error);
+	assert.equal(listed.status, exit.success, listed.stderr);
+	assert.equal(listed.stderr, "");
+	assert.deepEqual(JSON.parse(listed.stdout), { models: [] });
+
+	const invalid = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", bin, "--unknown"], options);
+	assert.ifError(invalid.error);
+	assert.equal(invalid.status, exit.usage, invalid.stderr);
+	assert.equal(invalid.stdout, "");
+	assert.match(invalid.stderr, /^Usage: micme-transcribe/m);
+
+	const importer = join(root, "importer.mjs");
+	await writeFile(importer, `import ${JSON.stringify(entry.href)};\n`);
+	const imported = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", importer], options);
+	assert.ifError(imported.error);
+	assert.deepEqual([imported.status, imported.stdout, imported.stderr], [exit.success, "", ""]);
+});
 
 test("CLI rejects invalid flags, conflicting modes and nonpositive or partial repeat counts", async () => {
 	for (const args of [[], [flags.listModels, flags.listDevices], [flags.listModels, "file.wav"], [flags.listModels, flags.listModels],
