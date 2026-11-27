@@ -184,7 +184,13 @@ export function validateProtocol(v, p = "protocol") {
 		if (slots.has(key)) invalid(`${p}.trials`, "one slot per build, condition, pair and repeat");
 		slots.add(key);
 	}
-	for (const { trial: t } of v.calibration) if (canonicalKey(t.build) !== canonicalKey(v.products[0])) invalid(`${p}.calibration`, "only the first (reference) build");
+	const calibrationSlots = new Set();
+	for (const { trial: t } of v.calibration) {
+		if (canonicalKey(t.build) !== canonicalKey(v.products[0])) invalid(`${p}.calibration`, "only the first (reference) build");
+		const key = slotKey(t);
+		if (calibrationSlots.has(key)) invalid(`${p}.calibration`, "one reference observation per condition, pair and repeat (duplicate calibration slot)");
+		calibrationSlots.add(key);
+	}
 	for (const { from, to } of v.toleranceMs) {
 		const key = `${from}/${to}`;
 		if (from === to || bands.has(key)) invalid(`${p}.toleranceMs`, "unique intervals with distinct endpoints");
