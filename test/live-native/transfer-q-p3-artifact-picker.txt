@@ -1,0 +1,39 @@
+Observed excerpts from isolated Pi 1.6.0 PTYs. The native CPU binary and exact weights were staged; neither artifact nor detector was configured before using the picker.
+
+40 columns · moonshine-streaming-tiny · detector unset
+Speech detector for artifact
+This artifact requires Off; current
+detector: Model's native detector.
+Accept to save both settings.
+→ Cancel
+  Use with detector Off
+↑↓ move · Enter select · Esc back
+Saved detector row:
+│▶ Speech detector (St…             Off│
+│Qualified detector: Off.              │
+ Micme loaded native streaming ·
+ compute cpu · Intel(R) Core(TM)
+Ordinary toggle completed; editor readback: And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+0 sends / 0 queues; captured public WAV fixture, not a physical device.
+
+80 columns · parakeet-tdt-0.6b-v3 · detector unset
+Speech detector for artifact
+This artifact requires Off; current detector: Model's native detector. Accept to
+save both settings.
+→ Cancel
+  Use with detector Off
+↑↓ move · Enter select · Esc back
+Saved detector row:
+│  Transcription      │▶ Speech detector (Streaming)                        Off│
+│Qualified detector: Off.                                                      │
+ Micme loaded final-only delivery · compute cpu · Intel(R) Core(TM) i5-7500 CPU
+Ordinary toggle completed; editor readback: And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+0 sends / 0 queues; captured public WAV fixture, not a physical device.
+
+80 columns · parakeet-tdt-0.6b-v3 · shell override
+Speech detector for artifact
+Shell override MICME_DETECTOR is Model's native detector; this artifact requires
+Off. Change or unset it in the shell before selecting this artifact.
+→ Back to artifacts
+↑↓ move · Enter select · Esc back
+No confirm action. Back returned to the same artifact; config unchanged.

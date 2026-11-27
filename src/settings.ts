@@ -32,7 +32,7 @@ import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
 import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
 import { type Component, Container, decodeKittyPrintable, fuzzyFilter, Input, Key, matchesKey, parseKey, type SettingItem, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
-import { MODEL_IDLE_MODES, SCRIPTS, type TransferOptionKey } from "./transfer/contracts.ts";
+import { MODEL_IDLE_MODES, SCRIPTS, type Detector, type RecognitionTask, type TransferOptionKey, type Variant } from "./transfer/contracts.ts";
 import { getManagedCatalogVariant } from "./transfer/catalog.ts";
 import { getEngineEvidence } from "./transfer/engine-evidence.ts";
 import { checkSetupModelSelection, cleanSettingText, configuredModelLabel, createSettingsPicker, discoverAdvancedRuntime, getPrintableInput, LANGUAGE_LABELS, managedWhisperName, sensitiveOptionsSummary, TRANSLATE_FROM_VALUE_LABELS, TRANSCRIPTION_LANGUAGE_VALUES, TRANSLATION_SOURCE_LANGUAGE_VALUES, whisperModelCompatibility, type AdvancedRuntime } from "./transfer/settings.ts";
@@ -50,13 +50,14 @@ interface ConfigurationCategory {
 	description: string;
 }
 
-interface ConfigurationItem extends SettingItem {
+interface ConfigurationItem extends Omit<SettingItem, "submenu"> {
 	categoryId: ConfigurationCategoryId;
 	rawValue: string;
 	displayKind?: DisplayKind;
 	emptyLabel?: string;
 	valueLabels?: Record<string, string>;
 	details?: string[];
+	submenu?: (value: string, done: (value?: string, artifactDetector?: Detector) => void) => Component;
 	visibleWhen?: (plan: ResolvedTranscriptionPlan) => boolean;
 }
 
@@ -109,8 +110,8 @@ export async function showConfiguration(ctx: ExtensionContext, sessionSignal?: A
 				done();
 			},
 			onError: (error) => notifySanitized(ctx, error instanceof Error ? error.message : String(error), "error"),
-			onSave: (id, newValue) => {
-				pendingSave = saveConfigurationValue(ctx, id, newValue, { signal: controller.signal });
+			onSave: (id, newValue, artifactDetector) => {
+				pendingSave = saveConfigurationValue(ctx, id, newValue, { signal: controller.signal, artifactDetector });
 				return pendingSave.then(() => buildConfigurationView(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme));
 			},
 			onDiscoverAdvanced: canDiscover ? () => discoverAdvancedRuntime(controller.signal) : async () => ({ installed: [], compute: [] }),
@@ -209,7 +210,7 @@ class ConfigurationScreen implements Component {
 	private readonly theme: MicmeTheme;
 	private readonly onDone: () => void;
 	private readonly onError: (error: unknown) => void;
-	private readonly onSave: (id: string, newValue: string) => Promise<ConfigurationView>;
+	private readonly onSave: (id: string, newValue: string, artifactDetector?: Detector) => Promise<ConfigurationView>;
 	private readonly requestRender: () => void;
 	private focusedPane: FocusedPane = "categories";
 	private categoryIndex = 0;
@@ -235,7 +236,7 @@ class ConfigurationScreen implements Component {
 		theme: MicmeTheme;
 		onDone: () => void;
 		onError: (error: unknown) => void;
-		onSave: (id: string, newValue: string) => Promise<ConfigurationView>;
+		onSave: ConfigurationScreen["onSave"];
 		onDiscoverAdvanced: () => Promise<AdvancedRuntime>;
 		requestRender: () => void;
 		statusText?: string;
@@ -656,9 +657,9 @@ class ConfigurationScreen implements Component {
 		}
 
 		if (item.submenu) {
-			this.submenuComponent = item.submenu(item.rawValue, (selectedValue?: string) => {
+			this.submenuComponent = item.submenu(item.rawValue, (selectedValue, artifactDetector) => {
 				this.submenuComponent = null;
-				if (selectedValue !== undefined) this.saveSetting(item, selectedValue);
+				if (selectedValue !== undefined) this.saveSetting(item, selectedValue, artifactDetector);
 				this.requestRender();
 			});
 			return;
@@ -738,12 +739,12 @@ class ConfigurationScreen implements Component {
 		this.requestRender();
 	}
 
-	private saveSetting(item: ConfigurationItem, nextValue: string) {
+	private saveSetting(item: ConfigurationItem, nextValue: string, artifactDetector?: Detector) {
 		this.saving = true;
 		this.statusText = `Saving ${item.id}…`;
 		this.requestRender();
 
-		void this.onSave(item.id, nextValue)
+		void this.onSave(item.id, nextValue, artifactDetector)
 			.then((view) => {
 				if (this.closed) return;
 				this.view = view;
@@ -1169,21 +1170,70 @@ function buildAdvancedItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRu
 
 type AdvancedRow = (id: TransferOptionKey, label: string, description: string, more?: Partial<ConfigurationItem>) => ConfigurationItem;
 
+const DETECTOR_LABELS: Record<Detector, string> = { model: "Model's native detector", silero: "Silero", off: "Off" };
+
+function artifactSpeechSettings() {
+	const translation = getTranslateToEnglishLanguage();
+	const task: RecognitionTask = translation ? "translate-en" : "transcribe";
+	return { task, language: translation ?? (env("MICME_LANGUAGE")?.trim().toLowerCase() || "en") };
+}
+
+function qualifiedArtifact(id: string, task: RecognitionTask, language: string) {
+	const evidence = getEngineEvidence(id);
+	const observed = evidence?.traits;
+	if (!observed || observed.actualCompute === "unknown") return null;
+	for (const { rig } of evidence.measurements) {
+		const variant = getManagedCatalogVariant(id, { rig, actualCompute: observed.actualCompute, device: observed.boundDevice }, task, language);
+		if (variant) return variant;
+	}
+	return null;
+}
+
+function observedDetector(vad: NonNullable<Variant["traits"]>["vad"]): Detector {
+	return vad === "native" ? "model" : vad;
+}
+
+function detectorShellConflict(required: Detector, current: Detector) {
+	if (current === required || process.env.MICME_DETECTOR === undefined) return undefined;
+	return `Shell override MICME_DETECTOR is ${DETECTOR_LABELS[current]}; this artifact requires ${DETECTOR_LABELS[required]}. Change or unset it in the shell before selecting this artifact.`;
+}
+
+export function createArtifactSelector(variants: Variant[], value: string, current: Detector, theme: MicmeTheme, done: (value?: string, detector?: Detector) => void): Component {
+	const rows = [{ value: "", label: "Legacy dictation" }, ...variants.flatMap(({ id, traits }) => traits ? [{
+		value: id, label: id.split("@")[0]!, details: [`Qualified detector: ${DETECTOR_LABELS[observedDetector(traits.vad)]}.`],
+	}] : [])];
+	let currentPicker: Component;
+	const artifacts = createSettingsPicker({ title: "Qualified artifact", rows, cursor: { selected: value } }, theme, (id) => {
+		const traits = variants.find((variant) => variant.id === id)?.traits;
+		if (!id || !traits) return done(id);
+		const required = observedDetector(traits.vad);
+		if (current === required) return done(id);
+		const conflict = detectorShellConflict(required, current);
+		currentPicker = createSettingsPicker({
+			title: "Speech detector for artifact",
+			heading: [conflict ?? `This artifact requires ${DETECTOR_LABELS[required]}; current detector: ${DETECTOR_LABELS[current]}. Accept to save both settings.`],
+			rows: conflict ? [{ value: "", label: "Back to artifacts" }] : [
+				{ value: "", label: "Cancel" }, { value: required, label: `Use with detector ${DETECTOR_LABELS[required]}` },
+			],
+		}, theme, (detector) => {
+			if (!conflict && detector === required) done(id, required);
+			else currentPicker = artifacts;
+		});
+	});
+	currentPicker = artifacts;
+	return {
+		render: (width) => currentPicker.render(width),
+		invalidate: () => currentPicker.invalidate(),
+		handleInput: (data) => currentPicker.handleInput?.(data),
+	};
+}
+
 function buildArtifactItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRuntime, theme: MicmeTheme, row: AdvancedRow): ConfigurationItem[] {
 	const options = getTransferOptions();
-	const translation = getTranslateToEnglishLanguage();
-	const task = translation ? "translate-en" : "transcribe";
-	const language = translation ?? (env("MICME_LANGUAGE")?.trim().toLowerCase() || "en");
+	const { task, language } = artifactSpeechSettings();
 	const available = runtime.installed.flatMap(({ variantId }) => {
 		if (plan.requestedBackend === "whisper.cpp" && !variantId.startsWith("whisper.cpp/")) return [];
-		const evidence = getEngineEvidence(variantId);
-		const observed = evidence?.traits;
-		if (!observed || observed.actualCompute === "unknown") return [];
-		for (const { rig } of evidence.measurements) {
-			const qualified = getManagedCatalogVariant(variantId, { rig, actualCompute: observed.actualCompute, device: observed.boundDevice }, task, language);
-			if (qualified) return [qualified];
-		}
-		return [];
+		return qualifiedArtifact(variantId, task, language) ?? [];
 	});
 	const selected = options.MICME_ARTIFACT;
 	const canSelect = !env("MICME_WHISPER_CPP_MODEL")?.trim() && plan.requestedBackend !== "python" && plan.requestedBackend !== "custom"
@@ -1191,16 +1241,17 @@ function buildArtifactItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRu
 	const status = { id: "micme-runtime", categoryId: "transcription" as const, label: "Optional runtime", rawValue: "", currentValue: "Unavailable",
 		emptyLabel: "Unavailable", description: "No installed artifact has qualified evidence for the current task and language. Legacy Whisper remains available where configured." };
 	if (!selected && (!canSelect || !available.length)) return [status];
-	const choices = [{ value: "", label: "Legacy dictation" }, ...available.map(({ id }) => ({ value: id, label: id.split("@")[0]! }))];
 	const result = [row("MICME_ARTIFACT", "Qualified artifact", "Select an installed exact variant, or return to legacy dictation.", {
 		categoryId: "transcription", rawValue: selected ?? "", emptyLabel: "Legacy dictation",
 		valueLabels: selected ? { [selected]: selected.split("@")[0]! } : undefined,
-		submenu: (value, done) => createSettingsPicker({ title: "Qualified artifact", rows: choices, cursor: { selected: value } }, theme, done),
+		submenu: (value, done) => createArtifactSelector(available, value, options.MICME_DETECTOR, theme, done),
 	})];
 	const evidence = available.find(({ id }) => id === selected);
 	const traits = evidence?.traits;
 	if (!traits) return [...result, status];
 	const identity = traits.boundDevice;
+	const detector = observedDetector(traits.vad);
+	const detectorConflict = detectorShellConflict(detector, options.MICME_DETECTOR);
 	const computeValues = ["auto", ...runtime.compute.filter(({ backend, device }) => backend === traits.actualCompute
 		&& (device?.id ?? null) === (identity?.id ?? null) && (device?.label ?? null) === (identity?.label ?? null))
 		.map(({ backend, device }) => device?.id ?? backend)];
@@ -1213,8 +1264,10 @@ function buildArtifactItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRu
 		row("MICME_MODEL_IDLE", "Unload model after", "Controls model residency only; it never keeps a microphone open.", {
 			categoryId: "transcription", rawValue: options.MICME_MODEL_IDLE, values: [...MODEL_IDLE_MODES], valueLabels: { immediate: "Immediately", "5min": "5 minutes", never: "Never" },
 		}),
-		row("MICME_DETECTOR", "Speech detector", "Only the model's observed detector is offered here. Other detectors and local LID require separate qualification.", {
-			categoryId: "streaming", rawValue: options.MICME_DETECTOR, values: ["model"], details: [`Previously loaded detector: ${traits.vad}.`],
+		row("MICME_DETECTOR", "Speech detector", "Only the detector qualified for the selected artifact is offered.", {
+			categoryId: "streaming", rawValue: options.MICME_DETECTOR, valueLabels: DETECTOR_LABELS,
+			values: process.env.MICME_DETECTOR === undefined ? [detector] : undefined,
+			details: [detectorConflict ?? `Qualified detector: ${DETECTOR_LABELS[detector]}.`],
 		}),
 	);
 	if (traits.batch && !traits.longForm) result.push(row("MICME_CHUNKING", "Chunk long takes", "Chunking is for batch models without native long-form support.", {
@@ -1302,17 +1355,30 @@ export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTh
 	}, theme, done);
 }
 
-export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string, options: { signal?: AbortSignal } = {}): Promise<Record<string, string>> {
+export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string, options: { signal?: AbortSignal; artifactDetector?: Detector } = {}): Promise<Record<string, string>> {
 	if (!id.startsWith("MICME_")) return {};
 	options.signal?.throwIfAborted();
 	requireValidMicmeConfig();
-	const selectedArtifact = getTransferOptions().MICME_ARTIFACT;
+	const transfer = getTransferOptions();
+	const selectedArtifact = transfer.MICME_ARTIFACT;
 	if (id === "MICME_TRANSCRIBE_BACKEND" && selectedArtifact && (
 		value === "python" || value === "custom" || (value === "auto" && env("MICME_TRANSCRIBE_COMMAND")?.trim())
 		|| (value === "whisper.cpp" && !selectedArtifact.startsWith("whisper.cpp/"))
 	)) throw new Error("Clear the selected artifact in Advanced controls before changing to this backend.");
 
 	const valuesToWrite = getConfigurationValuesToWrite(id, value);
+	if (id === "MICME_ARTIFACT" && value) {
+		const { task, language } = artifactSpeechSettings();
+		const traits = qualifiedArtifact(value, task, language)?.traits;
+		if (!traits) throw new Error("This artifact is not qualified for the current task and language.");
+		const required = observedDetector(traits.vad);
+		const conflict = detectorShellConflict(required, transfer.MICME_DETECTOR);
+		if (conflict) throw new Error(conflict);
+		if (transfer.MICME_DETECTOR !== required) {
+			if (options.artifactDetector !== required) throw new Error(`This artifact requires the detector ${DETECTOR_LABELS[required]}. Confirm it before selecting the artifact.`);
+			valuesToWrite.MICME_DETECTOR = required;
+		}
+	}
 	if (id === "MICME_WHISPER_CPP_MODEL" && value) {
 		const path = expandConfigPath(value);
 		const managedName = managedWhisperName(path);
