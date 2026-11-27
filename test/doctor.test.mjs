@@ -473,6 +473,55 @@ test("doctor verifies native pins offline without claiming local runtime qualifi
 	await assert.rejects(access(`${helper}.args`), { code: "ENOENT" });
 });
 
+test("native artifact repair uses published evidence without probing the local runtime", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-artifact-repair-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const artifact = referenceRows().find(({ id }) => id === "moonshine-streaming-tiny")?.variants.find(({ measurements }) =>
+		measurements.some(({ disposition }) => disposition === "adapted-verified"));
+	assert.ok(artifact);
+	const cell = artifact.measurements.find(({ disposition }) => disposition === "adapted-verified");
+	assert.ok(cell?.device?.label);
+	const privateId = "private-device-canary";
+	const environment = {
+		...isolatedEnvironment(root, join(root, "bin")), MICME_ARTIFACT: artifact.id, MICME_MODEL_DIR: join(root, "models"),
+		MICME_TRANSLATE_TO_ENGLISH: "fr", MICME_COMPUTE: privateId, MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+	};
+	const incompatible = runNode(["--import", noDownload, "scripts/doctor.mjs"], environment);
+	assert.match(incompatible, /^! artifact backend: .*MICME_TRANSCRIBE_BACKEND=auto.*MICME_ARTIFACT/m);
+	assert.match(incompatible, /^! artifact task and language: .*translation to English.*MICME_TRANSLATE_TO_ENGLISH/m);
+	assert.match(incompatible, /^! artifact detector: .*MICME_DETECTOR=off/m);
+	assert.match(incompatible, /^! artifact compute: .*MICME_COMPUTE=auto/m);
+	const measured = getDoctorField(incompatible, "model reference measurement");
+	assert.ok(measured.includes(cell.rig));
+	assert.ok(measured.includes(cell.device.label));
+	assert.match(measured, /WER 0(?:\.0)?%.*not measured here/);
+	assert.equal(incompatible.includes(privateId), false);
+	assert.match(getDoctorField(incompatible, "actual compute and bound device"), /unknown.*not loaded/);
+	assert.match(incompatible, /^! ASR integrity: missing;/m);
+
+	const consistent = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...environment, MICME_TRANSLATE_TO_ENGLISH: "off", MICME_COMPUTE: "cpu", MICME_DETECTOR: "off", MICME_TRANSCRIBE_BACKEND: "auto",
+	});
+	assert.doesNotMatch(consistent, /^! artifact (?:backend|task and language|detector|compute):/m);
+	assert.match(getDoctorField(consistent, "actual compute and bound device"), /unknown.*not loaded/);
+});
+
+test("doctor distinguishes a rejected explicit clip model from the resolver's prospective translation path", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-clip-projection-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const binDir = join(root, "bin");
+	await createWhisperCppFixture(binDir);
+	const configuredPath = join(root, "ggml-base.en.bin");
+	await writeFile(join(root, "ggml-base.bin"), "present but not selected");
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, binDir), MICME_WHISPER_CPP_MODEL: configuredPath, MICME_TRANSLATE_TO_ENGLISH: "fr",
+	});
+	assert.equal(getDoctorField(output, "configured Whisper model path"), configuredPath);
+	assert.match(getDoctorField(output, "Whisper path check"), /resolver candidate.*not selected/i);
+	assert.match(output, /^! ASR integrity: not verified;.*configured.*MICME_WHISPER_CPP_MODEL/m);
+	assert.doesNotMatch(output, /Translation to English uses |^- translation model fallback:/m);
+});
+
 test("an explicit unqualified artifact is not reported as the legacy Worker v1 selection", { skip: process.platform === "win32" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-doctor-catalog-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
