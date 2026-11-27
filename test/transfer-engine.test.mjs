@@ -30,12 +30,17 @@ function peer(mode, pidFile, devices) {
 		if (op === "V" && mode === "lost") process.exit(23);
 		const reply = { version: 1, ok: true, asrCalls: 0, asrLoads: 0, vadLoads: 0, peakRssBytes: null, data: op === "V" ? { devices } : {} };
 		if (op === "V" && mode === "error") Object.assign(reply, { ok: false, error: "Native probe failed." });
+		if (op === "Q" && mode === "bad-close") reply.data = { devices };
 		const payload = Buffer.from(JSON.stringify(reply));
 		const header = Buffer.alloc(4);
 		header.writeUInt32BE(op === "V" && mode === "oversize" ? 256 * 1024 + 1 : payload.length);
 		process.stdout.write(header.subarray(0, 2));
 		setImmediate(() => process.stdout.write(header.subarray(2), () => {
-			if (mode !== "oversize") process.stdout.write(payload, () => { if (op === "Q") process.exit(0); });
+			if (mode !== "oversize") process.stdout.write(payload, () => {
+				if (op !== "Q") return;
+				if (mode === "hang-on-close") writeFileSync(`${pidFile}.closing`, String(process.pid));
+				else process.exit(0);
+			});
 		}));
 	});
 }
@@ -83,6 +88,22 @@ test("a hung native probe is reaped on cancel and an independent next probe work
 	await rejected;
 	gone(pid);
 	assert.deepEqual(await listCompute(await provision(t)), enumerated);
+});
+
+test("cancel after enumeration but before shutdown reaps the peer without returning cached devices", linux, async (t) => {
+	const local = await provision(t, "hang-on-close");
+	const controller = new AbortController();
+	const rejected = assert.rejects(listCompute(local, controller.signal), { name: "AbortError" });
+	const pid = await peerPid(`${local.pidFile}.closing`);
+	controller.abort();
+	await rejected;
+	gone(pid);
+});
+
+test("a valid device list is not returned when the peer never acknowledges shutdown", linux, async (t) => {
+	const local = await provision(t, "bad-close");
+	await assert.rejects(listCompute(local), /did not shut down cleanly/);
+	gone(await peerPid(local.pidFile));
 });
 
 test("native EOF before the observed response is not a successful empty device list", linux, async (t) => {
