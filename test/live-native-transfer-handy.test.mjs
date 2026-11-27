@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cpus, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { sha256, wavHeader } from "./live-native/corpus.mjs";
+import { loopbackSource } from "./live-native/transfer-handy-driver.mjs";
 import { collect, handyCommit, handyTag, projectHandyTake } from "./live-native/transfer-handy.mjs";
 import { runTransfer } from "./live-native/transfer-runner.mjs";
-import { readJsonl, validateTake } from "./live-native/transfer-schema.mjs";
+import { isPlannedTake, readJsonl, validateTake } from "./live-native/transfer-schema.mjs";
 
 const pcm = Buffer.alloc(3200, 1);
 const elfHeader = Buffer.from([0x7f, 0x45, 0x4c, 0x46]); // Not an executable, never launched.
@@ -90,9 +91,54 @@ test("the real comparison runner writes an attempted Handy slot without activati
 	assert.equal(await readFile(sentinel, "utf8"), "unrelated profile");
 });
 
+async function frozenDesktopSlots() {
+	const { trials } = JSON.parse(await readFile(new URL("./live-native/transfer-p1-manifest.json", import.meta.url), "utf8"));
+	return ["continuous-handy-editor", "continuous-handy-paced"].map((pairId) => {
+		const slot = trials.find((entry) => entry.pairId === pairId && entry.repeatIndex === 0);
+		assert.ok(slot);
+		return { ...slot, build: { ...slot.build, binarySha256: build.binarySha256 } };
+	});
+}
+
+test("frozen Handy trials pass the private rig preflight, but different displays and sources do not", { skip: !nonRootLinux }, async (t) => {
+	const { local } = await inputs(t);
+	// An absent binary stops the real collector before any tool can start. Only
+	// the host identity is adapted for CI; leave the freeze's display and mic intact.
+	await rm(local.handyBinary);
+	for (const frozen of await frozenDesktopSlots()) {
+		const slot = { ...frozen, rig: { ...frozen.rig, arch: process.arch, cpu: cpus()[0]?.model ?? null } };
+		local.handyModelFiles[0].sha256 = slot.build.modelSha256;
+		const accepted = await collect(slot, signal(), { local });
+		checkGap(accepted, "missing-input");
+		assert.match(accepted.gaps[0].detail, /pinned local input is absent/);
+		checkGap(await collect({ ...slot, rig: { ...slot.rig, display: "Wayland" } }, signal(), { local }), "identity-mismatch");
+		checkGap(await collect({ ...slot, rig: { ...slot.rig, mic: "other.monitor" } }, signal(), { local }), "identity-mismatch");
+	}
+});
+
 const event = (stage, ns) => ({ kind: "event", stage, ns: String(ns) });
 const binding = { kind: "binding", backend: "CPU", device: "fixture bound CPU", streaming: false };
 const stamps = [event("modelLoaded", 3_000_000), event("trigger", 4_000_000), event("rawFinal", 9_000_000)];
+
+test("a proved monitor retains frozen Handy rig identity; a different or unproved source cannot qualify", async () => {
+	for (const slot of await frozenDesktopSlots()) {
+		const observedRig = { display: "Xvfb/X11" };
+		const base = [...stamps, binding, event("firstSample", 5_000_000), { kind: "result", outcome: "completed", text: "thank you" }];
+		const proved = validateTake(projectHandyTake(slot, [...base, { kind: "route", source: loopbackSource }], pcm.length, observedRig));
+		assert.equal(proved.outcome, "completed");
+		assert.equal(proved.trial.rig.display, "Xvfb/X11");
+		assert.equal(proved.trial.rig.mic, slot.rig.mic);
+		assert.ok(isPlannedTake(slot, proved.trial));
+		assert.ok(proved.events.some(({ stage }) => stage === "firstSample"));
+		for (const invalid of [[], [{ kind: "route" }], [{ kind: "route", source: "other.monitor" }]]) {
+			const unproved = validateTake(projectHandyTake(slot, [...base, ...invalid], pcm.length, observedRig));
+			assert.equal(unproved.outcome, "failed");
+			assert.equal(unproved.trial.rig.mic, null);
+			assert.ok(!isPlannedTake(slot, unproved.trial));
+			assert.ok(!unproved.events.some(({ stage }) => stage === "firstSample"));
+		}
+	}
+});
 
 test("verified WAV CLI data never claims capture, visible drafts, or receiver timings", () => {
 	const take = validateTake(projectHandyTake(trial, [...stamps, binding, { kind: "result", outcome: "completed", text: "thank you", computeMs: 2, consumed: true }], pcm.length, {}));
@@ -108,7 +154,7 @@ test("verified WAV CLI data never claims capture, visible drafts, or receiver ti
 
 test("the receiver trace, not the app's final or claimed paste, supplies target time and duplicate evidence", () => {
 	const expectedTarget = `${desktop.prefix}thank you`;
-	const trace = [...stamps, binding, { kind: "receiver" }, { kind: "idleAudio" }, { kind: "route" },
+	const trace = [...stamps, binding, { kind: "receiver" }, { kind: "idleAudio" }, { kind: "route", source: loopbackSource },
 		{ kind: "mutation", ns: "12000000", text: expectedTarget }, { kind: "mutation", ns: "14000000", text: `${expectedTarget}thank you` },
 		{ kind: "result", outcome: "completed", text: "thank you", observedTarget: `${expectedTarget}thank you` }];
 	const take = validateTake(projectHandyTake(desktop, trace, pcm.length, {}));
@@ -118,6 +164,7 @@ test("the receiver trace, not the app's final or claimed paste, supplies target 
 	assert.equal(take.duplicateInsertions, 1);
 	assert.equal(take.fedBytes, null);
 	assert.equal(take.idleMicOpen, false);
+	assert.equal(take.trial.rig.mic, loopbackSource);
 	const failure = validateTake(projectHandyTake(desktop, [...stamps, { kind: "receiver" },
 		{ kind: "result", outcome: "failed", code: "no-result", detail: "paste did not arrive", text: "thank you", observedTarget: desktop.prefix }], pcm.length, {}));
 	assert.equal(failure.outcome, "failed");
