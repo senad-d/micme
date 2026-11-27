@@ -44,7 +44,10 @@ export const getEngineEvidence = (id) => {
 	const row = variants.find((variant) => variant.id === id);
 	return row ? { runtime: row.runtime, traits: row.traits, measurements: row.measurements } : null;
 };
-export const listCompute = async () => [device1, device2].map((device) => ({ backend: "vulkan", device }));
+export const listCompute = async () => {
+	engineState?.events.push({ kind: "probe" });
+	return [device1, device2].map((device) => ({ backend: "vulkan", device }));
+};
 export const detectBatchLanguage = async (_audio, allowed, signal) => {
 	signal.throwIfAborted();
 	engineState.events.push({ kind: "lid", allowed });
@@ -154,11 +157,17 @@ function assertRoute(events, mode) {
 	}
 }
 
-async function engineJourney(t, mode) {
-	const { isolatedJourney, prompt, until } = await import("./transfer-journey-harness.mjs");
-	const variant = mode === "native" ? streaming : batch;
+async function journeyWithHelper(t) {
+	const { isolatedJourney } = await import("./transfer-journey-harness.mjs");
 	const f = await isolatedJourney(t);
 	await writeFile(join(f.bin, "micme-recognizer"), helper, { mode: 0o700 });
+	return f;
+}
+
+async function engineJourney(t, mode) {
+	const { prompt, until } = await import("./transfer-journey-harness.mjs");
+	const variant = mode === "native" ? streaming : batch;
+	const f = await journeyWithHelper(t);
 	await f.configure({ MICME_ARTIFACT: variant.id, MICME_COMPUTE: device2.id, MICME_WHISPER_CPP_MODEL: "", MICME_AUTO_DOWNLOAD_MODEL: "1",
 		MICME_TRANSCRIPTION_MODE: "stream", MICME_STREAM_FINALIZE_WITH_CLIP: "0", MICME_TRANSLATE_TO_ENGLISH: mode === "native" ? "off" : "fr",
 		MICME_WORDS: '["Public"]', MICME_HISTORY: mode === "native" ? "1" : "0" });
@@ -190,9 +199,8 @@ async function engineJourney(t, mode) {
 }
 
 async function advancedDeviceChoices(t) {
-	const { isolatedJourney, assertUntouched, until } = await import("./transfer-journey-harness.mjs");
-	const f = await isolatedJourney(t);
-	await writeFile(join(f.bin, "micme-recognizer"), helper, { mode: 0o700 });
+	const { assertUntouched, until } = await import("./transfer-journey-harness.mjs");
+	const f = await journeyWithHelper(t);
 	await f.configure({ MICME_ARTIFACT: streaming.id, MICME_COMPUTE: device2.id, MICME_WHISPER_CPP_MODEL: "", MICME_TRANSCRIPTION_MODE: "stream", MICME_AUTO_DOWNLOAD_MODEL: "1" });
 	await installManaged(t, streaming);
 	const { listCompute: qualifiedCompute } = await import("../src/transfer/recognition.ts");
@@ -221,6 +229,21 @@ async function advancedDeviceChoices(t) {
 	assertUntouched(ui);
 }
 
+async function incompatibleBackendPreflight(t) {
+	const { assertUntouched } = await import("./transfer-journey-harness.mjs");
+	const f = await journeyWithHelper(t);
+	await f.configure({ MICME_ARTIFACT: streaming.id, MICME_COMPUTE: device2.id, MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
+		MICME_WHISPER_CPP_MODEL: "", MICME_TRANSCRIPTION_MODE: "stream", MICME_AUTO_DOWNLOAD_MODEL: "1" });
+	await installManaged(t, streaming);
+	engineState = { events: [], wrongBinding: false };
+	const ui = await f.host({ width: 80 });
+	await ui.command();
+	assert.match(ui.visible(), /whisper\.cpp cannot use the selected artifact.*Clear MICME_ARTIFACT.*Auto backend/i);
+	assert.deepEqual(engineState.events, [], "Pi must reject the backend conflict before probing or loading the native helper");
+	assert.deepEqual(await f.events(), [], "Pi must not open a recorder for a conflicting backend");
+	assertUntouched(ui);
+}
+
 // Invoked as a child Node test run only; the aliases never contaminate the real
 // Pi/legacy/library module graph or the source coverage identity of the main run.
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
@@ -228,4 +251,5 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
 	test("loaded native stream uses exact PCM and reports a bias outcome without a text diff", async (t) => engineJourney(t, "native"));
 	test("loaded batch route uses the full closed WAV and the explicit translation task", async (t) => engineJourney(t, "batch"));
 	test("only the qualified advanced device is selectable and a loaded same-family mismatch refuses fallback", advancedDeviceChoices);
+	test("Pi rejects conflicting explicit Whisper and native selections before any helper probe", incompatibleBackendPreflight);
 }

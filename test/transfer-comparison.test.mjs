@@ -343,3 +343,14 @@ test("report regeneration counts short, unmatched, failed and scripted cohorts w
 	assert.equal(await readFile(full, "utf8"), regenerated);
 	assert.equal(await readFile(output, "utf8"), baseline);
 });
+
+for (const [file, options] of [["transfer-baseline.md", ["--baseline-only"]], ["transfer-results.md", []]]) {
+	test(`${file} matches regeneration from the checked-in evidence`, async (t) => {
+		const root = await workspace(t);
+		const bundle = fileURLToPath(new URL("./live-native/", import.meta.url));
+		const output = join(root, file);
+		await command(root, "--transfer-report", bundle, output, ...options);
+		const [published, generated] = await Promise.all([readFile(join(bundle, file)), readFile(output)]);
+		assert.equal(digest(published), digest(generated), `${file} is stale; regenerate it from the checked-in B/Q inputs`);
+	});
+}

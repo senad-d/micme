@@ -332,13 +332,13 @@ test("Pi rejects an explicitly selected English-only Whisper clip weight before 
 	assertUntouched(ui);
 });
 
-test("Pi verified model repair, loaded stream/batch routing, and qualified advanced device choices", { skip: process.platform !== "linux" || process.arch !== "x64" }, async () => {
+test("Pi verified model repair, loaded stream/batch routing, qualified device choices and conflict preflight", { skip: process.platform !== "linux" || process.arch !== "x64" }, async () => {
 	const isolated = fileURLToPath(new URL("./transfer-journey-engine.mjs", import.meta.url));
 	try {
 		// Passing NODE_TEST_CONTEXT from the outer runner can suppress nested CLI
 		// execution. Pass only the disposable scratch location, not the host env.
 		const { stdout } = await promisify(execFile)(process.execPath, ["--test", "--test-reporter=dot", isolated], { env: { TMPDIR: tmpdir() } });
-		assert.match(stdout, /^\.{3}$/m, "did not execute the three isolated E/M cases");
+		assert.match(stdout, /^\.{4}$/m, "did not execute the four isolated E/M cases");
 	} catch (error) {
 		assert.fail([error.stdout, error.stderr].filter(Boolean).join("\n") || error.message);
 	}
