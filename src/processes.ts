@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { accessSync, closeSync, constants as fsConstants, fstatSync, statSync } from "node:fs";
@@ -364,27 +365,29 @@ export function runProcess(command: string, args: string[], timeoutMs: number, o
 	return runCommand({ command, args }, timeoutMs, options);
 }
 
+// Final-text filters are Unix-only. They get data on stdin, no extra
+// arguments, no inherited credentials, and no diagnostic output to callers.
+export function runTextFilter(command: string, input: string, timeoutMs: number, signal: AbortSignal): Promise<RunResult> {
+	return runCommand({ command, args: [], spawnOptions: { env: { PATH: "/usr/bin:/bin" } } }, timeoutMs, { signal }, input);
+}
+
 function cancelledRun(): RunResult {
 	return { code: null, signal: null, stdout: "", stdoutTruncated: false, stderr: "", timedOut: false, cancelled: true };
 }
 
-async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProcessOptions): Promise<RunResult> {
+async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProcessOptions, input?: string): Promise<RunResult> {
 	if (options.signal?.aborted) return cancelledRun();
 
-	const child = spawnOwnedProcess(spec, false, options.fileStdio !== undefined, options.cwdFd, options.fileStdio);
+	const filter = input !== undefined;
+	const child = spawnOwnedProcess(spec, filter, filter || options.fileStdio !== undefined, options.cwdFd, options.fileStdio);
 	const { exitPromise, getExit } = observeProcessClose(child);
-	let stdout = "";
-	let stdoutTruncated = false;
-	let stderr = "";
-	child.stdout?.setEncoding("utf8");
-	child.stderr?.setEncoding("utf8");
-	child.stdout?.on("data", (chunk: string) => {
-		stdoutTruncated ||= stdout.length + chunk.length > MAX_CAPTURED_OUTPUT_CHARS;
-		stdout = appendCapped(stdout, chunk);
-	});
-	child.stderr?.on("data", (chunk: string) => {
-		stderr = appendCapped(stderr, chunk);
-	});
+	const readOutput = filter ? captureFilterOutput(child) : captureRunOutput(child);
+	if (filter) {
+		// A successful filter may intentionally ignore stdin, e.g. to suppress
+		// every candidate. Its exit status and complete stdout are authoritative.
+		child.stdin?.on("error", () => undefined);
+		child.stdin?.end(input);
+	}
 
 	let interrupt!: (cause: "timeout" | "cancelled") => void;
 	const interruption = new Promise<"timeout" | "cancelled">((resolve) => {
@@ -400,12 +403,52 @@ async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProces
 
 	const timedOut = outcome === "timeout";
 	const cancelled = outcome === "cancelled";
-	const exit = typeof outcome === "string"
-		? await stopInterruptedRun(child, exitPromise, getExit, cancelled).finally(() => releaseOwnedTree(child))
-		: outcome;
-	if (typeof outcome !== "string") releaseOwnedTree(child);
+	let exit: ExitResult;
+	try {
+		if (typeof outcome === "string") exit = await stopInterruptedRun(child, exitPromise, getExit, cancelled);
+		else {
+			exit = outcome;
+			// A successful wrapper can leave a child behind with all its pipes
+			// closed. End the owned group without signalling a detached PID.
+			if (filter) await stopInterruptedRun(child, exitPromise, getExit, false);
+		}
+	} finally {
+		if (filter) child.stdin?.destroy();
+		releaseOwnedTree(child);
+	}
 	if (exit.error) throw exit.error;
-	return { code: exit.code, signal: exit.signal, stdout, stdoutTruncated, stderr, timedOut, ...(cancelled ? { cancelled: true } : {}) };
+	const captured = filter && (timedOut || cancelled) ? { stdout: "", stdoutTruncated: false, stderr: "" } : readOutput();
+	return { code: exit.code, signal: exit.signal, ...captured, timedOut, ...(cancelled ? { cancelled: true } : {}) };
+}
+
+function captureRunOutput(child: ChildProcess) {
+	let stdout = "";
+	let stdoutTruncated = false;
+	let stderr = "";
+	child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+		stdoutTruncated ||= stdout.length + chunk.length > MAX_CAPTURED_OUTPUT_CHARS;
+		stdout = appendCapped(stdout, chunk);
+	});
+	child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+		stderr = appendCapped(stderr, chunk);
+	});
+	return () => ({ stdout, stdoutTruncated, stderr });
+}
+
+function captureFilterOutput(child: ChildProcess) {
+	const chunks: Buffer[] = [];
+	let bytes = 0;
+	child.stderr?.resume();
+	child.stdout?.on("data", (chunk: Buffer) => {
+		bytes += chunk.length;
+		if (bytes <= MAX_CAPTURED_OUTPUT_CHARS) chunks.push(chunk);
+	});
+	return () => {
+		if (bytes > MAX_CAPTURED_OUTPUT_CHARS) return { stdout: "", stdoutTruncated: true, stderr: "" };
+		const output = Buffer.concat(chunks, bytes);
+		if (!isUtf8(output)) throw new Error("Invalid UTF-8 from final-text filter.");
+		return { stdout: output.toString("utf8"), stdoutTruncated: false, stderr: "" };
+	};
 }
 
 async function stopInterruptedRun(child: ChildProcess, exitPromise: Promise<ExitResult>, getExit: () => ExitResult, cancelled: boolean) {
