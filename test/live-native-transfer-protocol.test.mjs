@@ -223,6 +223,33 @@ test("report distinguishes 20 paired repeats, exploratory counts, and incomplete
 	assert.deepEqual(summarize([1, 3, null]), { count: 3, finite: 2, median: 3, p95: Infinity });
 });
 
+test("P1 compares the planned matched Pi arms without using Handy's calibration", async (t) => {
+	const root = await workspace(t);
+	const handy = build("handy-0102");
+	const historical = build("micme-70ad138");
+	const current = build();
+	const exact = { pairId: "pi-exact-export" };
+	const defaults = { panel: "default", pairId: "product-config" };
+	const left = Array.from({ length: 20 }, (_, i) => plan(historical, i, exact));
+	const right = Array.from({ length: 20 }, (_, i) => plan(current, i, exact));
+	const config = [plan(handy, 0, defaults), plan(current, 0, defaults)];
+	const unrelated = plan(handy, 0, { pairId: "other-matched-control" });
+	const frozen = protocol([handy, historical, current], [...config, unrelated, ...right, ...left]);
+	frozen.calibration = [cpms(plan(handy, 0, exact), 100), cpms(plan(handy, 1, exact), 102)];
+	frozen.toleranceMs = [{ from: "trigger", to: "rawFinal", ms: 2 }];
+	const file = "transfer-q-p1-takes.jsonl";
+	await writeJson(root, "transfer-p1-manifest.json", frozen);
+	await writeRows(root, file, [cpms(config[0], 80), cpms(unrelated, 90), ...left.map((slot) => cpms(slot)),
+		cpms(config[1], 85), ...right.map((slot) => cpms(slot, 101))]);
+	await writeRows(root, SCORECARD_INPUTS[0], [qrow(1, handy, takeRefs(file, 2)), qrow(1, historical, takeRefs(file, 20, 3)),
+		qrow(1, current, takeRefs(file, 21, 23))]);
+
+	const { markdown } = await generateReport(root, { baselineOnly: true });
+	assert.match(markdown, /\*\*handy-0102[^\n]*→ micme-current[^\n]*\n\n- \*\*exploratory\*\* — pcm · default[^\n]*1\/1 paired slots/);
+	assert.match(markdown, /\*\*micme-70ad138[^\n]*→ micme-current[^\n]*\n\n- \*\*unavailable\*\* — pcm · matched[^\n]*20\/20 paired slots/);
+	assert.match(markdown, /trigger → rawFinal \| 100 \/ 100 \(20\/20\) \| 101 \/ 101 \(20\/20\) \| 1 \/ 1 \(20\/20\) \| unavailable/);
+});
+
 test("a final report requires each producer and rejects public links escaping the bundle", async (t) => {
 	const { root, frozen } = await bundle(t, 2);
 	await assert.rejects(generateReport(root), /transfer-q-p2\.jsonl/);
