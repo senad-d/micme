@@ -230,6 +230,15 @@ test("invalid, truncated or tool response bodies cannot become text", async (t) 
 	}
 });
 
+test("a named Chat response requires a completed finish reason without changing compatible Chat", async (t) => {
+	scopedEnv(t, { [authEnv]: auth });
+	const text = "Possibly partial text.";
+	privateTextFetch(t, async () => Response.json({ choices: [{ message: { role: "assistant", content: text } }] }));
+	const named = { ...selection, provider: "openai", endpoint: new URL("https://api.openai.com/v1"), model: "gpt-4.1-mini", keyEnv: authEnv };
+	assert.deepEqual(await polish(final, named, signal), fallback("invalid"));
+	assert.deepEqual(await polish(final, selection, signal), { text, polished: text, warning: "none" });
+});
+
 test("HTTP failures and unavailable configured keys yield a fixed raw fallback", async (t) => {
 	scopedEnv(t, { [authEnv]: undefined });
 	const statuses = [401, 503];

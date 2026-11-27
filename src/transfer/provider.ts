@@ -27,7 +27,7 @@ export const polish: Polish = async (final, selection, signal) => {
 	const target = httpTarget(provider, selection.endpoint, model);
 	if (!target) return fallback(final.raw, "invalid");
 	const key = selection.keyEnv && /^[A-Za-z_][A-Za-z0-9_]*$/.test(selection.keyEnv) ? process.env[selection.keyEnv] : undefined;
-	if ((target.keyRequired || selection.keyEnv !== null) && (!key || !/^[\x21-\x7E]+$/.test(key))) return fallback(final.raw, "error");
+	if ((target.named || selection.keyEnv !== null) && (!key || !/^[\x21-\x7E]+$/.test(key))) return fallback(final.raw, "error");
 
 	const timeout = AbortSignal.timeout(POLISH_TIMEOUT_MS);
 	const requestSignal = AbortSignal.any([signal, timeout]);
@@ -51,7 +51,7 @@ export const polish: Polish = async (final, selection, signal) => {
 		}
 		const answer = await readJson(response);
 		requestSignal.throwIfAborted();
-		return candidate(final.raw, target.anthropic ? messagesText(answer) : chatText(answer));
+		return candidate(final.raw, target.anthropic ? messagesText(answer) : chatText(answer, target.named));
 	} catch {
 		signal.throwIfAborted();
 		return fallback(final.raw, timeout.aborted ? "timeout" : "error");
@@ -74,7 +74,7 @@ function httpTarget(provider: Exclude<Provider, "apple-device">, endpoint: URL |
 		if (base !== named.base || model !== named.model) return null;
 	}
 	const anthropic = provider === "anthropic" || provider === "custom-anthropic";
-	return { url: `${base}/${anthropic ? "messages" : "chat/completions"}`, anthropic, keyRequired: !custom };
+	return { url: `${base}/${anthropic ? "messages" : "chat/completions"}`, anthropic, named: !custom };
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -106,11 +106,16 @@ function record(value: unknown): Record<string, unknown> | undefined {
 	return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-function chatText(answer: unknown) {
+function chatText(answer: unknown, requireFinishReason: boolean) {
 	const choices = record(answer)?.choices;
 	const first = Array.isArray(choices) ? record(choices[0]) : undefined;
-	const message = record(first?.message);
-	if (!message || (first?.finish_reason !== undefined && first.finish_reason !== "stop")) return null;
+	if (!first) return null;
+	// Named cohorts report completion explicitly; compatible Chat may use the
+	// minimal message-content response, but an explicit partial is never final.
+	const reason = first.finish_reason;
+	if (reason !== "stop" && (requireFinishReason || reason !== undefined)) return null;
+	const message = record(first.message);
+	if (!message) return null;
 	if ((message.role !== undefined && message.role !== "assistant") || message.function_call != null || message.refusal != null) return null;
 	if (message.tool_calls != null && (!Array.isArray(message.tool_calls) || message.tool_calls.length)) return null;
 	return message.content;
