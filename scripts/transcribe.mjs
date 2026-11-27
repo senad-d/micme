@@ -96,8 +96,13 @@ async function selectChoice(command, service) {
 	return { ...choice, compute: matching[0].backend, requestedDeviceId: backendOption ? null : command.device };
 }
 
+function listingField(value) {
+	const safe = sanitizeTerminalOutput(value);
+	return /[\t\n]|^"/u.test(safe) ? JSON.stringify(safe) : safe;
+}
+
 function deviceLine({ backend, device }) {
-	return [backend, ...(device ? [device.id ?? "", device.label ?? ""] : [])].map(sanitizeTerminalOutput).join("\t").trimEnd();
+	return [backend, ...(device ? [device.id ?? "", device.label ?? ""] : [])].map(listingField).join("\t").trimEnd();
 }
 
 function lineList(lines) { return lines.length ? `${lines.join("\n")}\n` : ""; }
@@ -157,7 +162,7 @@ export async function transcribeWavCli(args, service = installed, signal = new A
 		signal.throwIfAborted();
 		if (command.mode === "models") {
 			const models = [...new Set((await service.listInstalled()).map(({ variantId }) => variantId))].sort();
-			return success({ models }, command.json, lineList(models.map(sanitizeTerminalOutput)));
+			return success({ models }, command.json, lineList(models.map(listingField)));
 		}
 		if (command.mode === "devices") {
 			const devices = await service.listCompute();

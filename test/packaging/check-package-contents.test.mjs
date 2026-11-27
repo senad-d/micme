@@ -103,6 +103,16 @@ test("the package guard requires the packaged helper build inputs", async (t) =>
 	assert.match(result.stderr, /Missing required package paths:\s+- native\/recognizer\/instrument\.cmake/);
 });
 
+test("the package guard keeps Pi dependencies out of a standalone install", async (t) => {
+	const result = checkWithoutNpmOnPath(await stagePackage(t, { editManifest(manifest) {
+		manifest.dependencies["@earendil-works/pi-coding-agent"] = "*";
+		delete manifest.peerDependenciesMeta["@earendil-works/pi-tui"];
+	} }));
+	assert.equal(result.status, 1, result.stdout + result.stderr);
+	assert.match(result.stderr, /@earendil-works\/pi-coding-agent must not be a runtime dependency/);
+	assert.match(result.stderr, /@earendil-works\/pi-tui must be an optional peer/);
+});
+
 test("the package guard forbids install hooks in the headless package", async (t) => {
 	const result = checkWithoutNpmOnPath(await stagePackage(t, { editManifest(manifest) { manifest.scripts = { install: "false" }; } }));
 	assert.equal(result.status, 1, result.stdout + result.stderr);

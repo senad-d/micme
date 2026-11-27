@@ -22,6 +22,7 @@ const publicBins = {
   "micme-doctor": "dist/doctor/scripts/doctor.mjs",
   "micme-transcribe": "dist/doctor/scripts/transcribe.mjs",
 };
+const piPeers = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"];
 
 const forbiddenChecks = [
   {
@@ -76,6 +77,14 @@ function checkManifest(manifest) {
     }
     for (const source of recognizerSources) required.add(source);
     if (existsSync(appleHelperSource)) required.add(appleHelperSource);
+    for (const peer of piPeers) {
+      if (Object.hasOwn(manifest.dependencies ?? {}, peer) || Object.hasOwn(manifest.optionalDependencies ?? {}, peer)) {
+        errors.push(`${peer} must not be a runtime dependency of the standalone package.`);
+      }
+      if (Object.hasOwn(manifest.peerDependencies ?? {}, peer) && manifest.peerDependenciesMeta?.[peer]?.optional !== true) {
+        errors.push(`${peer} must be an optional peer of the standalone package.`);
+      }
+    }
     for (const phase of ["preinstall", "install", "postinstall"]) {
       if (Object.hasOwn(scripts ?? {}, phase)) errors.push(`Unexpected install lifecycle hook: ${phase}.`);
     }
