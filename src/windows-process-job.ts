@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
+import { win32 } from "node:path";
+import { getWindowsNodeExecutable } from "./node-runtime.ts";
 import type { CommandSpec } from "./types.ts";
 
 // The launcher waits for IPC so nothing from the hook can run before job assignment.
@@ -27,6 +29,26 @@ export const WINDOWS_JOB_STOP_EXIT_CODE = 0x4d49434d; // "MICM"
 const loadNative = createRequire(import.meta.url);
 const jobs = new WeakMap<ChildProcess, WindowsProcessJob>();
 let windowsApi: ReturnType<typeof loadWindowsApi> | undefined;
+let programFiles: string | undefined;
+
+function getWindowsProgramFiles() {
+	if (programFiles) return programFiles;
+	const koffi: typeof import("koffi") = loadNative("koffi");
+	const kernel32 = koffi.load("kernel32.dll");
+	const getSystemDirectory = kernel32.func("uint32_t __stdcall GetSystemDirectoryW(void *, uint32_t)");
+	const maxPath = 260;
+	const buffer = Buffer.alloc(maxPath * 2);
+	const length = getSystemDirectory(buffer, maxPath);
+	if (!length || length >= maxPath) return undefined;
+	const systemDirectory = buffer.toString("utf16le", 0, length * 2);
+	const shell32 = koffi.load(win32.join(systemDirectory, "shell32.dll"));
+	const getFolder = shell32.func("int32_t __stdcall SHGetFolderPathW(void *, int, void *, uint32_t, void *)");
+	// CSIDL_PROGRAM_FILES, SHGFP_TYPE_DEFAULT. This is a machine-wide Windows known folder.
+	buffer.fill(0);
+	if (getFolder(null, 0x26, null, 1, buffer) !== 0) return undefined;
+	programFiles = buffer.toString("utf16le").split("\0", 1)[0];
+	return programFiles;
+}
 
 function loadWindowsApi() {
 	const koffi: typeof import("koffi") = loadNative("koffi");
@@ -112,10 +134,11 @@ class WindowsProcessJob {
 export class WindowsHookLaunchError extends Error {}
 
 export function spawnWindowsJobProcess(command: string, args: string[], pipeInput: boolean, retainUntilStop: boolean, spawnOptions?: CommandSpec["spawnOptions"]) {
+	const nodeExecutable = getWindowsNodeExecutable(getWindowsProgramFiles);
 	const job = new WindowsProcessJob(retainUntilStop);
 	let launcher: ChildProcess | undefined;
 	try {
-		launcher = spawn(process.execPath, ["--input-type=commonjs", "-e", LAUNCHER], {
+		launcher = spawn(nodeExecutable, ["--input-type=commonjs", "-e", LAUNCHER], {
 			stdio: [pipeInput ? "pipe" : "ignore", "pipe", "pipe", "ipc"],
 			windowsHide: true,
 		});

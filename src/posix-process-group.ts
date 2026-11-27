@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { posixNodeExecutable } from "./node-runtime.ts";
 import { FCHDIR_SOURCE, posixDirectoryLibrary } from "./posix-directory.ts";
 import type { CommandSpec, ExitResult } from "./types.ts";
 
@@ -53,7 +54,7 @@ const hookPids = new WeakMap<ChildProcess, number>();
 
 export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean, killOnDisconnect: boolean, spawnOptions?: CommandSpec["spawnOptions"], cwdFd?: number) {
 	const directoryLibrary = cwdFd === undefined ? undefined : posixDirectoryLibrary();
-	const child = spawn(process.execPath, ["--input-type=commonjs", "-e", LAUNCHER], {
+	const child = spawn(posixNodeExecutable, ["--input-type=commonjs", "-e", LAUNCHER], {
 		detached: true,
 		stdio: [pipeInput ? "pipe" : "ignore", "pipe", "pipe", "ipc", ...(cwdFd === undefined ? [] : [cwdFd])],
 	});
@@ -70,7 +71,7 @@ export function observePosixGroupClose(child: ChildProcess, settle: (exit: ExitR
 	let pendingPipes = 0;
 	const finish = () => {
 		if (!hookExit || pendingPipes !== 0) return;
-		child.channel?.unref();
+		child.channel?.unref?.();
 		child.unref();
 		settle(hookExit);
 	};
