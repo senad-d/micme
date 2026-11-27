@@ -600,6 +600,38 @@ function renderComparisons(lines, refs, candidates, protocol, calibration, unres
 	}
 }
 
+function renderP1Comparisons(lines, baseline, protocol, calibration) {
+	const [reference, ...candidates] = protocol.products;
+	const isUnresolved = ({ ref }) => !ref || !baseline.verified.has(referenceKey(ref));
+	const buildKey = ({ planned }) => canonicalKey(planned.build);
+	const plans = byKey(baseline.entries.filter(({ planned }) => planned.panel === "default"), buildKey);
+	const referenceKeyForBuild = canonicalKey(reference);
+	const refs = plans.get(referenceKeyForBuild) ?? [];
+	for (const build of candidates) {
+		const entries = plans.get(canonicalKey(build)) ?? [];
+		if (!refs.length && !entries.length) continue;
+		lines.push(`**${text(buildName(reference))} → ${text(buildName(build))}**`, "");
+		renderComparisons(lines, refs, entries, protocol, calibration, isUnresolved);
+		lines.push("");
+	}
+
+	const matched = baseline.entries.filter(({ planned }) => planned.panel === "matched");
+	for (const cohort of byKey(matched, (entry) => canonicalKey([plannedCondition(entry), entry.planned.pairId])).values()) {
+		const byBuild = byKey(cohort, buildKey);
+		const [first, ...others] = protocol.products.filter((build) => byBuild.has(canonicalKey(build)));
+		const firstKey = canonicalKey(first);
+		// V1 calibration is collected only for the first global build. A
+		// different matched reference can show observed deltas but not use it.
+		const frozen = firstKey === referenceKeyForBuild ? calibration : new Map();
+		for (const candidate of others) {
+			lines.push(`**${text(buildName(first))} → ${text(buildName(candidate))}** — ${text(cohort[0].planned.pairId)}`, "");
+			renderComparisons(lines, byBuild.get(firstKey), byBuild.get(canonicalKey(candidate)), protocol, frozen, isUnresolved);
+			lines.push("");
+		}
+	}
+	if (!candidates.length) lines.push("No planned candidate build; reference-only observations do not decide parity.", "");
+}
+
 function renderCohorts(lines, entries) {
 	const groups = byKey(entries, plannedCohort);
 	lines.push("| Observed condition | Product / build / model | Slots | Recorded | No record | Completed / failed / timeout / lost / unavailable | WER median / p95 | CER median / p95 | Compute ms median / p95 | Compute / audio median / p95 | Lag samples median / p95 | Peak RSS bytes median / p95 | Idle RSS bytes median / p95 |",
@@ -704,16 +736,8 @@ export async function generateReport(root, { baselineOnly = false } = {}) {
 	renderScorecard(lines, rows);
 	lines.push("## P1 planned denominator and observations", "");
 	renderCohorts(lines, baseline.entries);
-	const refBuild = canonicalKey(protocol.products[0]);
-	const refs = baseline.entries.filter(({ planned }) => canonicalKey(planned.build) === refBuild);
 	lines.push("### P1 comparison", "");
-	for (const build of protocol.products.slice(1)) {
-		lines.push(`**${text(buildName(protocol.products[0]))} → ${text(buildName(build))}**`, "");
-		const candidates = baseline.entries.filter(({ planned }) => canonicalKey(planned.build) === canonicalKey(build));
-		renderComparisons(lines, refs, candidates, protocol, calibration, (entry) => !entry.ref || !baseline.verified.has(referenceKey(entry.ref)));
-		lines.push("");
-	}
-	if (protocol.products.length === 1) lines.push("No planned candidate build; reference-only observations do not decide parity.", "");
+	renderP1Comparisons(lines, baseline, protocol, calibration);
 	renderTakes(lines, baseline.entries);
 	for (const source of rows.filter(({ row }) => row.phase > 1)) {
 		const { row } = source;
