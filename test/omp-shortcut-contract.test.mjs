@@ -85,7 +85,7 @@ test("/micme help advertises a recording shortcut that OMP's stock editor does n
 	assert.equal(competingAction, undefined, `${chord} is already bound to ${competingAction} in OMP`);
 });
 
-test("OMP does not reserve a Pi-only preview shortcut", async (t) => {
+test("OMP neither binds nor advertises the Pi-only live-final preview shortcut", async (t) => {
 	const { commands, shortcuts } = await loadOmpExtension(t);
 	const messages = [];
 	await commands.get("micme").handler("help", { ui: { notify: (text) => messages.push(text) } });

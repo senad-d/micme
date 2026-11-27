@@ -606,7 +606,7 @@ function getMicmeArgumentCompletions(prefix: string) {
 	return matches.length ? matches.map((value) => ({ value, label: value })) : null;
 }
 
-async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, args: string, ctx: ExtensionContext, previewShortcut?: string) {
+async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, args: string, ctx: ExtensionContext, previewShortcut: string | undefined) {
 	const action = args.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
 	try {
 		switch (action) {
@@ -686,7 +686,7 @@ function formatOperationPhase(phase: MicmeOperation["phase"]) {
 	return phase.replaceAll("_", " ");
 }
 
-function getHelpText(previewShortcut?: string) {
+function getHelpText(previewShortcut: string | undefined) {
 	const shortcut = sanitizeTerminalOutput(getShortcut(hostDefaultShortcut)) || "not set";
 	const actions = MICME_ACTIONS.filter((action) => action !== "help").join("|");
 	const usage = `Usage: /micme [${actions}]. Shortcut: ${shortcut} toggles recording; tap once to start, tap again to stop/transcribe. /micme cancel stops without transcription or delivery.`;
