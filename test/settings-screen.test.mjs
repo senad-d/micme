@@ -512,7 +512,7 @@ test("closing configuration during model acquisition cancels without stale saves
 	});
 });
 
-test("a missing model selected after config corruption downloads only after repair and reopen", async (t) => {
+test("a missing model selected after config corruption can fetch after repair but saves no unchecked weights", async (t) => {
 	await withTempAgent(t, (root) => withEnv({
 		MICME_AUTO_DOWNLOAD_MODEL: "1",
 		MICME_TRANSCRIBE_BACKEND: "whisper.cpp",
@@ -538,12 +538,11 @@ test("a missing model selected after config corruption downloads only after repa
 		const repaired = createHarness(root);
 		await openMissingModelPicker(repaired);
 		repaired.component.handleInput("\r");
-		await waitFor(async () => {
-			const saved = JSON.parse(await readFile(configPath, "utf8"));
-			return saved.MICME_WHISPER_CPP_MODEL === modelPath && !repaired.component.render(100).join("\n").includes("Saving ");
-		}, "model choice was not saved after repair");
+		await waitFor(() => repaired.component.render(100).join("\n").includes("Save failed"), "unchecked model bytes were not rejected after repair");
 		assert.equal(fetch.mock.callCount(), 1);
-		assert.equal(await readFile(modelPath, "utf8"), "model bytes");
+		assert.match(repaired.notifications.find((entry) => entry.level === "error")?.message ?? "", /model size mismatch/);
+		assert.equal(await readFile(configPath, "utf8"), "{}");
+		await assert.rejects(readFile(modelPath), { code: "ENOENT" });
 		repaired.component.handleInput("q");
 	}));
 });

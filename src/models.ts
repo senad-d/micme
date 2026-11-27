@@ -1,56 +1,24 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createHash, randomUUID } from "node:crypto";
-import { once } from "node:events";
-import { constants as fsConstants, createWriteStream, existsSync, readdirSync, statSync, type WriteStream } from "node:fs";
-import { mkdir, open, rename, unlink } from "node:fs/promises";
+import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
-import { finished } from "node:stream/promises";
 import {
 	DEFAULT_LIVE_WHISPER_MODEL_NAME,
 	DEFAULT_PYTHON_WHISPER_MODEL_NAME,
 	DEFAULT_WHISPER_CPP_MODEL_NAME,
-	MODEL_DOWNLOAD_INACTIVITY_TIMEOUT_MS,
 	PYTHON_WHISPER_MODEL_NAMES,
 	STATUS_KEY,
-	WHISPER_CPP_MODEL_BASE_URL,
 	WHISPER_CPP_MODEL_NAMES,
-	WHISPER_VAD_MODEL,
 } from "./constants.ts";
 import { env, expandConfigPath, getAutoDownloadModel, getLiveSpeechLanguage, getTranslateToEnglishLanguage } from "./config.ts";
 import { findExecutable, runProcess } from "./processes.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
+import { getManagedWhisperVariant, whisperVadVariant } from "./transfer/catalog.ts";
+import type { Blob } from "./transfer/contracts.ts";
+import { downloadFile as transferFile, ensurePinnedModelFile, getConfiguredWhisperVadModelPath, getDefaultWhisperVadModelPath, getWhisperCppModelCacheDir, hasCode, type ModelDownloadOptions } from "./transfer/managed.ts";
 import type { ModelCandidate, ResolvedWhisperCppModel, TranscriptionMode } from "./types.ts";
 
-export type ModelDownloadOptions = {
-	signal?: AbortSignal;
-	inactivityTimeoutMs?: number;
-};
-
-type DownloadIntegrity = { bytes: number; sha256: string };
-
-type DownloadFileOptions = ModelDownloadOptions & {
-	integrity?: DownloadIntegrity;
-	onProgress?: (downloadedBytes: number, totalBytes: number) => void;
-};
-
-type ModelDownloadWaiter = {
-	ctx?: ExtensionContext;
-	signal?: AbortSignal;
-};
-
-type SharedModelDownload = {
-	controller: AbortController;
-	promise: Promise<void>;
-	waiters: Map<symbol, ModelDownloadWaiter>;
-	settled: boolean;
-};
-
-export class ModelDownloadTimeoutError extends Error {
-	override name = "ModelDownloadTimeoutError";
-}
-
-const modelDownloads = new Map<string, SharedModelDownload>();
+export { getWhisperCppModelCacheDir, ModelDownloadTimeoutError, type ModelDownloadOptions } from "./transfer/managed.ts";
 const PYTHON_WHISPER_MODELS_SCRIPT = String.raw`import whisper; print('\n'.join(whisper.available_models()))`;
 
 export function discoverWhisperCppModels(cwd: string): ModelCandidate[] {
@@ -77,18 +45,22 @@ export function discoverWhisperCppModels(cwd: string): ModelCandidate[] {
 		});
 	}
 
+	const cacheDir = getWhisperCppModelCacheDir();
 	for (const file of scanModelFiles(cwd)) {
-		add({ label: basename(file), value: file, description: file, installed: true, kind: "path" });
+		if (!getManagedWhisperBlob(file, cacheDir)) {
+			add({ label: basename(file), value: file, description: file, installed: true, kind: "path" });
+		}
 	}
 
-	const cacheDir = getWhisperCppModelCacheDir();
 	for (const modelName of WHISPER_CPP_MODEL_NAMES) {
-		const path = join(cacheDir, `ggml-${modelName}.bin`);
-		const installed = isRegularFile(path);
+		const blob = getManagedWhisperVariant(modelName)?.blobs[0];
+		if (!blob) continue;
+		const path = join(cacheDir, blob.path);
+		const installed = isManagedFilePresent(path);
 		add({
 			label: modelName,
 			value: path,
-			description: `${describeWhisperModel(modelName)} • ${basename(path)}${installed ? "" : " (expected path; download model first)"}`,
+			description: `${describeWhisperModel(modelName)} • ${blob.path}${installed ? " (found; checked before use)" : " (expected path; download model first)"}`,
 			installed,
 			kind: "model-name",
 		});
@@ -128,6 +100,7 @@ export function scanModelDirectory(directory: string, files: string[], depth: nu
 	}
 
 	for (const entry of entries) {
+		if (/^\.micme-(?:managed-)?[a-f0-9]{64}$/.test(entry)) continue; // Private transfer and variant storage.
 		const path = join(directory, entry);
 		let stats;
 		try {
@@ -139,7 +112,7 @@ export function scanModelDirectory(directory: string, files: string[], depth: nu
 			scanModelDirectory(path, files, depth + 1, customVadPath);
 			continue;
 		}
-		if (/^ggml-.+\.(bin|gguf)$/i.test(entry) && !isWhisperVadPath(path, customVadPath)) files.push(path);
+		if (stats.isFile() && /^ggml-.+\.(bin|gguf)$/i.test(entry) && !isWhisperVadPath(path, customVadPath)) files.push(path);
 	}
 }
 
@@ -204,13 +177,15 @@ function buildResolvedWhisperCppModel(
 	path: string,
 	metadata: Pick<ResolvedWhisperCppModel, "source"> & Pick<Partial<ResolvedWhisperCppModel>, "modelName" | "configuredValue" | "translationFallbackFrom">,
 ): ResolvedWhisperCppModel {
+	const managed = metadata.source !== "explicit-path" && Boolean(getManagedWhisperBlob(path));
 	return {
 		path,
 		modelName: metadata.modelName,
 		source: metadata.source,
 		configuredValue: metadata.configuredValue,
-		exists: isRegularFile(path),
-		downloadable: isDownloadableWhisperCppModelPath(path),
+		// This describes presence, not readiness; never hash weights during resolver discovery.
+		exists: managed ? isManagedFilePresent(path) : isRegularFile(path),
+		downloadable: managed,
 		translationFallbackFrom: metadata.translationFallbackFrom,
 	};
 }
@@ -301,281 +276,74 @@ export function uniqueModelNames(names: string[]) {
 
 export async function ensureWhisperCppModel(modelPath: string, ctx?: ExtensionContext, options: ModelDownloadOptions & { allowDownload?: boolean; missingModelHint?: string } = {}) {
 	options.signal?.throwIfAborted();
-	assertDownloadTargetIsUsable(modelPath, "Micme model path");
-	if (isRegularFile(modelPath)) return;
 	const hint = options.missingModelHint ? `. ${options.missingModelHint}` : "";
-	if (options.allowDownload === false) {
-		throw new Error(`Micme model is missing: ${modelPath}${hint}`);
+	const blob = isExplicitWhisperPath(modelPath) ? undefined : getManagedWhisperBlob(modelPath);
+	const missing = options.allowDownload === false ? `Micme model is missing: ${modelPath}${hint}`
+		: !getAutoDownloadModel() ? `Micme model is missing and auto-download is disabled: ${modelPath}${hint}`
+			: undefined;
+	if (blob) {
+		await ensureModelWithStatus(blob, modelPath, ctx, options, missing, true);
+		return;
 	}
-	if (!getAutoDownloadModel()) {
-		throw new Error(`Micme model is missing and auto-download is disabled: ${modelPath}${hint}`);
+	assertDownloadTargetIsUsable(modelPath, "Micme model path");
+	if (!isRegularFile(modelPath)) {
+		throw new Error(missing ?? `Micme model is missing: ${modelPath}. Install the user-managed file or select a standard model by name${hint || "."}`);
 	}
-
-	const modelName = getDownloadableWhisperCppModelName(modelPath);
-	if (!modelName) {
-		throw new Error(`Micme model is missing and cannot infer a standard download URL: ${modelPath}${hint}`);
-	}
-
-	await ensureSharedModelDownload(getWhisperCppModelUrl(modelName), modelPath, ctx, options);
 }
 
 export async function ensureWhisperVadModel(modelPath: string, ctx?: ExtensionContext, options: ModelDownloadOptions = {}) {
 	options.signal?.throwIfAborted();
-	assertDownloadTargetIsUsable(modelPath, "Micme VAD model path");
-	const standardPath = relative(modelPath, getDefaultWhisperVadModelPath()) === "";
-	if (isRegularFile(modelPath)) {
-		if (standardPath) await verifyDownloadIntegrity(modelPath, modelPath, WHISPER_VAD_MODEL.integrity, options.signal);
-		return;
-	}
-	if (!standardPath) {
+	if (resolve(modelPath) !== getDefaultWhisperVadModelPath()) {
+		assertDownloadTargetIsUsable(modelPath, "Micme VAD model path");
+		if (isRegularFile(modelPath)) return;
 		throw new Error(`Micme VAD model is missing: ${modelPath}. Set MICME_VAD_MODEL to an existing VAD file, unset it to use the standard model, or choose clip mode.`);
 	}
-	if (!getAutoDownloadModel()) {
-		throw new Error(`Micme VAD model is missing and auto-download is disabled: ${modelPath}. Install the standard VAD model there, enable MICME_AUTO_DOWNLOAD_MODEL, or choose clip mode.`);
-	}
-	await ensureSharedModelDownload(WHISPER_VAD_MODEL.url, modelPath, ctx, { ...options, integrity: WHISPER_VAD_MODEL.integrity });
+	const missing = getAutoDownloadModel() ? undefined
+		: `Micme VAD model is missing and auto-download is disabled: ${modelPath}. Install the standard VAD model there, enable MICME_AUTO_DOWNLOAD_MODEL, or choose clip mode.`;
+	await ensureModelWithStatus(whisperVadVariant().blobs[0], modelPath, ctx, options, missing, false);
 }
 
-async function ensureSharedModelDownload(url: string, modelPath: string, ctx: ExtensionContext | undefined, options: DownloadFileOptions) {
-	let download = modelDownloads.get(modelPath);
-	if (download?.controller.signal.aborted) download = await waitForActiveModelDownload(modelPath, download, options.signal);
-	const created = !download;
-	download ??= createSharedModelDownload(url, modelPath, options);
-	await waitForSharedModelDownload(download, modelPath, ctx, options.signal, created);
-}
-
-export async function downloadWhisperCppModel(modelName: string, modelPath: string, ctx?: ExtensionContext, options: ModelDownloadOptions = {}) {
-	options.signal?.throwIfAborted();
-	assertDownloadTargetIsUsable(modelPath, "Micme model path");
-	if (isRegularFile(modelPath)) return;
+async function ensureModelWithStatus(blob: Blob, modelPath: string, ctx: ExtensionContext | undefined, options: ModelDownloadOptions, missing: string | undefined, resume: boolean) {
+	let waiting = false;
 	const displayName = safeBasename(modelPath);
-	setActiveDownloadStatus(ctx, options.signal, `downloading ${displayName}…`);
-	if (!options.signal?.aborted) ctx?.ui.notify(`Downloading ${displayName}. This can take a while the first time.`, "info");
-
 	try {
-		await downloadFile(getWhisperCppModelUrl(modelName), modelPath, undefined, {
-			...options,
+		await ensurePinnedModelFile(blob, modelPath, {
+			...options, missing, resume,
+			onWait: (created) => {
+				waiting = true;
+				if (options.signal?.aborted) return;
+				ctx?.ui.setStatus(STATUS_KEY, created ? `downloading ${displayName}…` : `waiting for ${displayName} download…`);
+				if (created) ctx?.ui.notify(`Downloading ${displayName}. This can take a while the first time.`, "info");
+			},
 			onProgress: updateContextDownloadProgress.bind(undefined, ctx, options.signal, modelPath),
 		});
 		options.signal?.throwIfAborted();
-		ctx?.ui.notify(`Downloaded ${displayName}.`, "info");
+		if (waiting) ctx?.ui.notify(`Downloaded ${displayName}.`, "info");
 	} finally {
-		ctx?.ui.setStatus(STATUS_KEY, undefined);
+		if (waiting) ctx?.ui.setStatus(STATUS_KEY, undefined);
 	}
 }
 
-export async function downloadFile(url: string, targetPath: string, ctx?: ExtensionContext, options: DownloadFileOptions = {}) {
-	options.signal?.throwIfAborted();
-	assertDownloadTargetIsUsable(targetPath, "Download target");
-	if (isRegularFile(targetPath)) {
-		if (options.integrity) await verifyDownloadIntegrity(targetPath, targetPath, options.integrity, options.signal);
-		return;
+export async function downloadWhisperCppModel(modelName: string, modelPath: string, ctx?: ExtensionContext, options: ModelDownloadOptions = {}) {
+	const blob = getManagedWhisperBlob(modelPath);
+	if (!blob || blob.path !== getManagedWhisperVariant(modelName)?.blobs[0]?.path || isExplicitWhisperPath(modelPath)) {
+		throw new Error(`Micme requires an exact standard model and its managed cache path: ${modelPath}`);
 	}
-	await mkdir(dirname(targetPath), { recursive: true });
-	const tempPath = `${targetPath}.download-${process.pid}-${Date.now()}-${randomUUID()}`;
-	const timeoutMs = getDownloadInactivityTimeout(options.inactivityTimeoutMs);
-	const timeoutController = new AbortController();
-	const signal = options.signal ? AbortSignal.any([options.signal, timeoutController.signal]) : timeoutController.signal;
-	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-	let output: WriteStream | undefined;
-	let outputFinished: Promise<void> | undefined;
-	let downloadedBytes = 0;
-	let lastUpdate = 0;
-
-	try {
-		const response = await waitForDownloadActivity(fetch(url, { signal }), signal, timeoutController, timeoutMs, "response headers");
-		if (!response.ok || !response.body) {
-			throw new Error(`Failed to download ${url}: HTTP ${response.status} ${response.statusText}`);
-		}
-
-		const totalBytes = Number(response.headers.get("content-length") || "0");
-		reader = response.body.getReader();
-		output = createWriteStream(tempPath, { flags: "wx" });
-		outputFinished = finished(output);
-		outputFinished.catch(ignoreDownloadFailure);
-
-		while (true) {
-			const result = await waitForDownloadActivity(reader.read(), signal, timeoutController, timeoutMs, "response body data");
-			if (result.done) break;
-			if (!result.value) continue;
-			downloadedBytes += result.value.byteLength;
-			if (options.integrity && downloadedBytes > options.integrity.bytes) throw invalidDownloadSize(targetPath, options.integrity.bytes);
-			await waitForDownloadActivity(writeDownloadChunk(output, Buffer.from(result.value), outputFinished), signal, timeoutController, timeoutMs, "file output");
-
-			const now = Date.now();
-			if (now - lastUpdate > 1_000) {
-				updateContextDownloadProgress(ctx, options.signal, targetPath, downloadedBytes, totalBytes);
-				options.onProgress?.(downloadedBytes, totalBytes);
-				lastUpdate = now;
-			}
-		}
-
-		output.end();
-		await waitForDownloadActivity(outputFinished, signal, timeoutController, timeoutMs, "file completion");
-		if (options.integrity) await verifyDownloadIntegrity(tempPath, targetPath, options.integrity, signal);
-		if (isRegularFile(targetPath)) {
-			if (options.integrity) await verifyDownloadIntegrity(targetPath, targetPath, options.integrity, signal);
-			await unlink(tempPath).catch(ignoreDownloadFailure);
-			return;
-		}
-		assertDownloadTargetIsUsable(targetPath, "Download target");
-		options.signal?.throwIfAborted();
-		await rename(tempPath, targetPath);
-	} catch (error) {
-		cancelDownloadReader(reader);
-		output?.destroy();
-		if (outputFinished) await outputFinished.catch(ignoreDownloadFailure);
-		await unlink(tempPath).catch(ignoreDownloadFailure);
-		throw error;
-	}
+	await ensureWhisperCppModel(modelPath, ctx, options);
 }
 
-async function verifyDownloadIntegrity(path: string, targetPath: string, integrity: DownloadIntegrity, signal?: AbortSignal) {
-	signal?.throwIfAborted();
-	const file = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
-	try {
-		const stats = await file.stat();
-		if (!stats.isFile()) throw new Error(`Micme model path exists but is not a file: ${targetPath}`);
-		if (stats.size !== integrity.bytes) throw invalidDownloadSize(targetPath, integrity.bytes);
-		const hash = createHash("sha256");
-		// Bound the read even if the file grew since stat; include one extra byte to detect growth.
-		for await (const chunk of file.createReadStream({ autoClose: false, end: integrity.bytes, signal })) hash.update(chunk);
-		signal?.throwIfAborted();
-		if (hash.digest("hex") !== integrity.sha256) {
-			throw new Error(`Micme model SHA-256 mismatch: ${targetPath}. If cached, remove the invalid file before retrying.`);
-		}
-	} finally {
-		await file.close();
-	}
-}
-
-function invalidDownloadSize(targetPath: string, expectedBytes: number) {
-	return new Error(`Micme model size mismatch: ${targetPath} (expected ${expectedBytes} bytes). If cached, remove the invalid file before retrying.`);
-}
-
-function createSharedModelDownload(url: string, modelPath: string, options: DownloadFileOptions) {
-	const controller = new AbortController();
-	const download: SharedModelDownload = {
-		controller,
-		promise: Promise.resolve(),
-		waiters: new Map(),
-		settled: false,
-	};
-	download.promise = downloadFile(url, modelPath, undefined, {
+export async function downloadFile(url: string, targetPath: string, ctx?: ExtensionContext, options: Parameters<typeof transferFile>[2] = {}) {
+	await transferFile(url, targetPath, {
 		...options,
-		signal: controller.signal,
-		onProgress: reportSharedModelDownloadProgress.bind(undefined, download, modelPath),
-	}).finally(settleSharedModelDownload.bind(undefined, modelPath, download));
-	download.promise.catch(ignoreDownloadFailure);
-	modelDownloads.set(modelPath, download);
-	return download;
-}
-
-async function waitForActiveModelDownload(modelPath: string, download: SharedModelDownload | undefined, signal: AbortSignal | undefined) {
-	while (download?.controller.signal.aborted) {
-		try {
-			await waitForPromiseWithSignal(download.promise, signal);
-		} catch {
-			signal?.throwIfAborted();
-		}
-		download = modelDownloads.get(modelPath);
-	}
-	return download;
-}
-
-async function waitForSharedModelDownload(download: SharedModelDownload, modelPath: string, ctx: ExtensionContext | undefined, signal: AbortSignal | undefined, created: boolean) {
-	const waiterId = Symbol(modelPath);
-	download.waiters.set(waiterId, { ctx, signal });
-	const displayName = safeBasename(modelPath);
-	setActiveDownloadStatus(ctx, signal, created ? `downloading ${displayName}…` : `waiting for ${displayName} download…`);
-	if (created && !signal?.aborted) ctx?.ui.notify(`Downloading ${displayName}. This can take a while the first time.`, "info");
-	let failed = false;
-	let failure: unknown;
-
-	try {
-		await waitForPromiseWithSignal(download.promise, signal);
-		signal?.throwIfAborted();
-		ctx?.ui.notify(`Downloaded ${displayName}.`, "info");
-	} catch (error) {
-		failed = true;
-		failure = error;
-	} finally {
-		download.waiters.delete(waiterId);
-		ctx?.ui.setStatus(STATUS_KEY, undefined);
-		if (download.waiters.size === 0 && !download.settled) {
-			download.controller.abort();
-			await download.promise.catch(ignoreDownloadFailure);
-		}
-	}
-
-	if (failed) throw failure;
-}
-
-function reportSharedModelDownloadProgress(download: SharedModelDownload, modelPath: string, downloadedBytes: number, totalBytes: number) {
-	for (const waiter of download.waiters.values()) {
-		updateContextDownloadProgress(waiter.ctx, waiter.signal, modelPath, downloadedBytes, totalBytes);
-	}
+		onProgress(got, total) {
+			updateContextDownloadProgress(ctx, options.signal, targetPath, got, total);
+			options.onProgress?.(got, total);
+		},
+	});
 }
 
 function updateContextDownloadProgress(ctx: ExtensionContext | undefined, signal: AbortSignal | undefined, modelPath: string, downloadedBytes: number, totalBytes: number) {
-	setActiveDownloadStatus(ctx, signal, `downloading ${safeBasename(modelPath)} ${formatDownloadProgress(downloadedBytes, totalBytes)}`);
-}
-
-function setActiveDownloadStatus(ctx: ExtensionContext | undefined, signal: AbortSignal | undefined, status: string) {
-	if (!signal?.aborted) ctx?.ui.setStatus(STATUS_KEY, status);
-}
-
-function settleSharedModelDownload(modelPath: string, download: SharedModelDownload) {
-	download.settled = true;
-	if (modelDownloads.get(modelPath) === download) modelDownloads.delete(modelPath);
-}
-
-async function waitForDownloadActivity<T>(work: Promise<T>, signal: AbortSignal, timeoutController: AbortController, timeoutMs: number, activity: string) {
-	const timeout = setTimeout(() => {
-		timeoutController.abort(new ModelDownloadTimeoutError(`Micme model download timed out after ${timeoutMs} ms without ${activity}.`));
-	}, timeoutMs);
-	try {
-		return await waitForPromiseWithSignal(work, signal);
-	} finally {
-		clearTimeout(timeout);
-	}
-}
-
-async function waitForPromiseWithSignal<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
-	if (!signal) return work;
-	signal.throwIfAborted();
-	let rejectAbort: (reason?: unknown) => void = ignoreDownloadFailure;
-	const aborted = new Promise<never>((_resolve, reject) => {
-		rejectAbort = reject;
-	});
-	const onAbort = () => rejectAbort(signal.reason);
-	signal.addEventListener("abort", onAbort, { once: true });
-	try {
-		return await Promise.race([work, aborted]);
-	} finally {
-		signal.removeEventListener("abort", onAbort);
-	}
-}
-
-function getDownloadInactivityTimeout(value: number | undefined) {
-	if (value === undefined) return MODEL_DOWNLOAD_INACTIVITY_TIMEOUT_MS;
-	if (!Number.isFinite(value) || value <= 0) throw new Error("inactivityTimeoutMs must be a positive finite number");
-	return Math.ceil(value);
-}
-
-function cancelDownloadReader(reader: ReadableStreamDefaultReader<Uint8Array> | undefined) {
-	if (!reader) return;
-	void Promise.resolve().then(reader.cancel.bind(reader)).catch(ignoreDownloadFailure);
-}
-
-async function writeDownloadChunk(output: WriteStream, chunk: Buffer, outputFinished: Promise<void>) {
-	if (output.destroyed) await outputFinished;
-	if (output.write(chunk)) return;
-	await Promise.race([once(output, "drain"), outputFinished]);
-}
-
-function ignoreDownloadFailure() {
-	// Best-effort cleanup must not replace the download failure already being handled.
+	if (!signal?.aborted) ctx?.ui.setStatus(STATUS_KEY, `downloading ${safeBasename(modelPath)} ${formatDownloadProgress(downloadedBytes, totalBytes)}`);
 }
 
 export function getWhisperCppModelNameFromPath(modelPath: string) {
@@ -598,24 +366,27 @@ export function isKnownWhisperCppModelName(modelName: string): modelName is (typ
 }
 
 export function getWhisperCppModelUrl(modelName: string) {
-	return `${WHISPER_CPP_MODEL_BASE_URL}/ggml-${modelName}.bin`;
+	const blob = getManagedWhisperVariant(modelName)?.blobs[0];
+	if (!blob) throw new Error("Micme requires a qualified standard Whisper model name.");
+	return blob.url;
 }
 
-export function getWhisperCppModelCacheDir() {
-	return expandConfigPath(env("MICME_MODEL_DIR") || join(homedir(), ".cache", "whisper.cpp"));
+function getManagedWhisperBlob(path: string, cacheDir = getWhisperCppModelCacheDir()) {
+	const name = getDownloadableWhisperCppModelName(path);
+	const blob = name && getManagedWhisperVariant(name)?.blobs[0];
+	return blob && resolve(path) === resolve(cacheDir, blob.path) ? blob : undefined;
+}
+
+function isExplicitWhisperPath(path: string) {
+	const configured = env("MICME_WHISPER_CPP_MODEL")?.trim();
+	if (!configured) return false;
+	const explicit = expandConfigPath(configured);
+	const target = resolve(path);
+	return target === resolve(explicit) || target === resolve(resolveExplicitWhisperCppModel(explicit, configured, false).path);
 }
 
 export function getWhisperVadModelPath() {
 	return getConfiguredWhisperVadModelPath() ?? getDefaultWhisperVadModelPath();
-}
-
-function getConfiguredWhisperVadModelPath() {
-	const path = env("MICME_VAD_MODEL")?.trim();
-	return path ? resolve(expandConfigPath(path)) : undefined;
-}
-
-function getDefaultWhisperVadModelPath() {
-	return resolve(getWhisperCppModelCacheDir(), "vad", WHISPER_VAD_MODEL.file);
 }
 
 export function getDefaultWhisperCppModelPath() {
@@ -646,6 +417,10 @@ function safeBasename(path: string) {
 	return sanitizeTerminalText(basename(path)) || "model";
 }
 
+function isManagedFilePresent(path: string) {
+	try { return lstatSync(path, { throwIfNoEntry: false })?.isFile() ?? false; } catch { return false; }
+}
+
 export function isRegularFile(path: string) {
 	try {
 		return statSync(path).isFile();
@@ -658,12 +433,8 @@ function assertDownloadTargetIsUsable(path: string, label: string) {
 	try {
 		if (statSync(path).isFile()) return;
 	} catch (error) {
-		if (isNotFoundError(error)) return;
+		if (hasCode(error, "ENOENT")) return;
 		throw error;
 	}
 	throw new Error(`${label} exists but is not a file: ${path}`);
-}
-
-function isNotFoundError(error: unknown) {
-	return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
