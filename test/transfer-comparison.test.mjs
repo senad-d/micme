@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFileSync, readFileSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import { runTransfer } from "./live-native/transfer-runner.mjs";
 import { readJsonl, validateTake } from "./live-native/transfer-schema.mjs";
 
 const quality = fileURLToPath(new URL("./live-native-quality.mjs", import.meta.url));
+const piCollector = fileURLToPath(new URL("./live-native/transfer-pi.mjs", import.meta.url));
 const exec = promisify(execFile);
 const digest = (data) => createHash("sha256").update(data).digest("hex");
 const phrase = "but now it matters very much in eighteen sixty three";
@@ -96,8 +97,10 @@ async function privateFixture(root) {
 	const profile = join(root, "unowned-profile");
 	const workDir = join(root, "work");
 	const assetsDir = join(root, "assets");
-	const bin = join(root, "bin");
-	const binary = join(bin, "product");
+	const checkout = join(root, "checkout");
+	const src = join(checkout, "src");
+	const binary = join(root, "pi-probe");
+	const handyBinary = join(root, "handy-probe");
 	const weights = join(assetsDir, "fixture-weights.bin");
 	const socket = join(root, "outside.sock");
 	const invocation = join(root, "invoked");
@@ -111,21 +114,26 @@ esac
 printf '%s\\n' activated >> ${shellPath(activation)}
 `;
 	const state = { "history.db": "history canary", "model-cache": "cache canary", clipboard: "clipboard canary" };
-	await Promise.all([profile, workDir, assetsDir, bin].map((path) => mkdir(path)));
+	await Promise.all([profile, workDir, assetsDir, src].map((path) => mkdir(path, { recursive: true, mode: 0o700 })));
+	await chmod(profile, 0o777); // Simulate an unrelated, non-private benchmark root.
 	await Promise.all(Object.entries(state).map(([key, value]) => writeFile(join(profile, key), value)));
-	await writeFile(binary, script, { mode: 0o700 });
-	await writeFile(weights, "inert fixture weights");
-	await writeFile(join(assetsDir, "continuous.wav"), Buffer.concat([wavHeader(pcm.length), pcm]));
-	return { profile, workDir, assetsDir, bin, binary, binarySha256: digest(script), weights, socket, invocation, activation, state };
+	const elf = Buffer.from([0x7f, 0x45, 0x4c, 0x46]); // ELF magic, but not a runnable product.
+	await Promise.all([
+		writeFile(binary, script, { mode: 0o700 }), writeFile(handyBinary, elf, { mode: 0o700 }), writeFile(weights, "inert fixture weights"),
+		writeFile(join(assetsDir, "continuous.wav"), Buffer.concat([wavHeader(pcm.length), pcm])),
+		json(join(checkout, "package.json"), { name: "@senad-d/micme", version: "0.5.0", pi: { extensions: ["./src/extension.ts"] } }),
+		json(join(checkout, "package-lock.json"), {}), writeFile(join(src, "extension.ts"), "export default function inert() {}\n"),
+	]);
+	return { profile, workDir, assetsDir, checkout, binary, binarySha256: digest(script), handyBinary, handySha256: digest(elf), weights, socket, invocation, activation, state };
 }
 
 function provisioning(fixture, artifact, workDir) {
-	const { assetsDir, binary, binarySha256, weights } = fixture;
-	return { assetsDir, workDir, handyBinary: binary, piBinary: binary, tagCheckout: null, historicalCheckout: null, currentCheckout: null,
+	const { assetsDir, binary, binarySha256, checkout, handyBinary, weights } = fixture;
+	return { assetsDir, workDir, handyBinary, piBinary: binary, tagCheckout: null, historicalCheckout: null, currentCheckout: checkout,
 		backendFiles: [{ product: "micme-current", workerFile: binary, clipFile: binary, streamFile: binary,
 			workerSha256: binarySha256, clipSha256: binarySha256, streamSha256: binarySha256 }],
 		handyModelFiles: [{ catalogId: artifact.modelFile, file: weights, sha256: artifact.modelSha256 }],
-		whisperModelFiles: [{ name: artifact.modelFile, file: weights, sha256: artifact.modelSha256 }], vadFile: null };
+		whisperModelFiles: [{ name: artifact.modelFile, file: weights, sha256: artifact.modelSha256 }], vadFile: weights };
 }
 
 async function canary(t, socket) {
@@ -141,24 +149,30 @@ test("public collectors refuse unproven identity, instance, target and loopback 
 	const root = await workspace(t);
 	const fixture = await privateFixture(root);
 	const connections = await canary(t, fixture.socket);
-	const env = { PATH: fixture.bin, HOME: fixture.profile, XDG_CONFIG_HOME: fixture.profile, XDG_DATA_HOME: fixture.profile,
-		XDG_CACHE_HOME: fixture.profile, XDG_RUNTIME_DIR: fixture.profile, TMPDIR: fixture.workDir, DISPLAY: "",
+	const env = { PATH: root, HOME: fixture.profile, XDG_CONFIG_HOME: fixture.profile, XDG_DATA_HOME: fixture.profile,
+		XDG_CACHE_HOME: fixture.profile, XDG_STATE_HOME: fixture.profile, XDG_RUNTIME_DIR: fixture.profile, TMPDIR: fixture.workDir, DISPLAY: "",
 		PULSE_SERVER: `unix:${fixture.socket}`, DBUS_SESSION_BUS_ADDRESS: `unix:path=${fixture.socket}`, PI_CODING_AGENT_DIR: fixture.profile };
+	const { stdout: sourceHash } = await exec(process.execPath, [piCollector, "--source-sha256", fixture.checkout], { cwd: root, env });
+	await json(join(fixture.workDir, "transfer-pi-sources.json"), { "micme-current": { commit: build("micme-current").commit,
+		sourceSha256: sourceHash.trim(), piSha256: fixture.binarySha256, vadSha256: digest("inert fixture weights") } });
 	const unobservedRig = { ...rig, os: null, arch: null, display: null, cpu: null, actualBackend: "unknown", actualDevice: null,
 		threads: null, hostVersion: null };
-	const cases = [
-		["wrong binary digest", { binarySha256: digest("different binary") },
-			{ track: "pcm", input: "file", target: "none", prefix: null, width: null, gesture: "none" }, fixture.workDir],
-		["unowned writable state", {}, {}, join(fixture.profile, "history.db")],
-		["missing destination", {}, { target: "none", prefix: null }, fixture.workDir],
-		["missing private loopback", {}, {}, fixture.workDir],
-	];
-	const refusals = ["identity-mismatch", "unsafe-instance", "missing-input", "missing-host", "missing-permission", "no-observer"];
 	for (const product of ["handy-0102", "micme-current"]) {
-		for (const [name, buildOverrides, settings, workDir] of cases) {
+		const handy = product === "handy-0102";
+		const missingHost = process.platform !== "linux" || (handy && process.getuid() === 0);
+		const cases = [
+			["wrong binary digest", { binarySha256: digest("different binary") }, {}, "identity-mismatch", /binary.*(differ|SHA-256)|executable SHA-256/i],
+			["unowned writable state", {}, {}, handy ? "unsafe-instance" : "missing-input", handy ? /private or sticky directory/ : /source receipt|transfer-pi-sources/],
+			["missing destination", {}, { target: "none", prefix: null }, handy ? "no-observer" : "missing-input", /controlled external editor|Pi target/],
+			["missing private loopback", {}, handy ? { rig: { ...unobservedRig, mic: "unrelated source" } } : { input: "loopback" },
+				handy ? "identity-mismatch" : "no-observer", /private PulseAudio loopback|isolated hardware loopback/],
+		];
+		for (const [name, buildOverrides, settings, code, detail] of cases) {
 			await t.test(`${product}: ${name}`, async () => {
-				const artifact = build(product, { binarySha256: fixture.binarySha256, ...buildOverrides });
-				const trial = slot(artifact, name, 0, { rig: unobservedRig, target: product === "handy-0102" ? "external-editor" : "pi-prompt", ...settings });
+				const artifact = build(product, { binarySha256: handy ? fixture.handySha256 : fixture.binarySha256, ...buildOverrides });
+				const workDir = name === "unowned writable state" ? fixture.profile : fixture.workDir;
+				const trial = slot(artifact, name, 0, { rig: unobservedRig, target: handy ? "external-editor" : "pi-prompt",
+					input: handy ? "loopback" : "file", ...settings });
 				const manifest = join(root, "plan.json");
 				const output = join(root, `${product}-${name}.jsonl`);
 				await json(manifest, protocol([trial]));
@@ -174,8 +188,9 @@ test("public collectors refuse unproven identity, instance, target and loopback 
 				const [take] = rows;
 				assert.equal(take.trial.product, product);
 				assert.ok(["failed", "unavailable"].includes(take.outcome));
-				assert.ok(take.gaps.some(({ code, detail }) => refusals.includes(code) && !/install the corresponding isolated product collector|collector could not load/i.test(detail)),
-					`expected an isolation or provisioning refusal from the collector: ${JSON.stringify(take.gaps)}`);
+				const hostPrecedesCase = missingHost && (handy ? name !== "missing destination" : name !== "unowned writable state");
+				assert.ok(take.gaps.some((gap) => hostPrecedesCase ? gap.code === "missing-host" && /Linux.*(normal user|sandbox)/.test(gap.detail) :
+					gap.code === code && detail.test(gap.detail)), `expected ${hostPrecedesCase ? "missing-host" : code} for ${name}: ${JSON.stringify(take.gaps)}`);
 				assert.ok(!take.events.some(({ stage }) => stage === "trigger" || stage === "firstSample" || stage === "correctTarget"));
 				assert.deepEqual(take.mutations, []);
 				assert.equal(take.observedTarget, null);
@@ -205,25 +220,27 @@ test("runner keeps a timed-out attempt and a distinct readback from an isolated 
 				resolve(publicTake(trial));
 			}, { once: true }));
 		}
-		const expectedTarget = prefix + phrase;
-		writeFileSync(target, expectedTarget);
+		const rawFinal = { stage: "rawFinal", ms: clock.ms() };
+		appendFileSync(target, phrase);
 		const observedTarget = readFileSync(target, "utf8");
 		const ms = clock.ms();
 		return { ...noResult(trial, "completed", "unsupported", "File receiver fixture has no native observer."),
-			events: [trigger, { stage: "correctTarget", ms }], expectedTarget, observedTarget, mutations: [{ ms, text: observedTarget }] };
+			events: [trigger, rawFinal, { stage: "correctTarget", ms }], raw: phrase, expectedTarget: trial.prefix + phrase,
+			observedTarget, mutations: [{ ms, text: observedTarget }] };
 	};
 	const totals = await runTransfer(manifest, output, { timeoutMs: 50, collectors: { "micme-current": collect } });
 	assert.deepEqual(totals, { completed: 1, failed: 0, timeout: 1, lost: 0, unavailable: 0 });
 	assert.deepEqual(aborted, [0]);
 	const rows = await readJsonl(output, validateTake);
 	assert.deepEqual(rows.map(({ trial }) => trial.repeatIndex), invoked);
+	assert.deepEqual(JSON.parse(await readFile(`${output}.manifest.json`, "utf8")), protocol(trials));
 	const [timeout, completed] = rows.toSorted((a, b) => a.trial.repeatIndex - b.trial.repeatIndex);
 	assert.equal(timeout.outcome, "timeout");
 	assert.equal(timeout.raw, null);
 	assert.deepEqual(timeout.mutations, []);
 	assert.equal(completed.observedTarget, prefix + phrase);
 	const delivery = completed.events.find(({ stage }) => stage === "correctTarget");
-	assert.ok(delivery.ms >= 0);
+	assert.ok(delivery.ms > completed.events.find(({ stage }) => stage === "rawFinal").ms);
 	assert.deepEqual(completed.mutations, [{ text: prefix + phrase, ms: delivery.ms }]);
 	assert.equal(await readFile(target, "utf8"), prefix + phrase);
 });
@@ -365,6 +382,10 @@ test("report regeneration counts short, unmatched, failed and scripted cohorts w
 	const full = join(root, "transfer-results.md");
 	await assert.rejects(command(root, "--transfer-report", root, full), { stderr: /transfer-q-p2\.jsonl/ });
 	for (const name of laterInputs) await jsonl(join(root, `transfer-q-${name}.jsonl`), [qrow(Number(name[1]), archived, [])]);
+	const lastInput = join(root, "transfer-q-p8-final.jsonl");
+	await jsonl(lastInput, [qrow(8, archived, [{ file: traces, line: records.length + 1 }])]);
+	await assert.rejects(command(root, "--transfer-report", root, full), { stderr: /unresolved B take transfer-q-p1-takes\.jsonl:/ });
+	await jsonl(lastInput, [qrow(8, archived, [])]);
 	await command(root, "--transfer-report", root, full);
 	const regenerated = await readFile(full, "utf8");
 	assert.match(regenerated, /P8 C1/);
