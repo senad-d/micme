@@ -39,6 +39,7 @@ const MICME_CONFIG_FILE = "micme.json";
 const MICME_SCHEMA_URL = "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json";
 const CONFIG_LOCK_TIMEOUT_MS = 5_000;
 const CONFIG_LOCK_RETRY_MS = 25;
+const ARTIFACT_SELECTION_KEYS = ["MICME_ARTIFACT", "MICME_TRANSCRIBE_BACKEND", "MICME_TRANSCRIBE_COMMAND", "MICME_WHISPER_CPP_MODEL"] as const;
 const requireModule = createRequire(import.meta.url);
 
 type JsonObject = Record<string, unknown>;
@@ -127,7 +128,7 @@ function readMicmeConfig(): LoadedConfig {
 		// Validate the winning source. Transfer settings are strings at rest; do not coerce
 		// invalid file values before checking them or reject a saved value masked by the shell.
 		const transfer = decodeTransferOptions((key) => process.env[key] ?? parsed[key]);
-		checkTransferBackend(transfer, values);
+		checkTransferBackend(transfer.MICME_ARTIFACT, values);
 		return { state: { path, values }, transfer };
 	} catch (error) {
 		const reason = error instanceof NonRegularConfigError || error instanceof TransferOptionError ? error.message : "file is not valid JSON";
@@ -135,8 +136,8 @@ function readMicmeConfig(): LoadedConfig {
 	}
 }
 
-function checkTransferBackend(options: TransferOptions, values: Record<string, string>) {
-	if (options.MICME_ARTIFACT === null) return;
+function checkTransferBackend(artifact: TransferOptions["MICME_ARTIFACT"], values: Record<string, string>) {
+	if (artifact === null) return;
 	const backend = parseTranscribeBackend(configuredValue("MICME_TRANSCRIBE_BACKEND", values));
 	if (backend === "python" || backend === "custom") {
 		throw new TransferOptionError("MICME_ARTIFACT", "unset when MICME_TRANSCRIBE_BACKEND explicitly selects python or custom");
@@ -202,7 +203,15 @@ async function commitMicmeConfigValues(configPath: string, values: Record<string
 		options.signal?.throwIfAborted();
 		const existing = readMicmeJsonObjectForWrite(configPath);
 		const next = mergeMicmeConfigValues(existing, values);
-		await writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600, signal: options.signal });
+		const serialized = JSON.stringify(next, null, 2);
+		if (ARTIFACT_SELECTION_KEYS.some((key) => Object.hasOwn(values, key))) {
+			// Check the effective selection under the lock against the exact contents being published.
+			// Reparse to unwrap preserved number tokens so legacy coercion matches config reads.
+			const saved: JsonObject = JSON.parse(serialized);
+			const artifact = decodeTransferOption("MICME_ARTIFACT", process.env.MICME_ARTIFACT ?? saved.MICME_ARTIFACT);
+			checkTransferBackend(artifact, extractMicmeValues(saved));
+		}
+		await writeFile(tempPath, `${serialized}\n`, { encoding: "utf8", mode: 0o600, signal: options.signal });
 		options.signal?.throwIfAborted();
 		await rename(tempPath, configPath);
 		reloadMicmeConfig();

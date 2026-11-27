@@ -1,50 +1,18 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { closeSync, constants, readFileSync } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { access, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
-import { basename, delimiter, join, sep } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { closePi, enterCommand, installedPi, isolatedPi, observedPi, promptOnScreen, recorderCommand, traceRows, waitFor } from "./live-native/transfer-pi-local.mjs";
+import { addWav, devices, firstDevice, fixture, fixtureText, holdPartialDecode, installCli, log, noForbidden, originalBytes, run, secondDevice, succeeded, until, wave } from "./transfer-files-fixtures.mjs";
 
 const here = fileURLToPath(import.meta.url);
-const repo = fileURLToPath(new URL("../", import.meta.url));
 const unix = { skip: process.platform === "win32" && "V5 POSIX command fixtures", timeout: 120_000 };
 const { TRANSCRIBE_CLI_FLAGS: K, TRANSCRIBE_CLI_EXIT: status, MICME_TRANSFER_ACTIONS } = await import("../src/transfer/contracts.ts");
-const fixtureText = "fixture transcript";
-const firstDevice = { id: "fixture-vulkan:1", label: "Fixture One" };
-const secondDevice = { id: "fixture-vulkan:2", label: "Fixture Two" };
-const devices = [{ backend: "vulkan", device: firstDevice }, { backend: "vulkan", device: secondDevice }, { backend: "cpu", device: null }];
-
-async function run(file, args, options) {
-	const child = spawn(file, args, { signal: AbortSignal.timeout(60_000), stdio: ["ignore", "pipe", "pipe"], ...options });
-	let stdout = "", stderr = "";
-	child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
-	child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
-	const [status, signal] = await once(child, "close");
-	assert.equal(signal, null, `${file} terminated by ${signal}\n${stderr}`);
-	return { status, stdout, stderr };
-}
-
-function succeeded(result, context) {
-	assert.equal(result.status, 0, `${context}\n${result.stderr}\n${result.stdout}`);
-	return result.stdout;
-}
-
-function wave(samples, { rate = 16000, channels = 1, bits = 16, format = 1, marker = 7000 } = {}) {
-	const align = channels * bits / 8;
-	const bytes = Buffer.alloc(44 + samples * align);
-	bytes.write("RIFF"); bytes.writeUInt32LE(bytes.length - 8, 4); bytes.write("WAVEfmt ", 8);
-	bytes.writeUInt32LE(16, 16); bytes.writeUInt16LE(format, 20); bytes.writeUInt16LE(channels, 22);
-	bytes.writeUInt32LE(rate, 24); bytes.writeUInt32LE(rate * align, 28); bytes.writeUInt16LE(align, 32);
-	bytes.writeUInt16LE(bits, 34); bytes.write("data", 36); bytes.writeUInt32LE(samples * align, 40);
-	if (bits === 16) for (let i = 44; i < bytes.length; i += 2) bytes.writeInt16LE(marker * (i % 16 < 8 ? 1 : -1), i);
-	return bytes;
-}
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 function modelNamed(id, name) {
@@ -66,172 +34,8 @@ function pcmFormat(bytes) {
 	assert.fail("published WAVE contains no format chunk");
 }
 
-async function log(root) {
-	const text = await readFile(join(root, "calls"), "utf8").catch((error) => {
-		if (error.code !== "ENOENT") throw error;
-		return "";
-	});
-	return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-}
-
-async function until(get, description) {
-	const deadline = performance.now() + 12_000;
-	while (performance.now() < deadline) {
-		const result = await get();
-		if (result) return result;
-		await delay(20);
-	}
-	assert.fail(`Did not observe ${description}`);
-}
-
-// Preloaded before production modules. Log attempts even if product code catches the exception.
-const preload = `
-import { appendFileSync } from "node:fs";
-import { createRequire, registerHooks, syncBuiltinESMExports } from "node:module";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-const root = process.env.V5_ROOT;
-const require = createRequire(import.meta.url);
-function forbidden(kind) {
-  appendFileSync(join(root, "forbidden"), kind + "\\n");
-  throw new Error("V5 forbidden effect: " + kind);
-}
-globalThis.fetch = () => forbidden("fetch");
-for (const [name, keys] of [["http", ["request", "get"]], ["https", ["request", "get"]], ["net", ["connect", "createConnection"]], ["tls", ["connect"]]]) {
-  for (const key of keys) require("node:" + name)[key] = () => forbidden(name + "." + key);
-}
-require("node:net").Socket.prototype.connect = () => forbidden("socket.connect");
-syncBuiltinESMExports();
-const engine = pathToFileURL(join(root, "device-fixture.mjs")).href;
-const delivery = "data:text/javascript," + encodeURIComponent(
-  "import { appendFileSync } from 'node:fs'; export function pasteOrSubmitTranscript() {" +
-  "appendFileSync(" + JSON.stringify(join(root, "forbidden")) + ", 'prompt delivery\\\\n'); throw new Error('V5 forbids delivery'); }"
-);
-registerHooks({
-  resolve(specifier, context, next) {
-    if (process.env.V5_INSTALLED && /(?:^|\\/)(?:pi-coding-agent|pi-tui)(?:\\/|$)/.test(specifier)) forbidden("Pi peer");
-    const result = next(specifier, context);
-    if (/\\/transcript-delivery\\.(?:m?js|ts)$/.test(result.url)) return { url: delivery, shortCircuit: true };
-    if (process.env.V5_DEVICES && /\\/transfer\\/recognition\\.(?:m?js|ts)$/.test(result.url)) {
-      // Replace only E's device/ASR responses; installed-model discovery is still real.
-      return { ...result, url: result.url + "?v5-devices" };
-    }
-    return result;
-  },
-  load(url, context, next) {
-    if (!url.endsWith("?v5-devices")) return next(url, context);
-    return { format: "module", shortCircuit: true, source:
-      "export * from " + JSON.stringify(url.replace("?v5-devices", "?v5-real")) + ";" +
-      "export { listCompute, recognizeFile } from " + JSON.stringify(engine) + ";" };
-  }
-});
-`;
-const whisper = `#!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-const root = process.env.V5_ROOT;
-const arg = (name) => process.argv[process.argv.indexOf(name) + 1];
-if (!process.argv.includes("-f")) {
-  if (process.argv.includes("--help") || process.argv.includes("--version")) process.exit(0);
-  throw new Error("Expected an audio file in the fixture decoder");
-}
-const audio = readFileSync(arg("-f"));
-if (audio.toString("ascii", 0, 4) !== "RIFF") throw new Error("Expected normalized WAV input");
-appendFileSync(join(root, "calls"), JSON.stringify({ pid: process.pid, model: basename(arg("-m")), bytes: audio.length }) + "\\n");
-while (existsSync(join(root, "hold")) && !existsSync(join(root, "release-" + process.pid))) await delay(15);
-writeFileSync(arg("-of") + ".txt", ${JSON.stringify(fixtureText + "\n")});
-`;
-const deviceFixture = `
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
-export async function listCompute() { return ${JSON.stringify(devices)}; }
-export async function recognizeFile(audio, choice, job) {
-  appendFileSync(join(process.env.V5_ROOT, "calls"), JSON.stringify({ choice, job, sha256: audio.sha256 }) + "\\n");
-  const observed = ${JSON.stringify([firstDevice, secondDevice])}.find(d => d.id === process.env.V5_OBSERVED) ?? null;
-  return { raw: "${fixtureText}", local: "${fixtureText}", language: "en", source: "clip", rules: [],
-    actualCompute: process.env.V5_ACTUAL_COMPUTE, boundDevice: observed };
-}
-`;
-
-async function executable(name) {
-	for (const path of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
-		const candidate = join(path, name);
-		if (await access(candidate).then(() => true, () => false)) return realpath(candidate);
-	}
-	assert.fail(`V5 mixed-media fixtures require ${name} on PATH`);
-}
-
-async function fixture(t, { media = false } = {}) {
-	const root = await mkdtemp(join(tmpdir(), "micme-v5-"));
-	t.after(() => rm(root, { recursive: true, force: true }));
-	const bin = join(root, "bin");
-	const agent = join(root, "agent");
-	const project = join(root, "project");
-	const models = join(project, "models");
-	const scratch = join(root, "scratch");
-	const home = join(root, "home");
-	const cache = join(root, "managed-cache");
-	await Promise.all([bin, agent, project, scratch, home, cache].map((path) => mkdir(path, { mode: 0o700 })));
-	await mkdir(models, { mode: 0o700 });
-	const trap = join(root, "offline.mjs");
-	const hook = join(bin, "output-hook");
-	await Promise.all([
-		writeFile(trap, preload), writeFile(join(root, "device-fixture.mjs"), deviceFixture),
-		writeFile(join(models, "ggml-tiny.en.bin"), "fixture model A"), writeFile(join(models, "ggml-base.en.bin"), "fixture model B"),
-		writeFile(join(bin, "whisper-cli"), whisper, { mode: 0o755 }),
-		writeFile(hook, `#!/usr/bin/env node\nimport { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(join(root, "forbidden"))}, 'hook\\n');\n`, { mode: 0o755 }),
-		symlink(process.execPath, join(bin, "node")),
-	]);
-	if (media) for (const name of ["ffmpeg", "ffprobe"]) await symlink(await executable(name), join(bin, name));
-	const env = {
-		HOME: home, PATH: bin, TMPDIR: scratch, LC_ALL: "C", V5_ROOT: root,
-		NODE_OPTIONS: `--import=${pathToFileURL(trap).href}`,
-		PI_CODING_AGENT_DIR: agent, MICME_MODEL_DIR: cache, MICME_LANGUAGE: "en",
-		MICME_TRANSCRIBE_BACKEND: "whisper.cpp", MICME_WHISPER_CPP_BIN: join(bin, "whisper-cli"),
-		MICME_AUTO_DOWNLOAD_MODEL: "1", MICME_AUTO_SUBMIT: "1", MICME_HISTORY: "1",
-		MICME_OUTPUT_HOOK: hook, MICME_POLISH_PROVIDER: "local-openai", MICME_POLISH_ENDPOINT: "http://localhost:1/v1",
-	};
-	return { root, agent, models, scratch, project, home, bin, env };
-}
-
-async function addWav(root, name, samples = 4000, format) {
-	const path = join(root, name);
-	await writeFile(path, wave(samples, format));
-	return path;
-}
-
 async function runImport(f, operation, ...files) {
 	return succeeded(await run(process.execPath, [here, "--import-fixture", operation, ...files], { cwd: f.project, env: f.env }), operation);
-}
-
-async function holdPartialDecode(f) {
-	const ffmpeg = join(f.bin, "ffmpeg");
-	const real = await realpath(ffmpeg);
-	await rm(ffmpeg);
-	await writeFile(ffmpeg, `#!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-const args = process.argv.slice(2);
-if (!args.includes("-i")) process.exit(spawnSync(${JSON.stringify(real)}, args, { stdio: "inherit" }).status ?? 1);
-const prefix = Buffer.from(${JSON.stringify(wave(4000).subarray(0, 60).toString("hex"))}, "hex");
-const output = args.at(-1);
-if (output === "-" || output === "fd:" || output.startsWith("pipe:")) await new Promise(resolve => process.stdout.write(prefix, resolve));
-else writeFileSync(output, prefix);
-const marker = join(process.env.V5_ROOT, "staged-prefix");
-writeFileSync(marker, "");
-while (existsSync(marker)) await delay(15);
-`, { mode: 0o755 });
-}
-
-async function noForbidden(f) { await assert.rejects(access(join(f.root, "forbidden")), { code: "ENOENT" }); }
-
-async function originalBytes(files, action) {
-	const before = await Promise.all(files.map((file) => readFile(file)));
-	await action();
-	assert.deepEqual(await Promise.all(files.map((file) => readFile(file))), before, "original input bytes");
 }
 
 // These are subprocess probes of the public S/E/L surface, not a fake import implementation.
@@ -247,6 +51,13 @@ async function importJourney(operation, files) {
 		assert.ok(MICME_TRANSFER_ACTIONS.includes("import"));
 		await commands.get("micme").handler("import", { mode: "rpc", hasUI: false, cwd: process.cwd(), isIdle: () => true, ui: { notify: (message) => messages.push(message), getEditorText: () => "keep existing prompt", setEditorText: unexpected, pasteToEditor: unexpected, custom: unexpected } });
 		assert.match(messages.join("\n"), /interactive|TUI/i);
+		return;
+	}
+	if (operation === "progress" || operation === "ready") {
+		const { page } = await import("../src/transfer/library.ts");
+		await until(async () => (await page(null)).some((row) => row.filename === files[0] && (operation === "ready"
+			? row.state === "ready"
+			: row.state === "recognizing" && row.doneSamples > 0 && row.doneSamples < row.totalSamples)), `import becomes ${operation === "ready" ? "ready" : "observable at a chunk boundary"}`);
 		return;
 	}
 	const { importFiles, cancelJob } = await import("../src/transfer/import.ts");
@@ -387,18 +198,74 @@ async function importJourney(operation, files) {
 	}
 }
 
-async function installCli(f) {
-	const npm = process.env.npm_execpath;
-	const invoke = (args, cwd) => run(npm ? process.execPath : "npm", npm ? [npm, ...args] : args, { cwd });
-	const [{ filename }] = JSON.parse(succeeded(await invoke(["pack", "--offline", "--json", "--pack-destination", f.root], repo), "npm pack"));
-	succeeded(await invoke(["install", "--offline", "--ignore-scripts", "--omit=peer", "--no-audit", "--no-fund", join(f.root, filename)], f.project), "peer-free installation");
-	const modules = join(f.project, "node_modules");
-	await assert.rejects(access(join(modules, "@earendil-works", "pi-coding-agent")), { code: "ENOENT" });
-	await assert.rejects(access(join(modules, "@earendil-works", "pi-tui")), { code: "ENOENT" });
-	const cli = join(modules, ".bin", "micme-transcribe");
-	assert.ok(await access(cli).then(() => true, () => false), "K micme-transcribe bin is not in the installed package yet");
-	assert.ok((await realpath(cli)).startsWith(modules + sep), "must invoke the installed tarball, not the checkout");
-	return (args, extra = {}) => run(cli, args, { cwd: f.project, env: { ...f.env, V5_INSTALLED: "1", ...extra, NODE_OPTIONS: f.env.NODE_OPTIONS + " --no-experimental-strip-types" } });
+async function piImportJourney(t, f, long, sample) {
+	const capture = join(f.root, "capture.jsonl");
+	const state = await isolatedPi({ root: f.root, entry: new URL("../src/extension.ts", import.meta.url).href, signal: t.signal });
+	Object.assign(state.env, {
+		...f.env, ...state.env,
+		PATH: [f.bin, state.env.PATH].join(delimiter), MICME_DEFAULT_WHISPER_CPP_MODEL: "tiny.en",
+		MICME_TRANSCRIPTION_MODE: "clip", MICME_RECORD_COMMAND: recorderCommand(sample, capture),
+	});
+	await symlink(f.models, join(state.project, "models"));
+	await writeFile(join(f.root, "hold"), "");
+	const pi = observedPi(state, installedPi, 80, t.signal);
+	try {
+		const screen = async (pattern, send, from = pi.frames.length) => {
+			if (send) pi.send(send);
+			return waitFor(() => pi.frames.slice(from).find(({ lines }) => pattern.test(lines.join("\n"))), t.signal,
+				`Pi did not render ${pattern}`);
+		};
+		const command = async (action, pattern) => {
+			const from = pi.frames.length;
+			enterCommand(pi, `/micme ${action}`.trimEnd());
+			if (pattern) await screen(pattern, null, from);
+		};
+		const logHas = (path, field, value) => waitFor(async () => (await traceRows(path)).some((row) => row[field] === value), t.signal, `Pi did not observe ${value}`);
+		const ended = async () => (await traceRows(state.trace)).filter(({ kind }) => kind === "command-end").length;
+		await logHas(state.trace, "kind", "started");
+		await command("import", /Add files…/);
+		await screen(/Ctrl\+G next/, "\r");
+		await screen(/Choose installed model/, `\x1b[200~${long}\x1b[201~\x07`);
+		await screen(/Queue local files\?/, "\r");
+		await screen(/import · Transcribing · long 日本\.wav/i, "\x1b[B\x1b[B\r");
+		const first = await until(async () => (await log(f.root))[0], "first import chunk in a real Pi session");
+		const beforeDismiss = await ended();
+		pi.send("\x1b");
+		await waitFor(async () => (await ended()) > beforeDismiss, t.signal, "Pi overlay command did not complete after Escape");
+		await command("");
+		await logHas(capture, "type", "capture-first");
+		await writeFile(join(f.root, `release-${first.pid}`), "");
+		// Pi deliberately refuses to open the history view during an active take.
+		// Observe the same live library through L's public page entry in a reader subprocess.
+		const reader = { ...f, env: state.env };
+		await runImport(reader, "progress", basename(long));
+		assert.equal((await log(f.root)).length, 1, "a real foreground recording owns the lane after the in-flight chunk");
+		const beforeCancel = await ended();
+		await command("cancel");
+		await logHas(capture, "type", "capture-close");
+		await waitFor(async () => (await ended()) > beforeCancel, t.signal, "recording cancellation did not finish");
+		const draft = "PUBLIC DRAFT: keep this text.";
+		pi.send(draft);
+		await waitFor(() => promptOnScreen(pi.frames.at(-1)?.lines ?? [], draft), t.signal, "draft did not render before import resumed");
+		await rm(join(f.root, "hold"));
+		await runImport(reader, "ready", basename(long));
+		assert.ok((await log(f.root)).length > 1, "background inference resumed after cancellation");
+		assert.ok(promptOnScreen(pi.frames.at(-1)?.lines ?? [], draft), "completed import must keep the visible composer intact");
+		await command("history", /import · Ready · long 日本\.wav/i);
+		const receipts = await traceRows(state.trace);
+		assert.deepEqual(receipts.filter(({ kind }) => ["setEditorText", "pasteToEditor", "send", "blocked-input"].includes(kind)), [], "no edit, paste, send or queue from import or the canceled recording");
+	} catch (error) {
+		throw new Error(`${error.message}\n${pi.frames.at(-1)?.lines.join("\n") ?? ""}\n${pi.stderr()}`, { cause: error });
+	} finally {
+		await closePi(state);
+	}
+}
+
+function cliFailure(result, expected, label) {
+	assert.equal(result.status, expected, `${label}: ${result.stderr}`);
+	assert.equal(result.stdout, "", label);
+	assert.ok(result.stderr.trim(), label);
+	assert.doesNotMatch(result.stderr, /\n\s+at\s|ERR_MODULE_NOT_FOUND|V5 forbidden effect/, label);
 }
 
 async function checkCli(f, cli, audio) {
@@ -411,7 +278,7 @@ async function checkCli(f, cli, audio) {
 	const model = list.models.find((id) => modelNamed(id, "tiny.en"));
 	assert.ok(model, `missing fixture model in ${JSON.stringify(list)}`);
 	const args = [K.model, model, K.device, "auto"];
-	assert.equal(succeeded(await cli([...args, audio]), "plain transcript").trimEnd(), fixtureText);
+	assert.equal(succeeded(await cli([...args, audio], { PI_CODING_AGENT_DIR: "" }), "plain transcript with default config path").trimEnd(), fixtureText);
 	const before = (await log(f.root)).length;
 	const result = JSON.parse(succeeded(await cli([...args, K.repeat, "3", K.json, audio]), "repeat JSON"));
 	assert.deepEqual(Object.keys(result).sort(), ["audioSamples", "boundDevice", "device", "language", "model", "requestedDevice", "runs", "text"]);
@@ -433,7 +300,9 @@ async function checkCli(f, cli, audio) {
 	const truncated = join(f.root, "truncated.wav");
 	await writeFile(truncated, wave(4000).subarray(0, 47));
 	for (const [argv, expected] of [
-		[[], status.usage], [["--unknown"], status.usage], [[K.listModels, K.listDevices], status.usage], [[...args, K.repeat, "0", audio], status.usage],
+		[[], status.usage], [["--help"], status.usage], [["--unknown"], status.usage], [[K.listModels, K.listDevices], status.usage],
+		[[K.model, model, audio], status.usage], [[K.model, "", K.device, "auto", audio], status.usage],
+		[[...args, K.device, "auto", audio], status.usage], [[...args, K.repeat, "0", audio], status.usage],
 		[[...args, K.repeat, "-1", audio], status.usage], [[...args, K.repeat, "1.5", audio], status.usage],
 		[[...args, K.repeat, "", audio], status.usage], [[...args, K.repeat, "9".repeat(10001), audio], status.usage],
 		[[...args, join(f.root, "missing.wav")], status.usage], [[...args, f.root], status.usage],
@@ -442,12 +311,14 @@ async function checkCli(f, cli, audio) {
 		[[K.model, model, K.device, "fixture-unlisted", audio], status.failed],
 	]) {
 		const label = argv.map((value) => value.slice(0, 120)).join(" ");
-		const result = await cli(argv);
-		assert.equal(result.status, expected, `${label}: ${result.stderr}`);
-		assert.equal(result.stdout, "", label); assert.ok(result.stderr.trim(), label);
-		assert.doesNotMatch(result.stderr, /\n\s+at\s|ERR_MODULE_NOT_FOUND|V5 forbidden effect/, label);
+		cliFailure(await cli(argv), expected, label);
 	}
 	assert.equal((await log(f.root)).length, stopped, "invalid inputs and missing selections must not reach inference");
+	const failure = await cli([...args, K.repeat, "3", K.json, audio], { V5_INFERENCE_ERROR: "1" });
+	cliFailure(failure, status.failed, "fixture inference failed");
+	assert.match(failure.stderr, /local recognition failed/i);
+	assert.doesNotMatch(failure.stderr, /V5 decoder-only diagnostic/);
+	assert.equal((await log(f.root)).length, stopped + 1, "a failed repeat yields no partial JSON or further inference");
 	return model;
 }
 
@@ -463,8 +334,13 @@ async function checkDevices(f, cli, model, audio) {
 		const result = JSON.parse(succeeded(await deviceCli([K.model, model, K.device, request, K.json, audio], seen?.id, backend), `device ${request} reporting ${backend}`));
 		assert.deepEqual([result.requestedDevice, result.device, result.boundDevice, result.language], [request, backend, seen, "en"]);
 	}
+	for (const observed of [firstDevice.id, undefined]) {
+		const mismatch = await deviceCli([K.model, model, K.device, secondDevice.id, K.json, audio], observed, "vulkan");
+		cliFailure(mismatch, status.failed, "a listed ID was not bound in the file run");
+		assert.match(mismatch.stderr, /did not confirm the selected device/i);
+	}
 	const calls = (await log(f.root)).slice(offset);
-	assert.deepEqual(calls.map(({ choice }) => choice.requestedDeviceId), [secondDevice.id, null, null, null]);
+	assert.deepEqual(calls.map(({ choice }) => choice.requestedDeviceId), [secondDevice.id, null, null, null, secondDevice.id, secondDevice.id]);
 	assert.ok(calls.every(({ job, sha256 }) => job === "cli" && sha256 === digest(wave(4000))));
 }
 
@@ -523,6 +399,14 @@ if (process.argv[2] === "--import-fixture") {
 		await noForbidden(f);
 	});
 
+	test("V5 S/E/L: Pi import yields to a foreground recording without editing or sending the prompt", { ...unix, skip: process.platform !== "linux" && "isolated Pi PTY requires Linux" }, async (t) => {
+		const f = await fixture(t, { media: true });
+		const long = await addWav(f.root, "long 日本.wav", 65 * 16000);
+		const sample = await addWav(f.root, "capture.wav", 16000);
+		await originalBytes([long, sample], () => piImportJourney(t, f, long, sample));
+		await noForbidden(f);
+	});
+
 	test("V5 L: restart distinguishes interrupted verified audio from a source needing reselection", unix, async (t) => {
 		const f = await fixture(t, { media: true });
 		const files = await Promise.all([addWav(f.root, "pending.wav"), addWav(f.root, "decoded.wav")]);
@@ -546,7 +430,8 @@ if (process.argv[2] === "--import-fixture") {
 		assert.deepEqual(await readdir(f.agent), [], "no library or Pi profile");
 		assert.deepEqual(await readdir(f.home), [], "no home cache or login state");
 		assert.deepEqual((await readdir(f.project)).sort(), project.sort(), "no stray transcripts or history in cwd");
-		assert.deepEqual((await readdir(f.models)).sort(), ["ggml-base.en.bin", "ggml-tiny.en.bin"], "no model downloads");
+		assert.deepEqual((await readdir(f.models)).sort(), ["ggml-base.en.bin", "ggml-tiny.en.bin"], "installed models are unchanged");
+		assert.deepEqual(await readdir(f.cache), [], "no model downloads or partial weights");
 		assert.deepEqual(await readdir(f.scratch), [], "no retained audio or transcript artifacts");
 	});
 }
