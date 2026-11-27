@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { arch, cpus, platform, tmpdir } from "node:os";
 import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { wavHeader } from "./corpus.mjs";
@@ -11,8 +12,8 @@ import { readFixture } from "./transfer-fixtures.mjs";
 import { emptyTake, loadLocal, takeClock } from "./transfer-runner.mjs";
 import { isPlannedTake, readJson, validateProtocol } from "./transfer-schema.mjs";
 import { extraBoundaryRepeats, hasKeywords, previewProgress, tokens } from "./scoring.mjs";
-import { alternateM, closePi, enterCommand, isolatedPi, observedPi, promptOnScreen, recorderCommand, startIsolated,
-	traceRows, waitFor } from "./transfer-pi-local.mjs";
+import { alternateM, closePi, enterCommand, isolatedPi, observedPi, promptOnScreen, promptReadbackOnScreen, recorderCommand,
+	startIsolated, traceRows, waitFor } from "./transfer-pi-local.mjs";
 
 const identities = Object.freeze({
 	"micme-041": { checkout: "tagCheckout", tag: "v0.4.1", commit: "481e3e30ac6138108341ad41a0579da80a321a3e", version: "0.4.1", label: "tag 0.4.1 (legacy SDL, not Worker v1)" },
@@ -98,8 +99,8 @@ async function preflight(trial, local) {
 	if (platform() !== "linux") block("missing-host", "Pi collection requires the Linux PTY and socket sandbox.");
 	if (trial.input === "physical") block("missing-permission", "No physical microphone is activated by the collector.");
 	if (trial.input === "loopback") block("no-observer", "No isolated hardware loopback was provisioned for this slot; a paced WAV hook is not loopback.");
-	if (trial.cache === "warm-model" || trial.disk === "cold-proven" || trial.load !== "idle" || trial.processing !== "off") {
-		block("unsupported", "No matching warm-model, proven cold-disk, contended, or processed Pi observation in this collector.");
+	if (trial.cache !== "cold-process" || trial.disk === "cold-proven" || trial.load !== "idle" || trial.processing !== "off") {
+		block("unsupported", "No matching warm-model, idle-reload, proven cold-disk, contended, or processed Pi observation in this collector.");
 	}
 	if (trial.track !== "pcm" && (trial.gesture !== "toggle" || (trial.target !== "none" && trial.target !== "pi-prompt"))) {
 		block("unsupported", "The Pi terminal collector observes an Alt+M toggle and the Pi prompt only.");
@@ -109,6 +110,12 @@ async function preflight(trial, local) {
 	}
 	if (trial.track === "pcm" && (trial.target !== "none" || trial.fixture === "overload")) {
 		block("unsupported", "Direct PCM has no destination or paced overload gesture.");
+	}
+	const routed = trial.track !== "pcm";
+	const routeRig = { display: routed ? "Linux PTY" : null, mic: routed ? "paced public WAV hook" : null,
+		gpu: null, driver: null, threads: null, actualDevice: null };
+	for (const [key, observed] of Object.entries(routeRig)) {
+		if (trial.rig[key] !== null && trial.rig[key] !== observed) block("identity-mismatch", `The isolated Pi route does not establish the planned ${key}.`);
 	}
 	const files = local.backendFiles.find((file) => file.product === trial.product);
 	if (trial.product === "micme-041" && (trial.track !== "pcm" || (files?.streamSha256 && build.binarySha256 === files.streamSha256))) {
@@ -131,7 +138,7 @@ async function preflight(trial, local) {
 	try { fixture = await readFixture(local.assetsDir, trial); }
 	catch (error) { block(error.code === "ENOENT" ? "missing-input" : "identity-mismatch", "Prepared public WAV is missing or does not match the pinned PCM."); }
 	const binary = await pinnedFile(local.piBinary, receipt.piSha256, "installed Pi executable", true);
-	return { id, sourceSha256, packageVersion: pkg.version, entry: join(source, "src", "extension.ts"), binary, worker, clip, weight, vad, fixture, batch, local };
+	return { entry: join(source, "src", "extension.ts"), binary, worker, clip, weight, vad, fixture, batch, local, routeRig };
 }
 
 function sampleSettings(trial, p, file) {
@@ -207,7 +214,29 @@ async function directWorker(state, trial, p, file, signal) {
 	await worker.close;
 }
 
-async function driveTerminal(state, trial, p, file, take, clock, signal) {
+const editorWrites = (rows) => rows.filter(({ kind }) => kind === "setEditorText" || kind === "pasteToEditor");
+
+function renderedTarget(frame, writes, clock, rel, prefix) {
+	if (!frame) return null;
+	const ms = clock.ms(frame.stamp);
+	const latest = writes.findLast(({ t }) => rel(t) <= ms);
+	if (latest) return promptReadbackOnScreen(frame.lines, latest.text) ? latest.text : null;
+	return promptOnScreen(frame.lines, prefix) ? prefix : null;
+}
+
+function replayOnScreen(lines, text) {
+	if (promptReadbackOnScreen(lines, text)) return true;
+	// Pi deliberately folds large pastes. The frame corroborates the paste,
+	// while the expanded editor readback supplies text the user cannot see.
+	const count = text.split("\n").length;
+	const size = count > 10 ? `+${count} lines` : `${text.length} chars`;
+	return lines.some((line) => {
+		const marker = line.trim();
+		return /^\[paste #\d+ /u.test(marker) && marker.endsWith(` ${size}]`) && promptOnScreen(lines, marker);
+	});
+}
+
+async function driveTerminal(state, trial, p, file, take, clock, rel, signal) {
 	const pi = observedPi(state, p.binary, trial.width ?? 80, signal);
 	let replayFrom = Infinity;
 	try {
@@ -218,23 +247,39 @@ async function driveTerminal(state, trial, p, file, take, clock, signal) {
 		}
 		take.events.push(clock.trigger());
 		pi.send(alternateM);
+		const start = await waitFor(async () => (await traceRows(state.trace)).find(({ kind }) => kind === "shortcut"), signal,
+			"Pi did not dispatch the first Alt+M gesture.");
 		await waitFor(async () => (await traceRows(file.capture)).some(({ type }) => type === "capture-end"), signal,
 			"Paced recorder did not reach the end of the public file.", p.fixture.pcm.length / 32 + 25_000);
+		// Legacy Alt+M bytes carry no key-up event. Do not treat an ignored
+		// auto-repeat as stop, even when the fixture itself is only one block.
+		const stopWait = rel(start.t) + 1_100 - clock.ms();
+		if (stopWait > 0) await delay(stopWait, undefined, { signal });
 		const stop = clock.ms();
 		pi.send(alternateM);
 		await waitFor(async () => (await traceRows(state.trace)).filter(({ kind }) => kind === "shortcut-end").length === 2, signal, "The real stop shortcut did not settle.", 25_000);
 		take.events.push({ stage: "stopGesture", ms: stop });
-		const wire = await traceRows(file.wire);
-		const final = rawWords(wire);
-		const expected = append(trial.prefix ?? "", final);
+		if (!(await traceRows(file.capture)).some(({ type }) => type === "capture-close")) throw new Error("The stop shortcut did not close the recorder.");
 		if (trial.target === "pi-prompt") {
-			await waitFor(() => pi.frames.some(({ lines, stamp }) => clock.ms(stamp) >= stop && promptOnScreen(lines, expected)), signal, "The stopped Pi prompt has no rendered correct target.");
+			const writes = editorWrites(await traceRows(state.trace));
+			await waitFor(() => {
+				const frame = pi.frames.at(-1);
+				return frame && clock.ms(frame.stamp) >= stop && renderedTarget(frame, writes, clock, rel, trial.prefix) !== null;
+			}, signal, "The stopped Pi prompt was not independently observed on screen.");
 		}
 		replayFrom = clock.ms();
 		enterCommand(pi, "/micme last");
-		await waitFor(async () => (await traceRows(state.trace)).some(({ kind }) => kind === "command-end"), signal, "Pi did not dispatch explicit /micme last.");
-		if (final && !pi.frames.some(({ lines, stamp }) => clock.ms(stamp) >= replayFrom && promptOnScreen(lines, final))) pi.send("\x1b[D");
-		if (final) await waitFor(() => pi.frames.some(({ lines, stamp }) => clock.ms(stamp) >= replayFrom && promptOnScreen(lines, final)), signal, "Explicit replay was not rendered.");
+		const replayRows = await waitFor(async () => {
+			const rows = await traceRows(state.trace);
+			return rows.some(({ kind }) => kind === "command-end") && rows;
+		}, signal, "Pi did not dispatch explicit /micme last.");
+		const replay = replayRows.findLast(({ kind, t }) => kind === "pasteToEditor" && rel(t) >= replayFrom);
+		if (!replay && rawWords(await traceRows(file.wire))) throw new Error("Explicit replay did not reach the editor.");
+		if (replay) {
+			const rendered = () => pi.frames.some(({ lines, stamp }) => clock.ms(stamp) >= rel(replay.t) && replayOnScreen(lines, replay.text));
+			if (!rendered()) pi.send("\x1b[D");
+			await waitFor(rendered, signal, "Explicit replay was not rendered.");
+		}
 		return { frames: pi.frames, replayFrom, error: null };
 	} catch (error) { return { frames: pi.frames.slice(), replayFrom, error }; }
 	finally {
@@ -287,9 +332,9 @@ function timeEvents(take, loaded, done, finish, endpoints, rel) {
 function observePrompt(take, ui, terminal, clock, rel) {
 	const prefix = take.trial.prefix ?? "";
 	const { replayFrom, frames } = terminal;
-	const commit = ui.filter(({ kind, t }) => kind === "setEditorText" && rel(t) < replayFrom);
+	const writes = editorWrites(ui).filter(({ t }) => rel(t) < replayFrom);
 	let prior = prefix;
-	for (const write of commit) {
+	for (const write of writes.filter(({ kind }) => kind === "setEditorText")) {
 		if (prior !== write.text) take.commits.push({ ms: rel(write.t), text: write.text.startsWith(prior) ? write.text.slice(prior.length).trim() : write.text });
 		prior = write.text;
 	}
@@ -297,18 +342,19 @@ function observePrompt(take, ui, terminal, clock, rel) {
 	take.sentCount = ui.filter(({ kind, queued }) => kind === "send" && !queued).length;
 	take.queuedCount = ui.filter(({ kind, queued }) => kind === "send" && queued).length;
 	const replay = ui.find(({ kind, t }) => kind === "pasteToEditor" && rel(t) >= replayFrom);
-	if (replay && frames.some(({ lines, stamp }) => clock.ms(stamp) >= rel(replay.t) && promptOnScreen(lines, replay.text))) take.replayed = replay.text.trim();
+	if (replay && frames.some(({ lines, stamp }) => clock.ms(stamp) >= rel(replay.t) && replayOnScreen(lines, replay.text))) take.replayed = replay.text.trim();
 	if (take.trial.target !== "pi-prompt") return;
 	take.expectedTarget = take.raw === null ? null : append(prefix, take.raw);
-	const beforeReplay = frames.filter(({ stamp }) => clock.ms(stamp) < replayFrom);
-	for (const { stamp, lines } of beforeReplay) {
-		const ms = clock.ms(stamp);
-		const observed = commit.findLast(({ t, text }) => rel(t) <= ms && promptOnScreen(lines, text));
-		if (observed && observed.text !== take.mutations.at(-1)?.text && observed.text !== prefix) take.mutations.push({ ms, text: observed.text });
+	const beforeReplay = frames.filter(({ stamp }) => clock.ms(stamp) >= 0 && clock.ms(stamp) < replayFrom);
+	let previous = prefix;
+	for (const frame of beforeReplay) {
+		const text = renderedTarget(frame, writes, clock, rel, prefix);
+		if (text !== null && text !== previous) {
+			take.mutations.push({ ms: clock.ms(frame.stamp), text });
+			previous = text;
+		}
 	}
-	const last = beforeReplay.at(-1);
-	const candidate = take.mutations.at(-1)?.text ?? prefix;
-	if (last && promptOnScreen(last.lines, candidate)) take.observedTarget = candidate;
+	take.observedTarget = renderedTarget(beforeReplay.at(-1), writes, clock, rel, prefix);
 	if (take.observedTarget?.startsWith(prefix)) take.delivered = take.observedTarget.slice(prefix.length).trim();
 	const match = take.mutations.find(({ text }) => text === take.expectedTarget);
 	if (match) take.events.push({ stage: "correctTarget", ms: match.ms });
@@ -359,9 +405,10 @@ async function projectStream(take, p, file, state, terminal, clock, rel) {
 			const draft = lines.find((line) => /^\s*Live: /u.test(line))?.trim() ?? "";
 			if (draft !== last) { take.visible.push({ ms, text: draft }); last = draft; }
 		}
-		const ready = first && terminal.frames.find(({ stamp, lines }) => clock.ms(stamp) >= rel(first.t) && lines.some((line) => /●\s+\d\d:\d\d:\d\d/u.test(line)));
-		if (ready) take.events.push({ stage: "readyCue", ms: clock.ms(ready.stamp) });
 		const stop = take.events.find(({ stage }) => stage === "stopGesture")?.ms;
+		const ready = first && terminal.frames.find(({ stamp, lines }) => clock.ms(stamp) >= rel(first.t) && clock.ms(stamp) < (stop ?? Infinity)
+			&& lines.some((line) => /●\s+\d\d:\d\d:\d\d/u.test(line)));
+		if (ready) take.events.push({ stage: "readyCue", ms: clock.ms(ready.stamp) });
 		const words = span.alignedWords.flatMap(({ word, endMs }) => tokens(word).map((word) => ({ word, endMs })));
 		if (words.length && (endpoints.length > 0 || exit?.code === 0) && stop !== undefined) {
 			const progress = previewProgress(take.visible.map(({ ms: t, text: line }) => ({ t, line })), words, span.onsetMs,
@@ -398,7 +445,7 @@ export async function collect(trial, signal, { local, clock = takeClock() } = {}
 		const host = await runFile(state, [p.binary, "--version"], signal);
 		const hostVersion = host.code === 0 && /^\d+\.\d+\.\d+[^\r\n]*$/u.test(host.out.trim()) ? host.out.trim() : null;
 		if (!hostVersion) block("missing-host", "Installed Pi could not report its host version in the isolated profile.");
-		const rig = { ...trial.rig, os: platform(), arch: arch(), cpu: cpus()[0]?.model ?? null, hostVersion };
+		const rig = { ...trial.rig, ...p.routeRig, os: platform(), arch: arch(), cpu: cpus()[0]?.model ?? null, hostVersion, actualBackend: "unknown" };
 		take = { ...emptyTake({ ...trial, rig }, "completed", "no-result", ""), gaps: [], audioMs: p.fixture.pcm.length / 32 };
 		await state.configure(file.settings);
 		// Both child observers use the same Linux CLOCK_MONOTONIC as Node hrtime.
@@ -421,7 +468,7 @@ export async function collect(trial, signal, { local, clock = takeClock() } = {}
 			if (trial.track === "pcm") {
 				take.events.push(clock.trigger());
 				try { await directWorker(state, trial, p, file, signal); } catch (error) { directError = error; }
-			} else terminal = await driveTerminal(state, trial, p, file, take, clock, signal);
+			} else terminal = await driveTerminal(state, trial, p, file, take, clock, rel, signal);
 			if (take.events.some(({ stage }) => stage === "trigger")) {
 				const native = await projectStream(take, p, file, state, terminal, clock, rel);
 				backend = native.backend;
@@ -434,7 +481,6 @@ export async function collect(trial, signal, { local, clock = takeClock() } = {}
 			}
 		}
 		take.trial.rig.actualBackend = backend;
-		take.trial.rig.actualDevice = null; // Worker v1 does not report a bound device ID/label.
 		if (backend === "unknown") take.gaps.push({ stage: null, code: "no-observer", detail: "Native diagnostics did not identify the loaded compute backend." });
 		if (!isPlannedTake(trial, take.trial)) block("identity-mismatch", "Observed host, backend, or device does not match the frozen condition.");
 	} catch (error) {
