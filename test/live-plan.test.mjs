@@ -224,7 +224,7 @@ test("translation rejects known incompatible explicit paths instead of replacing
 	}
 });
 
-test("explicit ensure provisions the resolved ASR and uses the resolved local VAD without a VAD fetch", async (t) => {
+test("live preparation uses the local VAD and rejects undersized bytes from the resolved ASR download", async (t) => {
 	const { root } = await setupLiveConfig(t, { MICME_AUTO_DOWNLOAD_MODEL: true, MICME_VAD_MODEL: "$PI_CODING_AGENT_DIR/custom-vad.bin" });
 	await writeExecutable(root, "micme-live");
 	const plan = resolveLivePlan();
@@ -237,10 +237,9 @@ test("explicit ensure provisions the resolved ASR and uses the resolved local VA
 	await assert.rejects(ensureLiveModels(plan, ctx, signal), /VAD model is missing.*MICME_VAD_MODEL/i);
 	assert.equal(fetch.mock.callCount(), 0);
 	await writeFile(plan.vadModelPath, "local VAD");
-	await ensureLiveModels(plan, ctx, signal);
-	await ensureLiveModels(plan, ctx, signal);
+	await assert.rejects(ensureLiveModels(plan, ctx, signal), /model size mismatch/);
 	assert.equal(fetch.mock.callCount(), 1);
-	assert.equal(await readFile(plan.modelPath, "utf8"), "ASR fixture");
+	await assert.rejects(readFile(plan.modelPath), { code: "ENOENT" });
 	assert.equal(await readFile(plan.vadModelPath, "utf8"), "local VAD");
 });
 

@@ -206,7 +206,7 @@ test("translation remaps explicit whisper.cpp turbo paths to the nearest transla
 			assert.equal(model.path, "/models/ggml-large-v3.bin");
 			assert.equal(model.modelName, "large-v3");
 			assert.equal(model.translationFallbackFrom, "large-v3-turbo");
-			assert.equal(model.downloadable, true);
+			assert.equal(model.downloadable, false);
 		},
 	);
 });

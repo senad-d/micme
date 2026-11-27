@@ -211,7 +211,7 @@ test("downloadFile times out while waiting for response headers without creating
 	assert.deepEqual(await readdir(root), []);
 });
 
-test("stalled response bodies time out, clean partial files, and clear status once", async (t) => {
+test("stalled managed response bodies time out without publishing a partial and clear status once", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-model-download-body-timeout-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const target = join(root, "ggml-tiny.bin");
@@ -221,13 +221,13 @@ test("stalled response bodies time out, clean partial files, and clear status on
 	let reads = 0;
 	let cancellations = 0;
 
-	await withEnv({ MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+	await withEnv({ MICME_MODEL_DIR: root, MICME_WHISPER_CPP_MODEL: undefined, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
 		await withMockFetch(
 			async () => ({
 				ok: true,
 				status: 200,
 				statusText: "OK",
-				headers: { get: () => "20" },
+				headers: new Headers(),
 				body: {
 					getReader: () => ({
 						async read() {
@@ -250,12 +250,12 @@ test("stalled response bodies time out, clean partial files, and clear status on
 
 	assert.equal(cancellations, 1);
 	assert.equal(existsSync(target), false);
-	assert.deepEqual(await readdir(root), []);
+	assert.equal((await readdir(root)).some((name) => name.includes(".download-")), false);
 	assert.equal(harness.statuses.filter((entry) => entry.value === undefined).length, 1);
 	assert.equal(harness.notifications.some((entry) => entry.message.startsWith("Downloaded ")), false);
 });
 
-test("caller cancellation cleans a partial download before settling", async (t) => {
+test("caller cancellation closes the transfer without publishing a partial", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-model-download-cancel-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const target = join(root, "ggml-tiny.bin");
@@ -266,13 +266,13 @@ test("caller cancellation cleans a partial download before settling", async (t) 
 	const controller = new AbortController();
 	let reads = 0;
 
-	await withEnv({ MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+	await withEnv({ MICME_MODEL_DIR: root, MICME_WHISPER_CPP_MODEL: undefined, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
 		await withMockFetch(
 			async () => ({
 				ok: true,
 				status: 200,
 				statusText: "OK",
-				headers: { get: () => "20" },
+				headers: new Headers(),
 				body: {
 					getReader: () => ({
 						async read() {
@@ -296,11 +296,11 @@ test("caller cancellation cleans a partial download before settling", async (t) 
 	});
 
 	assert.equal(existsSync(target), false);
-	assert.deepEqual(await readdir(root), []);
+	assert.equal((await readdir(root)).some((name) => name.includes(".download-")), false);
 	assert.equal(harness.statuses.filter((entry) => entry.value === undefined).length, 1);
 });
 
-test("cancelling one shared waiter preserves the download for remaining owners", async (t) => {
+test("cancelling one shared waiter leaves the remaining owner to receive the integrity error", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-model-download-shared-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const target = join(root, "ggml-tiny.bin");
@@ -312,7 +312,7 @@ test("cancelling one shared waiter preserves the download for remaining owners",
 	let fetchSignal;
 	let fetchCalls = 0;
 
-	await withEnv({ MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+	await withEnv({ MICME_MODEL_DIR: root, MICME_WHISPER_CPP_MODEL: undefined, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
 		await withMockFetch(
 			async (_url, options) => {
 				fetchCalls += 1;
@@ -328,18 +328,18 @@ test("cancelling one shared waiter preserves the download for remaining owners",
 				firstController.abort();
 				await assert.rejects(first, { name: "AbortError" });
 				assert.equal(fetchSignal.aborted, false);
-				response.resolve(modelResponse("shared model"));
-				await second;
+				response.resolve(new Response("shared model"));
+				await assert.rejects(second, /size mismatch/);
 			},
 		);
 	});
 
 	assert.equal(fetchCalls, 1);
-	assert.equal(await readFile(target, "utf8"), "shared model");
+	assert.equal(existsSync(target), false);
 	assert.equal(firstHarness.statuses.filter((entry) => entry.value === undefined).length, 1);
 	assert.equal(firstHarness.notifications.some((entry) => entry.message.startsWith("Downloaded ")), false);
 	assert.equal(secondHarness.statuses.filter((entry) => entry.value === undefined).length, 1);
-	assert.equal(secondHarness.notifications.some((entry) => entry.message.startsWith("Downloaded ")), true);
+	assert.equal(secondHarness.notifications.some((entry) => entry.message.startsWith("Downloaded ")), false);
 });
 
 test("model discovery scans configured, project, and cache paths", async (t) => {
@@ -469,7 +469,7 @@ test("Python Whisper model discovery uses PATH results and built-in fallback", a
 	});
 });
 
-test("ensureWhisperCppModel validates targets and downloads standard models", async (t) => {
+test("ensureWhisperCppModel requests the pinned standard model and refuses to publish unchecked bytes", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-ensure-model-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const target = join(root, "models", "ggml-tiny.bin");
@@ -486,26 +486,17 @@ test("ensureWhisperCppModel validates targets and downloads standard models", as
 		},
 	};
 
-	await withEnv({ PI_CODING_AGENT_DIR: join(root, "agent"), MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
+	await withEnv({ PI_CODING_AGENT_DIR: join(root, "agent"), MICME_MODEL_DIR: join(root, "models"), MICME_WHISPER_CPP_MODEL: undefined, MICME_AUTO_DOWNLOAD_MODEL: "1" }, async () => {
 		await withMockFetch(
 			async (url) => {
-				assert.match(String(url), /ggml-tiny\.bin$/);
-				return new Response(
-					new ReadableStream({
-						start(controller) {
-							controller.enqueue(new TextEncoder().encode("tiny model"));
-							controller.close();
-						},
-					}),
-					{ status: 200, headers: { "content-length": "10" } },
-				);
+				assert.match(String(url), /resolve\/[0-9a-f]{40}\/ggml-tiny\.bin$/);
+				return new Response("tiny model");
 			},
 			async () => {
-				await ensureWhisperCppModel(target, ctx);
+				await assert.rejects(ensureWhisperCppModel(target, ctx), /size mismatch/);
 			},
 		);
-		assert.equal(await readFile(target, "utf8"), "tiny model");
-		await ensureWhisperCppModel(target, ctx);
+		assert.equal(existsSync(target), false);
 	});
 
 	await mkdir(join(root, "directory-target"));
@@ -523,7 +514,7 @@ test("ensureWhisperCppModel validates targets and downloads standard models", as
 
 	assert.ok(statuses.some((entry) => entry.value?.includes("downloading ggml-tiny.bin")));
 	assert.ok(statuses.some((entry) => entry.value === undefined));
-	assert.ok(notifications.some((entry) => entry.message.includes("Downloaded ggml-tiny.bin")));
+	assert.ok(!notifications.some((entry) => entry.message.includes("Downloaded ggml-tiny.bin")));
 });
 
 const VAD_FILE = "ggml-silero-v5.1.2.bin";
@@ -647,6 +638,7 @@ test("VAD callers share a transfer; only the last cancelled caller stops and cle
 		transferSignal = options.signal;
 		return {
 			ok: true,
+			status: 200,
 			headers: new Headers(),
 			body: {
 				getReader: () => ({
