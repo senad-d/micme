@@ -5,7 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 
 const { reloadMicmeConfig } = await import("../src/config.ts");
-const { displayConfigurationValue, saveConfigurationValue } = await import("../src/settings.ts");
+const { createArtifactSelector, displayConfigurationValue, saveConfigurationValue } = await import("../src/settings.ts");
+const { getManagedCatalogVariant, referenceRows } = await import("../src/transfer/catalog.ts");
+const { getEngineEvidence } = await import("../src/transfer/engine-evidence.ts");
 
 function createCtx() {
 	return {
@@ -15,6 +17,80 @@ function createCtx() {
 		},
 	};
 }
+
+function detectorOffArtifacts() {
+	return referenceRows().flatMap(({ variants }) => variants.flatMap(({ id }) => {
+		const evidence = getEngineEvidence(id);
+		const cell = evidence?.measurements.find(({ disposition, language, task }) => disposition === "adapted-verified" && language === "en" && task === "transcribe");
+		if (evidence?.traits?.vad !== "off" || evidence.traits.actualCompute !== "cpu" || !cell) return [];
+		const variant = getManagedCatalogVariant(id, { rig: cell.rig, actualCompute: "cpu", device: cell.device }, cell.task, cell.language);
+		return variant ? [variant] : [];
+	}));
+}
+
+async function withArtifactConfig(t, { shellDetector, savedDetector } = {}) {
+	const agentDir = await mkdtemp(join(tmpdir(), "micme-artifact-settings-"));
+	const configPath = join(agentDir, "micme.json");
+	const initial = { MICME_LANGUAGE: "en", MICME_TRANSCRIBE_BACKEND: "auto", ...(savedDetector ? { MICME_DETECTOR: savedDetector } : {}) };
+	const scoped = { PI_CODING_AGENT_DIR: agentDir, MICME_DETECTOR: shellDetector, MICME_LANGUAGE: undefined, MICME_TRANSLATE_TO_ENGLISH: undefined,
+		MICME_ARTIFACT: undefined, MICME_TRANSCRIBE_BACKEND: undefined, MICME_WHISPER_CPP_MODEL: undefined, MICME_TRANSCRIBE_COMMAND: undefined };
+	const previous = Object.fromEntries(Object.keys(scoped).map((key) => [key, process.env[key]]));
+	t.after(async () => {
+		for (const [key, value] of Object.entries(previous)) setEnvValue(key, value);
+		reloadMicmeConfig();
+		await rm(agentDir, { recursive: true, force: true });
+	});
+	for (const [key, value] of Object.entries(scoped)) setEnvValue(key, value);
+	await writeFile(configPath, JSON.stringify(initial));
+	reloadMicmeConfig();
+	return { configPath, initial };
+}
+
+function setEnvValue(key, value) {
+	if (value === undefined) delete process.env[key];
+	else process.env[key] = value;
+}
+
+const plainTheme = { fg: (_color, text) => text, bold: (text) => text };
+
+test("the artifact picker requires an explicit compatible detector choice and saves the pair together", async (t) => {
+	const { configPath, initial } = await withArtifactConfig(t);
+	const artifacts = detectorOffArtifacts();
+	assert.equal(artifacts.length, 2);
+	const picked = [];
+	const picker = createArtifactSelector(artifacts, "", "model", plainTheme, (...choice) => picked.push(choice));
+	picker.handleInput("\x1b[B");
+	picker.handleInput("\r");
+	assert.match(picker.render(40).join("\n"), /→ Cancel/);
+	assert.match(picker.render(40).join("\n"), /Use with detector Off/);
+	picker.handleInput("\r");
+	assert.deepEqual(picked, []);
+	assert.equal(JSON.parse(await readFile(configPath, "utf8")).MICME_ARTIFACT, undefined);
+	picker.handleInput("\r");
+	picker.handleInput("\x1b[B");
+	picker.handleInput("\r");
+	assert.deepEqual(picked, [[artifacts[0].id, "off"]]);
+	await assert.rejects(saveConfigurationValue(createCtx(), "MICME_ARTIFACT", artifacts[0].id), /requires.*detector Off/i);
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), initial);
+	await saveConfigurationValue(createCtx(), "MICME_ARTIFACT", picked[0][0], { artifactDetector: picked[0][1] });
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { ...initial, MICME_ARTIFACT: artifacts[0].id, MICME_DETECTOR: "off" });
+});
+
+test("an incompatible shell detector blocks artifact selection without changing either saved choice", async (t) => {
+	const { configPath, initial } = await withArtifactConfig(t, { shellDetector: "model", savedDetector: "off" });
+	const artifacts = detectorOffArtifacts();
+	const picked = [];
+	const picker = createArtifactSelector(artifacts, "", "model", plainTheme, (...choice) => picked.push(choice));
+	picker.handleInput("\x1b[B");
+	picker.handleInput("\r");
+	const screen = picker.render(80).join("\n");
+	assert.match(screen, /Shell override MICME_DETECTOR/);
+	assert.doesNotMatch(screen, /Use with detector Off/);
+	assert.deepEqual(picked, []);
+	await assert.rejects(saveConfigurationValue(createCtx(), "MICME_ARTIFACT", artifacts[0].id, { artifactDetector: "off" }), /Shell override MICME_DETECTOR/);
+	assert.equal(process.env.MICME_DETECTOR, "model");
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), initial);
+});
 
 test("configuration display values strip terminal control sequences", () => {
 	assert.equal(displayConfigurationValue("MICME_LANGUAGE", "en\x1b]52;c;clipboard\x07\x1b[31m-US\x1b[0m"), "en -US");
