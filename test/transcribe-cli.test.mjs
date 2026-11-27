@@ -66,6 +66,16 @@ test("CLI lists installed IDs and keeps same-backend device candidates distinct"
 	assert.deepEqual((await transcribeWavCli([flags.listDevices], service)).stdout.trimEnd().split("\n"), ["vulkan\tgpu:0\tDevice A", "vulkan\tgpu:1\tDevice B"]);
 });
 
+test("CLI text listings keep multiline metadata in one entry without changing JSON IDs", async () => {
+	const variantId = "/models/first\nsecond.bin";
+	const device = { backend: "vulkan", device: { id: "gpu:0", label: "First\nline\tsecond" } };
+	const fixture = { ...service, async listInstalled() { return [{ ...choice, variantId }]; }, async listCompute() { return [device]; } };
+	assert.equal((await transcribeWavCli([flags.listModels], fixture)).stdout, `${JSON.stringify(variantId)}\n`);
+	assert.equal((await transcribeWavCli([flags.listDevices], fixture)).stdout, `vulkan\tgpu:0\t${JSON.stringify(device.device.label)}\n`);
+	assert.deepEqual(JSON.parse((await transcribeWavCli([flags.listModels, flags.json], fixture)).stdout), { models: [variantId] });
+	assert.deepEqual(JSON.parse((await transcribeWavCli([flags.listDevices, flags.json], fixture)).stdout), { devices: [device] });
+});
+
 test("CLI refuses missing installed model and unlisted device without inference", async (t) => {
 	const file = await sample(t, wav());
 	assertFailure(await transcribeWavCli(fileArgs(file, "auto", "not-installed"), service), exit.failed, /--list-models/);
