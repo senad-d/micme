@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # Use the verified Ubuntu FFmpeg package for media tests.
     timeout-minutes: 15
 
     steps:
@@ -49,6 +49,18 @@ jobs:
 
       - name: Guard package contents
         run: npm run check:pack
+
+      - name: Install FFmpeg for media tests
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          for tool in ffmpeg ffprobe; do
+            if ! "$tool" -hide_banner -protocols | grep -Ex '[[:space:]]+fd'; then
+              echo "::error::$tool must support the seekable fd protocol"
+              exit 1
+            fi
+          done
 
       - name: Run release validation script
         run: npm run validate

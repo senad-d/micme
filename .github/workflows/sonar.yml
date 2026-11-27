@@ -17,7 +17,7 @@ jobs:
   coverage:
     name: PR coverage
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # Use the verified Ubuntu FFmpeg package for media tests.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,6 +30,17 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Install FFmpeg for media tests
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          for tool in ffmpeg ffprobe; do
+            if ! "$tool" -hide_banner -protocols | grep -Ex '[[:space:]]+fd'; then
+              echo "::error::$tool must support the seekable fd protocol"
+              exit 1
+            fi
+          done
       - name: Run tests with coverage
         run: npm run test:coverage
 
@@ -37,7 +48,7 @@ jobs:
     name: SonarQube
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: sonar-main
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # Use the verified Ubuntu FFmpeg package for media tests.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,6 +62,17 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Install FFmpeg for media tests
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          for tool in ffmpeg ffprobe; do
+            if ! "$tool" -hide_banner -protocols | grep -Ex '[[:space:]]+fd'; then
+              echo "::error::$tool must support the seekable fd protocol"
+              exit 1
+            fi
+          done
       - name: Run tests with coverage
         run: npm run test:coverage
       - name: SonarQube Scan
