@@ -9,7 +9,7 @@ import { processFinal } from "../src/transfer/process-final.ts";
 import { traceRows } from "./live-native/transfer-pi-local.mjs";
 import {
 	KEY, MODEL, OUTPUT, POLISHED, PRIVATE_ERROR, PROMPT, RAW, SECRET,
-	anthropic, executable, host, mutations, openAi, piFixture, receiver,
+	anthropic, executable, expectCursor, expectReplay, host, mutations, openAi, piFixture, processingConsent, receiver,
 } from "./transfer-final-fixtures.mjs";
 
 const FINAL = { raw: RAW, local: RAW, language: "en", source: "clip", rules: [] };
@@ -171,13 +171,6 @@ function noDisclosure(pi, rows) {
 	for (const marker of [SECRET, PRIVATE_ERROR, RAW, "AX-019", "1,204.50"]) assert.ok(!diagnostics.includes(marker), "diagnostics disclosed protected fixture data");
 }
 
-async function processingConsent(pi, action) {
-	const offset = pi.frames.length;
-	pi.fire(action);
-	const title = action === "polish" ? "Micme polish · New clip" : "Micme preview · Saved live final";
-	return pi.until(() => pi.frames.slice(offset).find((frame) => frame.includes(title) && frame.includes("Enter confirm")), `${action} consent before processing`);
-}
-
 async function armClip(pi) {
 	const count = (await pi.rows()).length;
 	const consent = await processingConsent(pi, "polish");
@@ -186,17 +179,6 @@ async function armClip(pi) {
 	pi.send("\r");
 	await pi.mark("finished", { action: "polish" }, count);
 	await pi.mark("recorder-ready", {}, count);
-}
-
-async function expectReplay(pi, auto, previous) {
-	const begin = (await pi.rows()).length;
-	await pi.run("last");
-	const writes = mutations((await pi.rows()).slice(begin));
-	assert.equal(writes.length, 1, "only explicit replay can deliver");
-	assert.equal(writes[0].kind, auto ? "send" : "pasteToEditor");
-	assert.equal(writes[0].text.trim(), RAW);
-	if (!auto) assert.ok((await pi.run("inspect")).after.endsWith(`${RAW} `));
-	if (previous !== undefined) assert.equal((await pi.run("inspect")).after.startsWith(previous), true);
 }
 
 for (const [provider, status, auth] of [["local-openai", 307, false], ["custom-openai", 308, true]]) {
@@ -311,16 +293,22 @@ test("V6 pending clip: ordinary ASR does not process; empty/cancel suppress, and
 	await expectReplay(pi, false);
 });
 
-for (const auto of [false, true]) {
-	test(`V6 edited live TUI: successful, empty and canceled previews never write or dispatch (auto-submit ${+auto})`, PI, async (t) => {
+for (const { auto, previewKey, recordShortcut } of [{ auto: false, previewKey: "3" }, { auto: true, previewKey: "3" },
+	{ auto: false, previewKey: "7", recordShortcut: "alt+3" }]) {
+	const shortcut = `alt+${previewKey}`;
+	test(`V6 edited live TUI: production ${shortcut} preserves draft and cursor for success, empty and cancel (auto-submit ${+auto})`, PI, async (t) => {
 		const selected = await receiver(t);
-		const f = await piFixture(t, { mode: "stream", auto, selected, origins: [selected] });
+		const f = await piFixture(t, { mode: "stream", auto, selected, origins: [selected], recordShortcut });
 		const pi = await host(f);
 		await pi.mark("ready");
 		const prefix = "Existing prompt:";
 		pi.send(prefix);
 		assert.equal((await pi.run("inspect")).after, prefix);
-		await pi.run("toggle");
+		if (recordShortcut) {
+			pi.pressAlt("3");
+			await pi.mark("shortcut-finished", { shortcut: recordShortcut });
+			await pi.mark("recorder-ready");
+		} else await pi.run("toggle");
 		const committed = `${prefix} ${RAW} `;
 		await pi.mark("setEditorText", { text: committed });
 		const edit = "user addition";
@@ -331,13 +319,18 @@ for (const auto of [false, true]) {
 		assert.equal(stop.after, edited, "ordinary stop preserves the user insertion");
 		assert.equal(selected.calls.length, 0, "no provider on startup, commit or normal stop");
 		assert.ok(!(await pi.rows()).some(({ kind }) => kind === "hook" || kind === "send"));
+		const registrations = (await pi.rows()).filter(({ kind }) => kind === "production-shortcut").map((row) => row.shortcut);
+		assert.deepEqual(registrations.sort(), recordShortcut ? [recordShortcut, shortcut] : [shortcut], "Micme itself registers the chords");
 
 		for (const outcome of ["success", "empty", "cancel"]) {
+			const cursor = edited.length - 3;
+			pi.send("\x1b[D".repeat(3)); // Park inside "addition", not at the end.
+			await expectCursor(pi, edited, cursor);
 			await f.scenario({ hook: outcome });
 			const calls = selected.calls.length;
 			const from = (await pi.rows()).length;
 			const shown = pi.frames.length;
-			const consent = await processingConsent(pi, "preview");
+			const consent = await processingConsent(pi, "preview", previewKey);
 			assert.match(consent, /without changing the prompt or replay/);
 			assert.equal(selected.calls.length, calls, "opening consent cannot send text");
 			let late;
@@ -345,30 +338,33 @@ for (const auto of [false, true]) {
 			if (entered) selected.respond((res) => { late = res; });
 			pi.send("\r");
 			if (entered) {
-				await expectDispatch(entered, pi.mark("finished", { action: "preview" }, from), "confirmed live preview");
+				await expectDispatch(entered, pi.mark("shortcut-finished", { shortcut }, from), "confirmed live preview");
 				pi.send("\x1b");
 			}
 			const displayed = (text, rows) => pi.frames.slice(shown).some((frame) => frame.includes(text)) ||
 				rows.some((row) => (row.kind === "editor" && row.detail?.includes(text)) || (row.kind === "notify" && row.text?.includes(text)));
 			const settled = await pi.until(async () => {
 				const rows = (await pi.rows()).slice(from);
-				const ended = rows.find(({ kind, action }) => kind === "finished" && action === "preview");
+				const ended = rows.find((row) => row.kind === "shortcut-finished" && row.shortcut === shortcut);
 				const emptyReview = outcome === "empty" && pi.frames.slice(shown).some((frame) => /(?:no|empty|suppressed) (?:.* )?(?:output|candidate)|nothing to copy/iu.test(frame));
 				return (ended || displayed(OUTPUT, rows) || emptyReview) && { ended };
 			}, `preview ${outcome} completed or showed a review candidate`);
 			if (!settled.ended) pi.send("\x1b");
-			const { before, after } = await pi.mark("finished", { action: "preview" }, from);
+			const { before, after } = await pi.mark("shortcut-finished", { shortcut }, from);
 			late?.end(JSON.stringify(openAi()));
 			assert.equal(before, edited);
 			assert.equal(after, edited);
 			const rows = (await pi.rows()).slice(from);
-			assert.deepEqual(mutations(rows), []);
+			assert.deepEqual(mutations(rows), [], "preview causes no editor write, send, or follow-up");
+			assert.ok(!rows.some(({ kind }) => kind === "coding-model"));
 			if (outcome === "success") await pi.until(() => displayed(OUTPUT, rows), "transformed review rendered outside the prompt");
 			else assert.ok(!displayed(OUTPUT, rows) && !displayed(POLISHED, rows), "empty/canceled preview produces no candidate");
 			assert.equal(selected.calls.length - calls, 1);
 			assert.deepEqual(rows.filter(({ kind }) => kind === "hook").map(({ text }) => text), outcome === "cancel" ? [] : [POLISHED]);
 			checkRequest(selected.calls.at(-1), "chat");
 			noDisclosure(pi, rows);
+			await expectCursor(pi, edited, cursor);
+			pi.send("\x05"); // Move to the end for explicit replay.
 			await expectReplay(pi, auto, edited);
 			if (!auto) {
 				pi.send(`\x15${edited}`); // Restore only the explicit replay's append before the next preview.

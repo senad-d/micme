@@ -22,7 +22,8 @@ export const PRIVATE_ERROR = "v6-untrusted-provider-or-hook-error";
 export const mutations = (rows) => rows.filter(({ kind }) => ["setEditorText", "pasteToEditor", "send"].includes(kind));
 const fixture = fileURLToPath(import.meta.url);
 const src = new URL("../src/", import.meta.url).href;
-const actions = { toggle: "alt+1", polish: "alt+2", preview: "alt+3", last: "alt+4", cancel: "alt+5", inspect: "alt+6" };
+const relays = { toggle: "alt+1", polish: "alt+2", last: "alt+4", cancel: "alt+5", inspect: "alt+6" };
+const observedShortcuts = new Set(["alt+3", "alt+7"]);
 
 export function openAi(content = POLISHED, reason = "stop") {
 	return { choices: [{ message: { role: "assistant", content }, finish_reason: reason }] };
@@ -103,7 +104,7 @@ export async function executable(root, role, settings) {
 	return file;
 }
 
-export async function piFixture(t, { mode, auto = false, history = false, retention = "never", selected, origins = [], provider = "local-openai", auth = false }) {
+export async function piFixture(t, { mode, auto = false, history = false, retention = "never", selected, origins = [], provider = "local-openai", auth = false, recordShortcut }) {
 	const state = await isolatedPi({ signal: t.signal });
 	t.after(() => closePi(state));
 	const { agent, work, trace } = state;
@@ -125,6 +126,7 @@ export async function piFixture(t, { mode, auto = false, history = false, retent
 		MICME_TRANSCRIPTION_MODE: mode, MICME_TRANSCRIBE_BACKEND: "whisper.cpp", MICME_LANGUAGE: "en",
 		MICME_PROCESS_AUDIO: "0", MICME_VALIDATE_AUDIO: "0", MICME_STREAM_FINALIZE_WITH_CLIP: "0", MICME_KEEP_AUDIO: "0",
 		MICME_HISTORY: history ? "1" : "0", MICME_RETENTION: retention, MICME_OUTPUT_HOOK: hook,
+		...(recordShortcut && { MICME_SHORTCUT: recordShortcut }),
 		...(selected && { MICME_POLISH_PROVIDER: provider, MICME_POLISH_ENDPOINT: selected.base.href, MICME_POLISH_MODEL: MODEL,
 			MICME_POLISH_PROMPT: PROMPT, ...(auth && { MICME_POLISH_KEY_ENV: KEY }) }),
 	});
@@ -165,13 +167,43 @@ export async function host(f, mode = "tui", operation = "session") {
 	};
 	const mark = async (kind, fields = {}, start = 0) => until(async () => (await rows()).slice(start).find((row) =>
 		row.kind === kind && Object.entries(fields).every(([key, value]) => row[key] === value)), `${kind} ${JSON.stringify(fields)}`);
-	const fire = (action) => send(`\x1b${actions[action].at(-1)}`);
+	const pressAlt = (key) => send(`\x1b${key}`);
+	const fire = (action) => pressAlt(relays[action].at(-1));
 	const run = async (action) => {
 		const start = (await rows()).length;
 		fire(action);
 		return mark("finished", { action }, start);
 	};
-	return { ...handle, rows, rpc, frames, stderr: () => stderr, send, until, mark, fire, run, request };
+	return { ...handle, rows, rpc, frames, stderr: () => stderr, send, until, mark, fire, pressAlt, run, request };
+}
+
+export async function processingConsent(pi, action, altKey) {
+	const offset = pi.frames.length;
+	if (altKey) pi.pressAlt(altKey);
+	else pi.fire(action);
+	const title = action === "polish" ? "Micme polish · New clip" : "Micme preview · Saved live final";
+	return pi.until(() => pi.frames.slice(offset).find((frame) => frame.includes(title) && frame.includes("Enter confirm")), `${action} consent before processing`);
+}
+
+export async function expectCursor(pi, draft, index) {
+	// Probe the real input cursor, not the terminal's painted cursor or wrapping.
+	pi.send("!");
+	assert.equal((await pi.run("inspect")).after, `${draft.slice(0, index)}!${draft.slice(index)}`, "exact draft insertion point");
+	pi.send("\x7f");
+	assert.equal((await pi.run("inspect")).after, draft);
+}
+
+export async function expectReplay(pi, auto, previous) {
+	const begin = (await pi.rows()).length;
+	await pi.run("last");
+	const writes = mutations((await pi.rows()).slice(begin));
+	assert.equal(writes.length, 1, "only explicit replay can deliver");
+	assert.equal(writes[0].kind, auto ? "send" : "pasteToEditor");
+	assert.equal(writes[0].text, auto ? RAW : `${RAW} `);
+	if (auto) assert.equal(writes[0].queued, false, "idle replay is a send, not a follow-up");
+	const { after } = await pi.run("inspect");
+	if (previous !== undefined) assert.equal(after, auto ? previous : previous + RAW + " ");
+	else if (!auto) assert.ok(after.endsWith(`${RAW} `));
 }
 
 function logger(trace) {
@@ -268,6 +300,15 @@ async function runPi(mode, operation, control, trace) {
 					handler = (args, ctx) => spec.handler(args, instrument(ctx, log, settings));
 					return target.registerCommand(name, { ...spec, handler });
 				};
+				if (key === "registerShortcut") return (shortcut, spec) => {
+					if (!observedShortcuts.has(shortcut)) return target.registerShortcut(shortcut, spec);
+					log("production-shortcut", { shortcut });
+					return target.registerShortcut(shortcut, { ...spec, async handler(ctx) {
+						const before = ctx.ui.getEditorText();
+						try { return await spec.handler(instrument(ctx, log, settings)); }
+						finally { log("shortcut-finished", { shortcut, before, after: ctx.ui.getEditorText() }); }
+					} });
+				};
 				if (key === "sendUserMessage") return (text, options) => {
 					log("send", { text, queued: options?.deliverAs === "followUp" });
 					// Let RPC exercise the actual agent queue. In the editor-only
@@ -277,9 +318,9 @@ async function runPi(mode, operation, control, trace) {
 				return target[key];
 			} }));
 			pi.on("session_start", () => log("ready"));
-			// Invoke the registered command without typing over the in-progress
-			// prompt. Before/after readbacks are from the actual Pi editor.
-			for (const [action, shortcut] of Object.entries(actions)) pi.registerShortcut(shortcut, {
+			// Conveniences for other commands only. The preview keystrokes go
+			// through Micme's own registrations above, never through this relay.
+			for (const [action, shortcut] of Object.entries(relays)) pi.registerShortcut(shortcut, {
 				description: `V6 test relay: ${action}`,
 				handler(ctx) {
 					const before = ctx.ui.getEditorText();
