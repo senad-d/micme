@@ -281,6 +281,35 @@ for (const outcome of ["recover", "replace", "prefix", "cancel"]) {
 	});
 }
 
+test("Pi cancel during failed-worker drain discards the valid tail and leaves replay untouched", posix, async (t) => {
+	const f = await isolatedJourney(t, { ...startingLive, MICME_HISTORY: "1" });
+	const ui = await f.host();
+	await f.control({ worker: "no-ack", holdDrain: true });
+	await ui.command();
+	await f.waitEvent("feed");
+	assert.deepEqual(await f.events("ack"), []);
+	ui.edit(edited);
+	const { pid } = await f.waitEvent("modelLoaded");
+	process.kill(pid, "SIGKILL");
+	await f.waitEvent("stopGesture", 1, ui.diagnostics);
+	assert.deepEqual(await f.events("drained"), [], "recorder must still be holding the valid tail");
+	assert.match(ui.statuses.at(-1), /stopping/i);
+	const cancel = ui.command("cancel");
+	try {
+		await idle(ui);
+	} finally {
+		await f.gate("release-drain");
+		await cancel;
+	}
+	const drained = await f.waitEvent("drained", 1, ui.diagnostics);
+	assert.equal(drained.pcmSha256, sha(fullInput));
+	assert.deepEqual(await f.events("clip"), [], "canceled take reached retry");
+	assert.deepEqual(await readRows(), [], "canceled recovery published a history row");
+	assert.deepEqual(await f.audio(), [], "canceled recovery published audio");
+	await ui.command("last");
+	assertUntouched(ui, edited);
+});
+
 test("Pi ordinary live refinement cannot treat a premature done as the missing ACK", posix, async (t) => {
 	const f = await isolatedJourney(t, startingLive);
 	const ui = await f.host();

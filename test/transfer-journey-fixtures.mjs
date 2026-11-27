@@ -51,7 +51,15 @@ const has = (name) => existsSync(join(root, name));
 `;
 
 const captureSource = `
-let audio, timer, header = false, block = false, followup = false;
+let audio, timer, header = false, block = false, followup = false, stopping = false;
+function requestStop() {
+  if (stopping) return;
+  stopping = true;
+  clearInterval(timer);
+  log("stopGesture", { reason: "recorder-stop" });
+  if (!control.holdDrain) return finish();
+  timer = setInterval(() => { if (has("release-drain")) finish(); }, 10);
+}
 function finish() {
   clearInterval(timer);
   const pcm = control.pcm === "zero" ? zeros : control.pcmByte ? Buffer.alloc(voiced.length, control.pcmByte) : voiced;
@@ -61,7 +69,6 @@ function finish() {
   if (control.damage === "replace") renameSync(audio, audio + ".original");
   if (control.damage === "invalid") writeFileSync(audio, "RIFF but no valid WAV".repeat(40));
   else writeFileSync(audio, wav(payload));
-  log("stopGesture", { reason: "recorder-stop" });
   log("drained", { bytes: payload.length, pcmSha256: sha(payload) });
   process.exit(0);
 }
@@ -95,8 +102,8 @@ if (args.includes("-sources") || args.includes("-list_devices")) {
   process.stderr.write("[Parsed_volumedetect_0 @ fixture] max_volume: " + (control.pcm === "zero" ? "-91.0" : "-12.0") + " dB\\n");
 } else if (args.at(-1)?.endsWith(".wav") && args.includes("-i") && ["pulse", "avfoundation"].includes(args[args.indexOf("-f") + 1])) {
   audio = args.at(-1);
-  process.on("SIGINT", finish);
-  process.stdin.on("data", (data) => { if (data.includes(113)) finish(); });
+  process.on("SIGINT", requestStop);
+  process.stdin.on("data", (data) => { if (data.includes(113)) requestStop(); });
   log("trigger", { role: "recorder", input: args[args.indexOf("-i") + 1] });
   timer = setInterval(poll, 10);
 } else if (args.at(-1)?.endsWith(".wav") && args.includes("-i") && !args.includes("-af")) {
@@ -228,7 +235,7 @@ export async function fixtures(root) {
 		configure: (overrides) => writeFile(configPath, JSON.stringify({ ...settings, ...overrides }), { mode: 0o600 }),
 		control: (state) => writeFile(join(root, "control.json"), JSON.stringify({ text: publicText, ...state })),
 		gate: (name) => writeFile(join(root, name), "on"),
-		reset: () => Promise.all(["fixture.jsonl", "header", "block", "followup", "unplug", "bad-done", "sigint-handler-ready"].map((name) => rm(join(root, name), { force: true }))),
+		reset: () => Promise.all(["fixture.jsonl", "header", "block", "followup", "unplug", "bad-done", "release-drain", "sigint-handler-ready"].map((name) => rm(join(root, name), { force: true }))),
 	};
 }
 
