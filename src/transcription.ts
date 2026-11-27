@@ -70,11 +70,12 @@ export async function transcribeInstalledWhisper(binary: string, model: string, 
 }
 
 function observedWhisperCompute(stderr: string): Traits["actualCompute"] {
-	if (/whisper_backend_init(?:_gpu)?: failed to initialize/iu.test(stderr)) return "unknown";
-	if (/whisper_backend_init_gpu: using .*Metal|ggml_backend_metal_device_init:.*using/iu.test(stderr)) return "metal";
-	if (/whisper_backend_init_gpu: using .*Vulkan/iu.test(stderr)) return "vulkan";
-	if (/whisper_backend_init: using (?!CPU\b)/iu.test(stderr)) return "unknown";
-	if (/whisper_backend_init_gpu: no GPU found|whisper_backend_init: using CPU backend/iu.test(stderr)) return "cpu";
+	if (/^whisper_backend_init(?:_gpu)?: failed to initialize/imu.test(stderr)) return "unknown";
+	// ggml may enumerate or initialize device metadata without Whisper binding that device.
+	if (/^whisper_backend_init_gpu: using [^\r\n]*Metal/imu.test(stderr)) return "metal";
+	if (/^whisper_backend_init_gpu: using [^\r\n]*Vulkan/imu.test(stderr)) return "vulkan";
+	if (/^whisper_backend_init(?:_gpu)?: using (?!CPU\b)/imu.test(stderr)) return "unknown";
+	if (/^(?:whisper_backend_init_gpu: no GPU found|whisper_backend_init: using CPU backend)/imu.test(stderr)) return "cpu";
 	return "unknown";
 }
 
