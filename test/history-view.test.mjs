@@ -47,8 +47,11 @@ function untilAbort(signal) {
 	return new Promise((_done, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
 }
 
-test("noninteractive library invocation does not create a screen", async () => {
-	for (const action of ["history", "import"]) await showLibrary({ mode: "rpc" }, action, new AbortController().signal);
+test("noninteractive library invocation does not create a screen", async (t) => {
+	const custom = t.mock.fn();
+	const ctx = { mode: "rpc", ui: { custom } };
+	for (const action of ["history", "import"]) await showLibrary(ctx, action, new AbortController().signal);
+	assert.equal(custom.mock.callCount(), 0);
 });
 
 test("history off does not read storage and opt-in requires explicit confirmation", async (t) => {
