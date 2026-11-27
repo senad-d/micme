@@ -15,7 +15,7 @@ Micme does not add install-time scripts such as `postinstall`, and package insta
 
 ## Microphone and local audio handling
 
-Micme records only when you run `/micme` or press the configured shortcut. It does not start recording from the extension factory at package load time.
+Micme records when you start a take with `/micme`, your configured shortcut, a confirmed microphone trial in `/micme setup`, or a confirmed processed clip in `/micme polish`. It does not start recording at package load time. Setup's local sample trial and the standalone WAV CLI do not open the microphone.
 
 The default recorder uses `ffmpeg` and your operating system's microphone APIs:
 
@@ -37,6 +37,8 @@ Micme spawns local processes for recording and transcription:
 - `whisper-cli` or `whisper-cpp` for whisper.cpp clip transcription, including optional live refinement.
 - `micme-live` for stream mode. Micme launches it without a shell and sends PCM over stdin; the worker does not open a microphone, download weights, or run a network service. Use a trusted executable on `PATH` or set `MICME_LIVE_BIN` to a trusted binary. See the [worker build guide](native/live/README.md) for the pinned source and its checksum.
 - `whisper` for the optional Python openai-whisper fallback.
+- [The optional `micme-recognizer` helper](native/recognizer/README.md) for supported installed native artifacts. This is process isolation, not a sandbox for untrusted executables.
+- `ffprobe` and `ffmpeg` for local media import, and `ffplay` for playback from the local library.
 - `python -I` only for optional Python Whisper model-name discovery in `/micme conf`; isolated mode avoids importing project-local Python files.
 - Optional user-provided shell commands in `MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`.
 
@@ -60,12 +62,13 @@ That redaction does not apply to hook output. When a custom transcriber exits wi
 
 ## Model downloads
 
-Automatic model downloads are enabled by default. Micme can contact Hugging Face when clip transcription or stream startup needs missing weights. Selecting a missing standard Whisper model in `/micme conf` can also trigger a download. Package installation and doctor do not download weights.
+Automatic model downloads are enabled by default. Micme can contact Hugging Face for missing managed weights during Pi setup, clip transcription, or stream startup. Package installation, doctor and the [standalone WAV CLI](README.md#offline-wav-cli) do not download weights.
 
-- **Whisper ASR weights:** Micme downloads recognized standard `ggml-<name>.bin` files from `https://huggingface.co/ggerganov/whisper.cpp/resolve/main`. That branch is not revision-pinned, and Micme does not verify those downloads against pinned SHA-256 digests. The cache is `MICME_MODEL_DIR` (default `~/.cache/whisper.cpp`). If `MICME_WHISPER_CPP_MODEL` points to a missing standard filename, Micme can download to that location, even outside the cache. Clip translation can resolve a sibling path; stream mode does not rewrite an explicit path. Micme does not infer download URLs from arbitrary model names, `.gguf` files, or custom transcriber hooks.
+- **Managed ASR weights:** Select a standard Whisper model by name or a qualified exact artifact. Micme uses a pinned source revision and checks the expected byte length and SHA-256 before accepting a managed file, including a pre-provisioned cache copy. The cache is `MICME_MODEL_DIR` (default `~/.cache/whisper.cpp`). A corrupt cached file is rejected, not silently overwritten. Confirmed managed removal only removes Micme-owned files; move or replace manually provisioned files yourself.
+- **Explicit Whisper ASR path:** `MICME_WHISPER_CPP_MODEL` names a user-managed file, even if its filename matches a standard weight. Micme does not download to or verify it against a catalog pin. Clip translation can resolve a sibling path; stream mode does not rewrite an explicit path. Micme does not infer download URLs from arbitrary model names, `.gguf` files, or custom transcriber hooks.
 - **Silero VAD weights (stream only):** The default is `vad/ggml-silero-v5.1.2.bin` under `MICME_MODEL_DIR`. Micme fetches the [artifact from `ggml-org/whisper-vad` at revision `9ffd54a1e1ee413ddf265af9913beaf518d1639b`](https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v5.1.2.bin). It checks the length (885,098 bytes) and SHA-256 (`29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf`) before publishing a download and checks the default file again at live startup. A corrupt cached file is rejected, not silently replaced. A `MICME_VAD_MODEL` override outside that default path must already exist as a regular file; Micme neither downloads it nor checks it against the standard digest. Use trusted weights.
 
-Downloads use a temporary file and move it into place after completion. Micme bounds header, body, and file-output inactivity to two minutes and attempts to remove temporary files on failure or cancellation. Concurrent startup requests for the same weight share one transfer within a Pi process; only cancellation by the last caller stops that transfer.
+Downloads stage bytes before publishing the verified file. Micme bounds header, body and file-output inactivity to two minutes. An interrupted resumable transfer can leave a checkpoint; it is not an installed model. Concurrent startup requests for the same weight share one transfer within a Pi process; only cancellation by the last caller stops that transfer.
 
 For offline use, build or install the worker if needed, provision the required weights beforehand, and set `MICME_AUTO_DOWNLOAD_MODEL` to `0` in `micme.json` or pass it to Pi in the shell:
 
@@ -73,7 +76,7 @@ For offline use, build or install the worker if needed, provision the required w
 MICME_AUTO_DOWNLOAD_MODEL=0 pi
 ```
 
-Use the standard cache paths or point `MICME_WHISPER_CPP_MODEL` and, for stream mode, `MICME_VAD_MODEL` at trusted local files. This setting controls Micme's downloader, not network use by Python Whisper or a custom command.
+Use the standard cache paths or point `MICME_WHISPER_CPP_MODEL` and, for legacy stream mode, `MICME_VAD_MODEL` at trusted local files. This setting controls Micme's downloader, not network use by Python Whisper, a custom command, or a [final processing](#final-processing-trust) provider or hook.
 
 ## Micme config handling
 
@@ -85,13 +88,23 @@ Micme reads `micme.json` from one directory and `/micme conf` saves to the same 
 
 If `micme.json` is missing in the selected directory, Micme does not look in the next directory. Micme reads only `MICME_*` runtime keys from JSON; shell environment variables override saved values. `/micme conf` writes only `MICME_*` values and preserves other JSON metadata.
 
-Micme does not discover project configs by default. But if you start Pi from a project directory with `PI_CODING_AGENT_DIR=.`, Micme reads and writes that project's `micme.json` as trusted user configuration. When used, [custom command hooks](#custom-command-risks) from that file (`MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`) run with your user permissions. Point the agent directory only at locations whose configuration you trust, and avoid placing secrets in custom commands.
+Micme does not discover project configs by default. But if you start Pi from a project directory with `PI_CODING_AGENT_DIR=.`, Micme reads and writes that project's `micme.json` as trusted user configuration. When used, [custom command hooks](#custom-command-risks) from that file (`MICME_RECORD_COMMAND` and `MICME_TRANSCRIBE_COMMAND`) run with your user permissions. The file can also select a provider or executable for explicit final processing. Point the agent directory only at locations whose configuration you trust, and avoid placing secrets in custom commands.
 
-## Telemetry and retention
+## Telemetry and transcript delivery
 
-Micme has no telemetry and does not use a remote speech-to-text service by default. Live drafts are not sent as prompts. Completed transcripts can become Pi prompts when you submit them, enable eligible auto-submit, or explicitly replay with auto-submit on. For local audio retention and cleanup, see [Microphone and local audio handling](#microphone-and-local-audio-handling).
+Micme has no telemetry. Built-in speech recognition runs locally. Live drafts are not sent as prompts. Completed transcripts can become Pi prompts when you submit them, enable eligible auto-submit, or explicitly replay with auto-submit on. Local recognition does not imply offline first use: see [Model downloads](#model-downloads). Your own custom commands can also contact the network.
 
-Local transcription does not imply offline first use: see [Model downloads](#model-downloads) for when Micme can contact Hugging Face. Your own custom commands can also contact the network.
+## Local history and retention
+
+`MICME_HISTORY` is off by default. If enabled, the library stores text and verified WAVs under `micme-library` in the selected agent directory. The SQLite index can include original, locally finished and optionally polished text. The store is private to the local user, not encrypted by Micme. Turning history off stops saving, browsing and automatic pruning; it does not erase what is already saved or affect [temporary audio and debugging copies](#microphone-and-local-audio-handling).
+
+History starts with no automatic expiration. Preview and confirm a policy under `/micme history` → **Retention…**. `MICME_RETENTION` proposes a policy (`never`, `count:N`, `days:3`, `days:14`, or `days:90`); setting it alone does not authorize deletion. A confirmed count or age policy deletes eligible library rows and their saved WAVs, including on later saves, unstars and enabled restarts. Starred and imported takes are exempt from automatic pruning. A count of zero prunes eligible takes after save; use history off if you do not want those takes written to the library at all. Explicitly deleting an import does not delete the original media file.
+
+## Final processing trust
+
+Ordinary dictation does not call a polishing provider or output hook. Only a confirmed [final processing action](README.md#optional-final-processing) can send the final transcript and instructions to the selected service; it does not send audio or live drafts. Check the destination and model before confirming. A remote service can retain what you send under its own terms. `MICME_POLISH_KEY_ENV` names a variable in your environment; do not put the key in `micme.json`. Requests stay with the selected origin: redirects are rejected, even without a key. Polishing failure leaves an unprocessed candidate and a warning rather than forwarding the request elsewhere.
+
+`MICME_OUTPUT_HOOK` is a separate, explicitly selected executable, not a recorder or transcriber shell template. On supported Unix platforms, Micme passes candidate text on stdin and uses stdout as the prospective output. A successful empty result suppresses that candidate; hook failure falls back to the pre-hook text with a warning. The hook runs with your user permissions and can read files or contact the network. Use only an absolute path to an executable you trust. A live preview never withdraws words already committed or changes ordinary replay.
 
 ## Reporting vulnerabilities
 

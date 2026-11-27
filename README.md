@@ -45,6 +45,9 @@ MicMe is a Pi extension for coding prompts. It records your microphone with `ffm
 - [Configuration](#configuration)
 - [Live Dictation](#live-dictation)
 - [Commands](#commands)
+- [Local History and Media Import](#local-history-and-media-import)
+- [Optional Final Processing](#optional-final-processing)
+- [Offline WAV CLI](#offline-wav-cli)
 - [Models and Backends](#models-and-backends)
 - [Troubleshooting](#troubleshooting)
 - [Diagnostics](#diagnostics)
@@ -166,13 +169,7 @@ Config saves are serialized in-process and across Pi processes with `micme.json.
 
 Numeric settings such as the transcription timeout and clip sample rates use bounded integer values. The timeout accepts `1000..3600000` ms and also bounds live stages such as model readiness, PCM acknowledgments, and finalization. See [`micme.schema.json`](micme.schema.json) for ranges and defaults.
 
-The usual setup path is to run:
-
-```text
-/micme conf
-```
-
-You can also edit the JSON manually. Minimal `micme.json`:
+Run `/micme setup` in the TUI to check prerequisites, choose a language and model, and review a local sample without opening the mic. **Try It: microphone** asks separately; stop it with the usual toggle. Neither trial inserts or sends text. Use `/micme conf` for general settings, or edit the JSON manually. Minimal `micme.json`:
 
 ```json
 {
@@ -259,16 +256,61 @@ Live capture is a growing 16 kHz mono signed 16-bit little-endian PCM WAV. The b
 | --- | --- |
 | `/micme` | Toggle recording. |
 | `/micme conf` | Open the TUI configuration screen. |
+| `/micme setup` | Check prerequisites, manage models, or try a review-only take. |
+| `/micme cancel` | Cancel the active Micme take or view without delivering a new result. |
+| `/micme history` | Open the opt-in [local take library](#local-history-and-media-import). |
+| `/micme import` | Queue local media in the library without writing to the prompt. |
+| `/micme polish` | Start a clip with explicitly confirmed final processing. |
+| `/micme preview` | Review processing of the saved live final outside the prompt. |
 | `/micme devices` | Show compact audio/video capture device inventory. |
 | `/micme last` | Replay the last saved transcript in this session. Pastes for review or sends/queues with auto-submit on. For live RPC, see [replay behavior](#dictate-and-review). |
 | `/micme audio` | Show the last kept audio directory. |
 | `/micme help` | Show short help. |
+
+Setup, history, import, polish and preview require the interactive TUI. Cancel also works in RPC.
+
+---
+
+## Local History and Media Import
+
+On Linux and macOS, open `/micme history` and confirm **Enable local history…** (or set `MICME_HISTORY=1`). History is off by default and is separate from session-only `/micme last` and the `MICME_KEEP_AUDIO` debugging setting. In the library you can review and copy saved text, play or seek verified audio (requires `ffplay`), retry recognition with the current installed model, star a take or confirm deletion.
+
+Use **Retention…** to preview which saved takes would be deleted before confirming a count or age limit. See [Local history and retention](SECURITY.md#local-history-and-retention) for what is stored, how a confirmed limit applies, and what turning history off does.
+
+To transcribe existing media into the library, use `/micme import` with history enabled. Enter one local path per line, select an installed model and confirm the queue. Import uses `ffprobe` and `ffmpeg` to decode the first audio track. It leaves the source alone and does not insert, send or run the output hook. Cancel jobs from the library; a retry without verified saved audio needs explicit source reselection. For a single compatible WAV without a library, use the CLI instead.
+
+## Optional Final Processing
+
+Select a provider with `MICME_POLISH_PROVIDER`. For HTTP providers, select the model with `MICME_POLISH_MODEL`; for a local or custom service, set its base URL in `MICME_POLISH_ENDPOINT`. `MICME_POLISH_PROMPT` is optional. If the service needs a key, `MICME_POLISH_KEY_ENV` names a variable in the launching environment, not the secret itself. To run an output hook with or without a provider, set `MICME_OUTPUT_HOOK` to an absolute path to a trusted executable. See [Final processing trust](SECURITY.md#final-processing-trust) before using either route.
+
+- **`/micme polish`** shows the configured route for confirmation before it starts a clip. Stop with the usual toggle. Processing applies to that take only; ordinary clip delivery settings still apply if there is a candidate. A successful empty hook result suppresses delivery.
+- **`/micme preview`** processes the saved live final only on request. Review or copy its candidate outside the editor; it never rewrites the prompt, sends/queues a message, or changes `/micme last`.
+
+## Offline WAV CLI
+
+`micme-transcribe` runs one local file using an installed model. It needs neither Pi nor a microphone, and never downloads weights, opens the library, runs an output hook, or pastes/submits text. Use a regular mono 16 kHz signed 16-bit PCM WAV; for other input formats, use [media import](#local-history-and-media-import) or convert the file separately.
+
+Run the package's installed bin on Node.js 22.19.0 or later:
+
+```bash
+micme-transcribe --list-models
+micme-transcribe --list-devices
+micme-transcribe --model "$MODEL_ID" --device auto --repeat 2 --json ./take.wav
+```
+
+Set `MODEL_ID` to an exact ID from the model list. Use `auto`, a listed backend (`cpu`, `metal`, `vulkan`), or an exact listed device ID. `--json` also works with either listing. Without it, transcription prints text; with it, transcription prints one object with `text`, `language`, `audioSamples`, one `elapsedMs` per repeat in `runs`, and `model`, `requestedDevice`, `device`, and `boundDevice`. `--repeat` takes a positive integer and defaults to one. The result reports the observed backend and runtime device identity for the final run, not a guess from enumeration. Unobserved values are `unknown` for backend and `null` for device identity.
+
+From a checkout with dependencies installed, run `npm run build:doctor` to compile both standalone bins. Run the CLI with `node dist/doctor/scripts/transcribe.mjs`. For Whisper install `whisper-cli` (or set `MICME_WHISPER_CPP_BIN`) and provision the chosen weights before running. If using a supported native artifact, follow the [optional recognizer build guide](native/recognizer/README.md) and install the exact weights. Discovery does not prove a backend or device can load your model.
+
+Diagnostics go to stderr. Exit `0` means success; `2` means invalid usage or WAV (check the flags or convert the file); `1` means provisioning, device, or inference failure (check installed weights and the backend, then list choices again). Use [doctor](#diagnostics) for local prerequisite and model-integrity repair hints; rerun the CLI with a supported listed device rather than assuming a GPU is available.
 
 ---
 
 ## Models and Backends
 
 In clip mode, `MICME_TRANSCRIBE_BACKEND` accepts `whisper.cpp`, `python`, `custom`, or `auto`. The whisper.cpp clip backend uses `whisper-cli` or `whisper-cpp`, Python Whisper uses the `whisper` CLI with `MICME_WHISPER_MODEL`, and the custom backend uses `MICME_TRANSCRIBE_COMMAND`.
+
+The optional native route is separate. In `/micme conf`, **Qualified artifact** offers installed variants with evidence for the selected task and language. **Requested compute** sets a preference for that artifact; it does not probe or prove the current binding. Pick **Legacy dictation** to clear the optional selection. See the [optional recognizer build guide](native/recognizer/README.md) for supported variants and prerequisites.
 
 For both the whisper.cpp clip backend and the live worker, `MICME_WHISPER_CPP_MODEL` selects a local model file. `MICME_DEFAULT_WHISPER_CPP_MODEL` overrides the model by name instead, resolving `ggml-<name>.bin` in `MICME_MODEL_DIR`. Leave both unset for the built-in defaults: `small.en` for clip (`small` for translation), `base.en` for English live dictation, and `base` for live language detection, non-English input, or translation. Saved model choices are not changed. See [Model downloads](SECURITY.md#model-downloads) for weight sources and how to disable automatic downloads.
 
@@ -316,7 +358,7 @@ From a source checkout:
 npm run doctor
 ```
 
-The doctor reports Node, Pi, recorder and clip backend availability, and the requested and effective transcription configuration. In stream mode it reports the worker, ASR and VAD paths, effective language, refinement flag, and ignored legacy settings if configured. It checks for the VAD file and runs the worker's version probe without capturing audio or downloading weights. A successful probe means Worker v1 is available, not that the models can load or that dictation works with your microphone. Custom command values are redacted.
+The doctor reports Node, Pi, recorder and clip backend availability, and the requested and effective transcription configuration. In stream mode it reports the worker, ASR and VAD paths, effective language, refinement flag, and ignored legacy settings if configured. It checks for the VAD file and runs the worker's version probe without capturing audio or downloading weights. A successful probe means Worker v1 is available, not that the models can load or that dictation works with your microphone. Doctor distinguishes a verified managed file from a present user-managed override. It does not open the history library or test a processing route. Custom command values are redacted.
 
 For live timings and backlog, start Pi with `MICME_STREAM_DIAGNOSTICS=1`. The opt-in notifications show model load time and counts, time to the first draft (if any), captured samples, peak lag in samples, VAD frames, and ASR call count and time. These notifications do not include transcript text.
 
