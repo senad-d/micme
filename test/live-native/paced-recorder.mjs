@@ -25,6 +25,7 @@ try {
 		const target = Math.min(pcm.length, Math.floor((clock() - start) / 20) * RATE / 25);
 		if (target <= pos) continue;
 		writeAll(pcm.subarray(pos, target), pos + 44);
+		if (pos === 0) log("capture-first", { samples: target / 2 });
 		pos = target;
 		maxPaceDelayMs = Math.max(maxPaceDelayMs, clock() - start - pos / 32);
 		if (pos === pcm.length) log("capture-end", { samples: pos / 2, maxPaceDelayMs });
