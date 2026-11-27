@@ -290,7 +290,7 @@ To transcribe existing media into the library, use `/micme import` with history 
 Select a provider with `MICME_POLISH_PROVIDER`. For HTTP providers, select the model with `MICME_POLISH_MODEL`; for a local or custom service, set its base URL in `MICME_POLISH_ENDPOINT`. `MICME_POLISH_PROMPT` is optional. If the service needs a key, `MICME_POLISH_KEY_ENV` names a variable in the launching environment, not the secret itself. To run an output hook with or without a provider, set `MICME_OUTPUT_HOOK` to an absolute path to a trusted executable. See [Final processing trust](SECURITY.md#final-processing-trust) before using either route.
 
 - **`/micme polish`** shows the configured route for confirmation before it starts a clip. Stop with the usual toggle. Processing applies to that take only; ordinary clip delivery settings still apply if there is a candidate. A successful empty hook result suppresses delivery.
-- **`/micme preview`** processes the saved live final only on request. Review or copy its candidate outside the editor; it never rewrites the prompt, sends/queues a message, or changes `/micme last`.
+- **`/micme preview`** processes the saved live final only on request. Use this command from an **empty composer**: submitting a slash command in Pi can clear an existing draft, and Escape does not restore it. Save your draft elsewhere first. The preview shows its candidate outside the editor; it does not send or queue a message or change `/micme last`.
 
 ## Offline WAV CLI
 
