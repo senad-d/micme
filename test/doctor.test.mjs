@@ -323,24 +323,26 @@ test("clip doctor preserves auto priority for custom, cached whisper.cpp, and Py
 	}
 });
 
-function overrideStandardPin(name, bytes) {
-	// Replace only the ledger metadata in the child: exercise the real offline
-	// verifier with small test bytes, without model downloads or test-only APIs.
-	const source = new URL("../src/transfer/catalog-data.ts", import.meta.url).href;
-	const sha256 = createHash("sha256").update(bytes).digest("hex");
-	const fixture = `
-		export * from ${JSON.stringify(source)};
-		import { STANDARD_WHISPER as rows } from ${JSON.stringify(source)};
-		export const STANDARD_WHISPER = rows.map((entry) => entry.name === ${JSON.stringify(name)}
-			? { ...entry, row: { ...entry.row, blobs: [{ ...entry.row.blobs[0], bytes: ${bytes.length}, sha256: ${JSON.stringify(sha256)} }] } }
-			: entry);
-	`;
+function overrideCatalogFixture(fixtureSource) {
+	// Replace only ledger metadata in the child to exercise the real offline verifier.
+	const source = JSON.stringify(new URL("../src/transfer/catalog-data.ts", import.meta.url).href);
+	const fixture = `export * from ${source};\n${fixtureSource(source)}`;
 	return `data:text/javascript,${encodeURIComponent(`
 		import { registerHooks } from 'node:module';
 		registerHooks({ resolve(specifier, context, nextResolve) {
 			return nextResolve(specifier === './catalog-data.ts' ? ${JSON.stringify(`data:text/javascript,${encodeURIComponent(fixture)}`)} : specifier, context);
 		} });
 	`)}`;
+}
+
+function overrideStandardPin(name, bytes) {
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	return overrideCatalogFixture((source) => `
+		import { STANDARD_WHISPER as rows } from ${source};
+		export const STANDARD_WHISPER = rows.map((entry) => entry.name === ${JSON.stringify(name)}
+			? { ...entry, row: { ...entry.row, blobs: [{ ...entry.row.blobs[0], bytes: ${bytes.length}, sha256: ${JSON.stringify(sha256)} }] } }
+			: entry);
+	`);
 }
 
 test("doctor distinguishes verified, missing and corrupt managed files without repairing them", async (t) => {
@@ -405,6 +407,51 @@ test("doctor labels an explicit model in the managed cache as a user-managed ove
 	});
 	assert.match(getDoctorField(output, "ASR integrity"), /present.*user-managed.*not verified/);
 	assert.doesNotMatch(output, /^✓ ASR integrity:|^! ASR integrity: corrupt/m);
+});
+
+test("doctor verifies native pins offline without claiming local runtime qualification", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-native-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const artifact = referenceRows().find(({ id }) => id === "moonshine-streaming-tiny")?.variants.find(({ measurements }) =>
+		measurements.some(({ disposition }) => disposition === "adapted-verified"));
+	assert.ok(artifact);
+	const [blob] = artifact.blobs;
+	const modelDir = join(root, "models");
+	const preseeded = join(modelDir, blob.path);
+	const managedDir = join(modelDir, `.micme-managed-${createHash("sha256").update(artifact.id).digest("hex")}`);
+	const managed = join(managedDir, blob.path);
+	const helper = join(root, "micme-recognizer");
+	await createLoggedCommand(helper);
+	const bytes = Buffer.from("native model fixture");
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	const pins = overrideCatalogFixture((source) => `
+		import { REVIEWED_EXPORTS as rows } from ${source};
+		export const REVIEWED_EXPORTS = rows.map((row) => row.id === ${JSON.stringify(artifact.id)}
+			? { ...row, blobs: [{ ...row.blobs[0], bytes: ${bytes.length}, sha256: ${JSON.stringify(sha256)} }] }
+			: row);
+	`);
+	const run = runNode.bind(undefined, ["--import", noDownload, "--import", pins, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, root), MICME_ARTIFACT: artifact.id, MICME_MODEL_DIR: modelDir, MICME_AUTO_DOWNLOAD_MODEL: "1",
+	});
+	assert.match(run(), /^! ASR integrity: missing;.*install.*exact pinned.*offline/m);
+	await assert.rejects(access(modelDir), { code: "ENOENT" });
+	await mkdir(managedDir, { recursive: true });
+	await writeFile(managed, bytes);
+	assert.ok(run().split("\n").some((line) => line.startsWith("✓ ASR integrity: verified") && line.endsWith(`primary: ${managed}`)));
+
+	const corrupt = Buffer.alloc(bytes.length);
+	await writeFile(preseeded, corrupt);
+	const rejected = run();
+	assert.match(rejected, /^! ASR integrity: corrupt;.*SHA-256/m);
+	assert.doesNotMatch(rejected, /^✓ ASR integrity:/m); // Do not fall back when the chosen preseed is corrupt.
+	assert.deepEqual(await readFile(preseeded), corrupt);
+	await writeFile(preseeded, bytes);
+	const verified = run();
+	assert.ok(verified.split("\n").some((line) => line.startsWith("✓ ASR integrity: verified") && line.endsWith(`primary: ${preseeded}`)));
+	assert.match(getDoctorField(verified, "actual compute and bound device"), /unknown.*not loaded/);
+	assert.match(getDoctorField(verified, "capture readiness"), /not tested.*no samples observed/);
+	assert.doesNotMatch(verified, /^✓ (?:effective backend|live worker protocol):/m);
+	await assert.rejects(access(`${helper}.args`), { code: "ENOENT" });
 });
 
 test("an explicit unqualified artifact is not reported as the legacy Worker v1 selection", { skip: process.platform === "win32" }, async (t) => {
