@@ -11,6 +11,7 @@ const USE_PROC_FD = process.platform === "linux";
 const DARWIN = process.platform === "darwin";
 const O_CLOEXEC = DARWIN ? 0x1000000 : 0x80000;
 const AT_REMOVEDIR = DARWIN ? 0x80 : 0x200;
+const LOCK_EXCLUSIVE_NONBLOCKING = 2 | 4;
 const NUL = Buffer.alloc(1);
 let api: ReturnType<typeof loadPosixApi> | undefined;
 
@@ -26,6 +27,39 @@ function loadPosixApi() {
 		renameat: libc.func("int renameat(int, const char *, int, const char *)"),
 		unlinkat: libc.func("int unlinkat(int, const char *, int)"),
 	};
+}
+
+function loadPrivateDirectoryApi() {
+	const koffi: typeof import("koffi") = requireNative("koffi");
+	const libc = koffi.load(null);
+	return {
+		errno: koffi.errno,
+		flock: libc.func("int flock(int, int)"),
+		move: libc.func(DARWIN ? "int renameatx_np(int, const char *, int, const char *, unsigned int)" : "int renameat2(int, const char *, int, const char *, unsigned int)"),
+		acl: DARWIN ? {
+			get: libc.func("void *acl_get_fd_np(int, int)"),
+			entry: libc.func("int acl_get_entry(void *, int, void *)"),
+			free: libc.func("int acl_free(void *)"),
+			pointerSize: koffi.sizeof("void *"),
+		} : undefined,
+	};
+}
+
+let privateApi: ReturnType<typeof loadPrivateDirectoryApi> | undefined;
+
+export function hasExtendedPosixAcl(fd: number) {
+	// Linux POSIX ACL permissions for named users/groups are bounded by the
+	// group mode bits. Darwin extended ACLs can grant independent access.
+	if (!DARWIN) return false;
+	const { acl, errno } = privateApi ??= loadPrivateDirectoryApi();
+	const handle = acl!.get(fd, 0x100); // ACL_TYPE_EXTENDED
+	if (handle === null) return getSystemErrorName(-errno()) !== "ENOENT";
+	try {
+		const result = acl!.entry(handle, 0, Buffer.alloc(acl!.pointerSize)); // ACL_FIRST_ENTRY
+		return result !== -1 || getSystemErrorName(-errno()) !== "EINVAL";
+	} finally {
+		acl!.free(handle);
+	}
 }
 
 function checked(result: number, name: string) {
@@ -215,6 +249,23 @@ export class PosixDirectory {
 		if (this.procPath && target.procPath) return renameSync(join(this.procPath, name), join(target.procPath, targetName));
 		api ??= loadPosixApi();
 		checked(api.renameat(this.fd, name, target.fd, targetName), name);
+	}
+
+	/** Never overwrite a destination, including an unexpected replacement. */
+	moveExclusive(name: string, targetName: string) {
+		const native = privateApi ??= loadPrivateDirectoryApi();
+		if (native.move(this.fd, name, this.fd, targetName, DARWIN ? 4 : 1) !== -1) return; // RENAME_EXCL / RENAME_NOREPLACE
+		const code = getSystemErrorName(-native.errno());
+		throw Object.assign(new Error("Micme could not claim a private directory entry."), { code });
+	}
+
+	/** The lock covers the held directory, across processes, until close/crash. */
+	tryLockExclusive() {
+		const native = privateApi ??= loadPrivateDirectoryApi();
+		if (native.flock(this.fd, LOCK_EXCLUSIVE_NONBLOCKING) === 0) return true;
+		const code = getSystemErrorName(-native.errno());
+		if (code === "EAGAIN" || code === "EWOULDBLOCK" || code === "EINTR") return false;
+		throw new Error("Micme could not lock its private directory.");
 	}
 
 	async clear() {
