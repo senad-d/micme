@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { reloadMicmeConfig } from "../src/config.ts";
-import { ensureWhisperCppModel, resolveWhisperCppModel } from "../src/models.ts";
+import { ensureWhisperCppModel, ensureWhisperVadModel, getWhisperVadModelPath, resolveWhisperCppModel } from "../src/models.ts";
 import { getManagedWhisperVariant } from "../src/transfer/catalog.ts";
 import { ensureManaged, ensurePinnedModelFile, removeManaged, removePinnedModelFiles } from "../src/transfer/managed.ts";
 
@@ -112,6 +112,23 @@ test("a symlink to valid bytes is not a managed cache hit or removal target", { 
 	assert.equal(await readFile(manual, "utf8"), contents);
 });
 
+test("a managed subdirectory cannot be reached through a symlink at the cache root", { skip: process.platform === "win32" }, async (t) => {
+	const { root } = await setup(t);
+	const cache = join(root, "cache");
+	const other = join(root, "other");
+	const target = join(cache, "owned", blob.path);
+	const redirected = join(other, "owned", blob.path);
+	setSettings({ MICME_MODEL_DIR: cache });
+	const fetch = t.mock.method(globalThis, "fetch", async () => new Response(contents));
+	await ensurePinnedModelFile(blob, target, {});
+	await rename(cache, other);
+	await symlink(other, cache, "dir");
+	await assert.rejects(ensurePinnedModelFile(blob, target, { missing: "offline" }), { code: "unsafe" });
+	assert.throws(() => removeFixture(target), { code: "unsafe" });
+	assert.equal(await readFile(redirected, "utf8"), contents);
+	assert.equal(fetch.mock.callCount(), 1);
+});
+
 test("a cancelled transfer resumes at its saved offset only with the exact 206", async (t) => {
 	const { target } = await setup(t);
 	const requests = [];
@@ -214,6 +231,24 @@ test("a cancelled waiter leaves a shared verified install running for its peer",
 	assert.equal(await readFile(target, "utf8"), contents);
 });
 
+test("cancelling on the final byte progress does not publish the model", async (t) => {
+	const { target } = await setup(t);
+	const controller = new AbortController();
+	t.mock.method(Date, "now", () => 2_000); // The second chunk arrives within the progress throttle.
+	t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+		start(body) {
+			body.enqueue(Buffer.from(prefix));
+			body.enqueue(Buffer.from(contents.slice(offset)));
+			body.close();
+		},
+	})));
+	await assert.rejects(ensurePinnedModelFile(blob, target, {
+		signal: controller.signal,
+		onProgress(got, total) { if (got === total) controller.abort(); },
+	}), { name: "AbortError" });
+	await assert.rejects(readFile(target), { code: "ENOENT" });
+});
+
 test("publication does not overwrite a manual file that appeared during transfer", async (t) => {
 	const { target } = await setup(t);
 	t.mock.method(globalThis, "fetch", async () => {
@@ -285,6 +320,15 @@ test("an explicit ASR path at the standard location remains manual, even if miss
 	await assert.rejects(ensureWhisperCppModel(target), /user-managed file/);
 	await writeFile(target, "manual model bytes");
 	await ensureWhisperCppModel(target);
+});
+
+test("an explicit VAD path at the standard location cannot trigger a managed download", async (t) => {
+	await setup(t);
+	const target = getWhisperVadModelPath();
+	setSettings({ MICME_VAD_MODEL: target });
+	const fetch = t.mock.method(globalThis, "fetch", () => assert.fail("explicit VAD paths must not initiate a download"));
+	await assert.rejects(ensureWhisperVadModel(target), /explicit model path/);
+	assert.equal(fetch.mock.callCount(), 0);
 });
 
 test("the catalog service requires an exact qualified pin and honors offline authorization", async (t) => {
