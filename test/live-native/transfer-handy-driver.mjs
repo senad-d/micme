@@ -21,6 +21,7 @@ const data = `${root}/bin/Data`;
 const fixture = `${root}/fixture.wav`;
 const settings = `${data}/settings_store.json`;
 const display = ":92";
+export const privateDisplay = "Xvfb/X11";
 const runtime = "/tmp/handy-runtime"; // On the sandbox's tmpfs, not the host work root.
 const bus = `unix:path=${runtime}/session-bus`;
 const singleInstance = "com.pais.handy.SingleInstance";
@@ -459,7 +460,7 @@ async function verifyCaptureRoute(app, target, index) {
 		}
 		return streams?.length === 1 && app.state.ready;
 	}, 8_000, new HandyGap("no-observer", "The owned Handy capture stream did not prove private loopback sample readiness; no fixture was played.", "failed"));
-	report("route");
+	report("route", { source: loopbackSource });
 }
 
 async function playPaced(spec) {

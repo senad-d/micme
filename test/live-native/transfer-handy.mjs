@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { RATE, sha256, wavHeader } from "./corpus.mjs";
 import { fixtureFiles, pcmFromWav } from "./transfer-fixtures.mjs";
 import { emptyTake } from "./transfer-runner.mjs";
-import { HandyGap, launchHandy, loopbackSource, namespaces, verifyTools } from "./transfer-handy-driver.mjs";
+import { HandyGap, launchHandy, loopbackSource, namespaces, privateDisplay, verifyTools } from "./transfer-handy-driver.mjs";
 
 export const handyTag = "v0.10.2";
 export const handyCommit = "a822741f9c697b6f6a00c557e4817bf59ae70867";
@@ -14,6 +14,8 @@ const digest = /^[0-9a-f]{64}$/u;
 const modelName = /^[a-z0-9][a-z0-9_.-]{0,239}\.(?:bin|gguf)$/iu;
 const modelId = /^[a-z0-9][a-z0-9_./-]{0,239}$/iu;
 const negative = new Set(["silence", "noise", "immediate"]);
+// The immutable P1 slots name the private monitor condition, not its Pulse source name.
+const frozenMonitor = "private PulseAudio monitor (planned)";
 const maxWavBytes = 64 * 1024 * 1024;
 const sileroSha256 = "0d871a800c420fdd5d1b17a3aea4296d1c39608f0ff4a9295eb76457eb1c88e6";
 
@@ -168,11 +170,17 @@ async function packageResources(binary, validateVad, dir, signal) {
 }
 
 function localRig(trial) {
-	const observed = { os: process.platform, arch: process.arch, display: "x11", cpu: cpus()[0]?.model ?? null, hostVersion: release() };
-	for (const [key, value] of Object.entries(observed)) {
-		if (trial.rig[key] !== null && trial.rig[key] !== value) throw new HandyGap("identity-mismatch", "The frozen operating system, CPU, display or host version differs from this reference rig.");
+	if (![null, privateDisplay, "x11"].includes(trial.rig.display)) {
+		throw new HandyGap("identity-mismatch", "The frozen display does not match the private Xvfb/X11 display.");
 	}
-	return observed;
+	if (trial.rig.mic !== null && (trial.track === "pcm" || ![frozenMonitor, loopbackSource].includes(trial.rig.mic))) {
+		throw new HandyGap("identity-mismatch", "The frozen audio source does not match the private PulseAudio loopback.");
+	}
+	const host = { os: process.platform, arch: process.arch, cpu: cpus()[0]?.model ?? null, hostVersion: release() };
+	for (const [key, value] of Object.entries(host)) {
+		if (trial.rig[key] !== null && trial.rig[key] !== value) throw new HandyGap("identity-mismatch", "The frozen operating system, CPU or host version differs from this reference rig.");
+	}
+	return { ...host, display: trial.rig.display ?? privateDisplay };
 }
 
 function startupOutcome(error) {
@@ -218,10 +226,17 @@ export function projectHandyTake(trial, observations, bytes, observedRig) {
 
 function projectReceiver(take, result, observations) {
 	if (observations.some((o) => o.kind === "idleAudio")) take.idleMicOpen = false;
-	if (observations.some((o) => o.kind === "route")) take.trial.rig.mic = loopbackSource;
-	else {
+	const plannedMic = take.trial.rig.mic;
+	const route = observations.findLast((o) => o.kind === "route");
+	if (route?.source === loopbackSource) {
+		take.trial.rig.mic = plannedMic === frozenMonitor ? frozenMonitor : route.source;
+	} else {
+		take.trial.rig.mic = null;
 		take.events = take.events.filter(({ stage }) => stage !== "firstSample");
-		take.gaps.push({ stage: "firstSample", code: "no-observer", detail: "No confirmed owned Handy source-output was observed during recording." });
+		take.gaps.push({ stage: "firstSample", code: route?.source ? "identity-mismatch" : "no-observer",
+			detail: "No confirmed owned Handy source-output on the private loopback was observed during recording." });
+		// An unpinned immediate-stop control deliberately does not wait for a stream.
+		if (take.outcome === "completed" && (plannedMic !== null || take.trial.fixture !== "immediate" || route)) take.outcome = "failed";
 	}
 	take.gaps.push({ stage: "readyCue", code: "no-observer", detail: "Handy's sample log is not a witnessed overlay or audible cue." });
 	const last = take.mutations.at(-1);
