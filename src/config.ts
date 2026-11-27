@@ -32,6 +32,8 @@ import {
 	MIN_STREAM_WORDS_PER_CHUNK,
 	MIN_TRANSCRIBE_TIMEOUT_MS,
 } from "./constants.ts";
+import type { TransferOptions } from "./transfer/contracts.ts";
+import { decodeTransferOption, decodeTransferOptions, isTransferOptionKey, TransferOptionError } from "./transfer/options.ts";
 
 const MICME_CONFIG_FILE = "micme.json";
 const MICME_SCHEMA_URL = "https://raw.githubusercontent.com/senad-d/micme/main/micme.schema.json";
@@ -42,6 +44,7 @@ const requireModule = createRequire(import.meta.url);
 type JsonObject = Record<string, unknown>;
 type NumericSettingBounds = { minimum: number; maximum: number };
 type ConfigLockLease = { path: string; ownerPath: string; token: string };
+type LoadedConfig = { state: MicmeConfigState; transfer?: TransferOptions };
 
 class NonRegularConfigError extends Error {}
 
@@ -64,7 +67,7 @@ export const NUMERIC_CONFIG_BOUNDS = {
 
 let piAgentDirChecked = false;
 let piAgentDir: string | undefined;
-let micmeConfigState: MicmeConfigState = loadMicmeJson();
+let micmeConfigState: MicmeConfigState | undefined;
 const configWriteTails = new Map<string, Promise<void>>();
 
 export function getMicmeAgentDir() {
@@ -89,22 +92,63 @@ export function reloadMicmeConfig() {
 export function requireValidMicmeConfig() {
 	const state = reloadMicmeConfig();
 	if (!state.error) return state;
-	throw new Error(`Micme config is invalid at ${state.path}: ${state.error}. Fix or remove it before using Micme operational commands.`);
+	throw invalidConfigError(state);
 }
 
 export function loadMicmeJson(): MicmeConfigState {
+	return readMicmeConfig().state;
+}
+
+export function getTransferOptions(): TransferOptions {
+	const { state, transfer } = readMicmeConfig();
+	micmeConfigState = state;
+	if (!transfer) throw invalidConfigError(state);
+	return transfer;
+}
+
+function invalidConfigError(state: MicmeConfigState) {
+	return new Error(`Micme config is invalid at ${state.path}: ${state.error}. Fix or remove it before using Micme operational commands.`);
+}
+
+function getMicmeConfigState() {
+	return micmeConfigState ??= loadMicmeJson();
+}
+
+function readMicmeConfig(): LoadedConfig {
 	const path = getMicmeConfigPath();
+	let values: Record<string, string> = {};
 	try {
 		const source = readMicmeConfigSource(path);
-		if (source === undefined) return { path, values: {} };
-		const parsed: unknown = JSON.parse(source);
+		const parsed: unknown = source === undefined ? {} : JSON.parse(source);
 		if (!isJsonObject(parsed)) {
-			return { path, values: {}, error: "top-level value must be a JSON object" };
+			return { state: { path, values, error: "top-level value must be a JSON object" } };
 		}
-		return { path, values: extractMicmeValues(parsed) };
+		values = extractMicmeValues(parsed);
+		// Validate the winning source. Transfer settings are strings at rest; do not coerce
+		// invalid file values before checking them or reject a saved value masked by the shell.
+		const transfer = decodeTransferOptions((key) => process.env[key] ?? parsed[key]);
+		checkTransferBackend(transfer, values);
+		return { state: { path, values }, transfer };
 	} catch (error) {
-		return { path, values: {}, error: error instanceof NonRegularConfigError ? error.message : "file is not valid JSON" };
+		const reason = error instanceof NonRegularConfigError || error instanceof TransferOptionError ? error.message : "file is not valid JSON";
+		return { state: { path, values, error: reason } };
 	}
+}
+
+function checkTransferBackend(options: TransferOptions, values: Record<string, string>) {
+	if (options.MICME_ARTIFACT === null) return;
+	const backend = parseTranscribeBackend(configuredValue("MICME_TRANSCRIBE_BACKEND", values));
+	if (backend === "python" || backend === "custom") {
+		throw new TransferOptionError("MICME_ARTIFACT", "unset when MICME_TRANSCRIBE_BACKEND explicitly selects python or custom");
+	}
+	if (backend === "auto" && configuredValue("MICME_TRANSCRIBE_COMMAND", values)?.trim()) {
+		throw new TransferOptionError("MICME_ARTIFACT", "unset when MICME_TRANSCRIBE_COMMAND selects a custom backend in auto mode");
+	}
+	if (configuredValue("MICME_WHISPER_CPP_MODEL", values)?.trim()) {
+		throw new TransferOptionError("MICME_ARTIFACT", "unset when MICME_WHISPER_CPP_MODEL selects an exact user model path");
+	}
+	// An explicit whisper.cpp family is compatible only with the eligible artifact for
+	// that backend. The recognition owner checks it against the selected ledger entry.
 }
 
 function readMicmeConfigSource(path: string): string | undefined {
@@ -130,13 +174,19 @@ export async function writeMicmeConfigValue(key: string, value: string, options:
 }
 
 export function writeMicmeConfigValues(values: Record<string, string | undefined>, options: MicmeConfigWriteOptions = {}) {
-	for (const key of Object.keys(values)) {
-		if (!key.startsWith("MICME_")) return Promise.reject(new Error(`Micme config keys must start with MICME_: ${key}`));
+	const updates = { ...values };
+	try {
+		for (const [key, value] of Object.entries(updates)) {
+			if (!key.startsWith("MICME_")) throw new Error(`Micme config keys must start with MICME_: ${key}`);
+			if (isTransferOptionKey(key) && value !== undefined) decodeTransferOption(key, value);
+		}
+	} catch (error) {
+		return Promise.reject(error);
 	}
 
 	const configPath = getMicmeConfigPath();
 	const previous = configWriteTails.get(configPath) ?? Promise.resolve();
-	const writeOperation = commitMicmeConfigValues.bind(undefined, configPath, values, options);
+	const writeOperation = commitMicmeConfigValues.bind(undefined, configPath, updates, options);
 	const pending = previous.catch(ignoreConfigWriteFailure).then(writeOperation);
 	configWriteTails.set(configPath, pending);
 	return pending.finally(removeConfigWriteTail.bind(undefined, configPath, pending));
@@ -280,7 +330,7 @@ export function getLegacyStreamSettings() {
 }
 
 export function expandConfigPath(value: string) {
-	return expandEnvReferences(value, micmeConfigState.values);
+	return expandEnvReferences(value, getMicmeConfigState().values);
 }
 
 export function expandEnvReferences(value: string, configValues: Record<string, string>) {
@@ -292,7 +342,11 @@ export function expandEnvReferences(value: string, configValues: Record<string, 
 }
 
 export function env(name: string) {
-	return process.env[name] ?? micmeConfigState.values[name];
+	return process.env[name] ?? getMicmeConfigState().values[name];
+}
+
+function configuredValue(name: string, values: Record<string, string>) {
+	return process.env[name] ?? values[name];
 }
 
 export function getShortcutSettingValue() {
@@ -331,7 +385,11 @@ export function getLiveSpeechLanguage(translationSource = getTranslateToEnglishL
 }
 
 export function getTranscribeBackend(): TranscribeBackend {
-	return parseConfiguredChoice(env("MICME_TRANSCRIBE_BACKEND")?.trim(), TRANSCRIBE_BACKENDS, DEFAULT_TRANSCRIBE_BACKEND);
+	return parseTranscribeBackend(env("MICME_TRANSCRIBE_BACKEND"));
+}
+
+function parseTranscribeBackend(value: string | undefined): TranscribeBackend {
+	return parseConfiguredChoice(value?.trim(), TRANSCRIBE_BACKENDS, DEFAULT_TRANSCRIBE_BACKEND);
 }
 
 export function isTranscribeBackend(value: string | undefined): value is TranscribeBackend {
