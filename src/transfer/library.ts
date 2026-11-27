@@ -33,6 +33,7 @@ const STORE_DISABLED = "Micme local history is disabled.";
 const NO_INDEX = "Micme's local history index is missing.";
 const UNSAFE_STORE = "Micme could not establish a private local history store.";
 const NO_AUDIO = "Micme no longer has verified audio for this take.";
+const CLAIMED_STAMP_SUFFIX = ":claimed";
 const NEVER_ABORTED = new AbortController().signal;
 const activeRetries = new Set<string>();
 const TAKE_FIELDS = `id, created_utc AS createdUtc, source, filename, language, raw, local, polished, model_id AS modelId, starred, state,
@@ -317,16 +318,30 @@ export class LibraryStore {
 		this.check();
 		const receipt = rowReceipt(row);
 		if (receipt) {
-			const name = leafName(row.id);
 			const trash = leafName(row.id, ".deleting");
 			const stamp = receipt.stamp.slice(0, receipt.stamp.lastIndexOf(":")); // rename changes ctime
-			if (privateEntry(this.root, trash)) this.unlinkClaim(trash, receipt.identity, stamp);
-			else if (this.wavEntry(row)) this.claimAndUnlink(name, trash, receipt.identity, stamp);
+			if (!receipt.stamp.endsWith(CLAIMED_STAMP_SUFFIX)) this.claimDelete(row, trash, receipt.identity, stamp);
+			// Once the claim is recorded, the original name is no longer ours.
+			if (this.hasClaim(trash, receipt.identity, stamp)) this.root.unlinkFile(trash);
 		}
 		// Persist removal before forgetting the intent, also after a restart
 		// between unlink and the index commit.
 		fsyncSync(this.root.fd);
 		this.commit(() => this.db.prepare("DELETE FROM takes WHERE id = ? AND deleting = 1").run(row.id));
+	}
+
+	private claimDelete(row: StoredTake, trash: string, identity: string, stamp: string) {
+		if (!this.hasClaim(trash, identity, stamp) && this.wavEntry(row)) {
+			const name = leafName(row.id);
+			this.root.moveExclusive(name, trash);
+			try { if (!this.hasClaim(trash, identity, stamp)) throw new UnverifiedWav(); }
+			catch (error) { this.restoreClaim(trash, name); throw error; }
+		}
+		// Record the claim (or verified absence) before unlink. In a pending
+		// row the stamp's last component describes the binding, not the ctime.
+		fsyncSync(this.root.fd);
+		this.commit(() => this.db.prepare("UPDATE takes SET wav_stamp = ? WHERE id = ? AND deleting = 1")
+			.run(stamp + CLAIMED_STAMP_SUFFIX, row.id));
 	}
 
 	private claimAndUnlink(name: string, trash: string, expected: string, stamp?: string) {
@@ -340,9 +355,15 @@ export class LibraryStore {
 		try { this.root.moveExclusive(claimed, original); } catch { /* Preserve both entries for repair. */ }
 	}
 
-	private unlinkClaim(name: string, expected: string, stamp?: string) {
+	private hasClaim(name: string, expected: string, stamp?: string) {
 		const found = privateEntry(this.root, name);
-		if (!found || ownedIdentity(found) !== expected || (stamp !== undefined && contentStamp(found) !== stamp)) throw new UnverifiedWav();
+		if (!found) return false;
+		if (ownedIdentity(found) !== expected || (stamp !== undefined && contentStamp(found) !== stamp)) throw new UnverifiedWav();
+		return true;
+	}
+
+	private unlinkClaim(name: string, expected: string, stamp?: string) {
+		if (!this.hasClaim(name, expected, stamp)) throw new UnverifiedWav();
 		this.root.unlinkFile(name);
 	}
 

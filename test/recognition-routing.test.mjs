@@ -143,6 +143,23 @@ test("a saturated PCM read is acknowledged as catch-up without publishing its st
 	assert.deepEqual(updates.map(({ kind, to }) => [kind, to]), [["draft", 16_004], ["commit", 16_004]]);
 });
 
+test("the latest catch-up draft becomes visible after a fresh ACK even if its text did not change again", async () => {
+	const engine = new FakeNative({ stream: true });
+	const feed = engine.feed.bind(engine);
+	engine.feed = async (from, pcm, last, active) => {
+		const updates = await feed(from, pcm, last, active);
+		return !last && from > 0 ? [] : updates;
+	};
+	const updates = [];
+	const rec = await service(async () => engine).openRecognizer(base, (update) => updates.push(update), signal);
+	const backlog = Buffer.alloc(32_000, 12);
+	await rec.push(0, backlog, signal);
+	assert.deepEqual(updates, []);
+	await rec.push(16_000, waveform, signal);
+	assert.deepEqual(updates.map(({ kind, to }) => [kind, to]), [["draft", 16_000]]);
+	await rec.abort();
+});
+
 test("a different complete snapshot cannot finalize or publish an in-flight stream", async () => {
 	const updates = [];
 	const engine = new FakeNative({ stream: true });
@@ -228,6 +245,42 @@ test("bounded chunks cut in a pause without duplicating or dropping samples and 
 	for (const { from, to, evidence } of calls) assert.equal(evidence.inputPcmSha256, sha(pcm.subarray(from * 2, to * 2)));
 });
 
+test("file jobs cap and yield each chunk at the loaded model's smaller limit", async () => {
+	const pcm = Buffer.alloc(25 * 32_000, 12);
+	const queue = new RecognitionQueue();
+	const engine = new FakeNative();
+	engine.maxInputSamples = 10 * 16_000;
+	const chunks = [];
+	let foreground;
+	const api = service(async () => engine, { queue, observe: (event) => {
+		if (event.kind === "batch") chunks.push([event.from, event.to]);
+	} });
+	const final = await api.recognizeFile(audio(pcm), base, "import", (through) => {
+		if (through !== engine.maxInputSamples) return;
+		foreground = queue.acquire("foreground", signal).then((release) => { chunks.push("foreground"); release(); });
+	}, signal);
+	await foreground;
+	assert.equal(final.raw, "verified final verified final verified final");
+	assert.deepEqual(chunks, [[0, 160_000], "foreground", [160_000, 320_000], [320_000, 400_000]]);
+});
+
+test("accepted stream bias bypasses the second vocabulary pass even if settings change during a take", async () => {
+	const engine = new FakeNative({ stream: true, bias: true });
+	const feed = engine.feed.bind(engine);
+	engine.feed = async (...args) => (await feed(...args)).map((update) => update.kind === "commit" ? { ...update, text: "Ask jose." } : update);
+	const config = getMicmeConfigPath();
+	const configure = (word) => writeFileSync(config, JSON.stringify({ MICME_WORDS: JSON.stringify([word]) }));
+	configure("José");
+	const rec = await createRecognitionService({ load: async () => engine }).openRecognizer(base, discard, signal);
+	await rec.push(0, waveform, signal);
+	configure("Jóse");
+	const final = await rec.finish(audio(waveform), signal);
+	assert.equal(final.raw, "Ask jose.");
+	assert.equal(final.local, final.raw);
+	assert.deepEqual(final.rules.find(({ rule }) => rule === "bias"), { rule: "bias", result: "applied", reason: "applied" });
+	assert.equal(final.rules.find(({ rule }) => rule === "vocabulary").reason, "off");
+});
+
 test("chunk seams join CJK without an added space", async () => {
 	const pcm = Buffer.alloc(81 * 32_000, 12);
 	const fragments = ["東京", "駅。", "𠮷野"];
@@ -256,6 +309,20 @@ test("same-audio retry uses one fresh engine, then at most one announced CPU att
 	assert.deepEqual(attempts, ["auto", "announced", "cpu"]);
 });
 
+test("an Auto retry already running on CPU does not start a redundant CPU fallback", async () => {
+	const attempts = [];
+	const api = service(async ({ compute }) => {
+		attempts.push(compute);
+		const engine = new FakeNative({ actualCompute: "cpu", boundDevice: null });
+		engine.rejectRun = true;
+		return engine;
+	});
+	await assert.rejects(api.recognizeFile(audio(waveform), base, "retry", discard, signal, {
+		onCpuRecovery: () => assert.fail("Auto had already bound CPU"),
+	}), /inference failed/);
+	assert.deepEqual(attempts, ["auto"]);
+});
+
 test("a pinned device failure never changes the requested binding on retry", async () => {
 	let loads = 0;
 	const api = service(async () => {
@@ -281,6 +348,14 @@ test("cancellation during the first attempt suppresses the CPU attempt and a lat
 	}), /user canceled/);
 });
 
+test("cancellation in the final progress callback suppresses a completed file observation", async () => {
+	const cancel = new AbortController();
+	const finalEvents = [];
+	const api = service(async () => new FakeNative(), { observe: (event) => { if (event.kind === "final") finalEvents.push(event); } });
+	await assert.rejects(api.recognizeFile(audio(waveform), base, "import", () => cancel.abort(new Error("job canceled")), cancel.signal), /job canceled/);
+	assert.deepEqual(finalEvents, []);
+});
+
 test("warm engines are reused only after reset; explicit unload leaves the next take cold", async () => {
 	const built = [];
 	const api = service(async () => { const engine = new FakeNative({ stream: true }); built.push(engine); return engine; }, {
@@ -295,6 +370,25 @@ test("warm engines are reused only after reset; explicit unload leaves the next 
 	await take();
 	assert.equal(built.length, 2);
 	await api.unload();
+});
+
+test("canceling a background job does not evict a model already claimed by a foreground take", async () => {
+	const pcm = Buffer.alloc(41 * 32_000, 12);
+	const cancel = new AbortController();
+	const engine = new FakeNative();
+	const resident = { MICME_MODEL_IDLE: "immediate" };
+	const api = service(async () => engine, { settings: () => resident });
+	let foreground;
+	await assert.rejects(api.recognizeFile(audio(pcm), base, "import", () => {
+		resident.MICME_MODEL_IDLE = "never";
+		foreground = api.openRecognizer(base, discard, signal);
+		cancel.abort(new Error("job canceled"));
+	}, cancel.signal), /job canceled/);
+	assert.ok(foreground);
+	await finishTake(await foreground, waveform);
+	assert.equal(engine.closed, false);
+	await api.unload();
+	assert.equal(engine.closed, true);
 });
 
 test("the five-minute idle timeout unloads a reset engine without another take", async (t) => {

@@ -52,6 +52,20 @@ process.stdout.write('fixed language/task');
 	assert.deepEqual(result, { text: "fixed language/task", actualCompute: "vulkan", boundDevice: null });
 });
 
+test("installed Whisper does not report a probe-only Metal device as its loaded binding", { skip: process.platform === "win32" }, async (t) => {
+	const dir = await createTranscriptDir(t);
+	const model = join(dir, "manual.bin");
+	const cli = join(dir, "whisper-cli");
+	await writeFile(model, "manual model fixture");
+	await writeFile(cli, `#!${process.execPath}
+process.stderr.write('ggml_backend_metal_device_init: using default device\\nwhisper_backend_init_gpu: no GPU found\\n');
+process.stdout.write('CPU transcript');
+`, { mode: 0o700 });
+	const choice = { language: "en", task: "transcribe", compute: "cpu" };
+	const result = await transcribeInstalledWhisper(cli, model, join(dir, "audio.wav"), new RecordingDirectory(dir), choice, new AbortController().signal);
+	assert.deepEqual(result, { text: "CPU transcript", actualCompute: "cpu", boundDevice: null });
+});
+
 test("a successful custom hook with a writerless FIFO rejects promptly", { skip: process.platform === "win32" && "requires a POSIX FIFO" }, async (t) => {
 	const dir = await createTranscriptDir(t);
 	// Run in a disposable process so a blocked FIFO open cannot hang the test runner.

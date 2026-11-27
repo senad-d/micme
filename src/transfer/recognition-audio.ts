@@ -8,7 +8,7 @@ import { bindSnapshotSource, hashRecordingBytes } from "./capture.ts";
 import type { Signal, VerifiedAudio } from "./contracts.ts";
 
 const FRAME_BYTES = 2;
-const FRAME_MS = RATE / 50; // 20 ms energy windows
+const FRAME_SAMPLES = RATE / 50; // 20 ms energy windows
 const SEEK_START = 27 * RATE;
 const SEEK_END = 33 * RATE;
 const HARD_LIMIT = 40 * RATE;
@@ -73,6 +73,12 @@ export class VerifiedPcm {
 
 	digest(signal: Signal) { return hashRecordingBytes(this.file, this.offset, this.bytes, signal); }
 
+	async nextChunk(from: number, maxSamples: number, signal: Signal) {
+		const pcm = await this.read(from, Math.min(this.total - from, maxSamples, HARD_LIMIT), signal);
+		const cut = quietBoundary(pcm);
+		return cut ? pcm.subarray(0, cut) : pcm;
+	}
+
 	async withChunk<T>(pcm: Buffer, signal: Signal, consume: (path: string) => Promise<T>) {
 		const header = await readExact(this.file, 0, this.offset, signal);
 		header.writeUInt32LE(this.offset + pcm.length - 8, 4);
@@ -94,14 +100,15 @@ export class VerifiedPcm {
 // Look for a genuine quiet interval around the target. A cut owns each sample
 // exactly once; neither overlap nor textual deduplication can erase a real repeat.
 function quietBoundary(pcm: Buffer) {
+	if (pcm.length < SEEK_END * FRAME_BYTES) return 0;
 	let quiet = 0;
 	let cut = 0;
-	for (let i = SEEK_START; i + FRAME_MS <= SEEK_END; i += FRAME_MS) {
+	for (let i = SEEK_START; i + FRAME_SAMPLES <= SEEK_END; i += FRAME_SAMPLES) {
 		let sum = 0;
-		for (let j = i; j < i + FRAME_MS; j++) sum += Math.abs(pcm.readInt16LE(j * FRAME_BYTES));
-		quiet = sum / FRAME_MS <= 128 ? quiet + 1 : 0;
+		for (let j = i; j < i + FRAME_SAMPLES; j++) sum += Math.abs(pcm.readInt16LE(j * FRAME_BYTES));
+		quiet = sum / FRAME_SAMPLES <= 128 ? quiet + 1 : 0;
 		if (quiet >= 8) {
-			const mid = i + FRAME_MS - Math.floor(quiet * FRAME_MS / 2);
+			const mid = i + FRAME_SAMPLES - Math.floor(quiet * FRAME_SAMPLES / 2);
 			if (!cut || Math.abs(mid - 30 * RATE) < Math.abs(cut - 30 * RATE)) cut = mid;
 		}
 	}
