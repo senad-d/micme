@@ -161,6 +161,28 @@ test("rescoping a qualified row never carries forward its previous observations 
 	}
 });
 
+test("a reviewed ID cannot attach native evidence to different bytes", () => {
+	const exact = candidate();
+	const different = structuredClone(exact);
+	different.blobs[0].sha256 = "5".repeat(64);
+	const lookup = passEvidence(exact);
+	const scoped = applyCatalogEvidence(different, lookup, rig);
+	assert.equal(scoped.traits, null);
+	assert.notEqual(scoped.runtime, "passed");
+	assert.deepEqual(applyCatalogEvidence(different, lookup).measurements, []);
+});
+
+test("dropping the rig retains observations, not the previous qualification", () => {
+	const variant = candidate();
+	const lookup = passEvidence(variant);
+	const qualified = applyCatalogEvidence(variant, lookup, rig);
+	const unscoped = applyCatalogEvidence(qualified, lookup);
+	assert.deepEqual(unscoped.measurements, [cell]);
+	assert.notEqual(unscoped.runtime, "passed");
+	assert.equal(unscoped.traits, null);
+	assert.deepEqual(unscoped.languages, []);
+});
+
 test("passed flags cannot promote restricted rights, ambiguous traits or unverified tasks", () => {
 	const variant = candidate();
 	const passed = passEvidence(variant)(variant.id);
