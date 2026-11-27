@@ -180,6 +180,113 @@
     "MICME_TRANSCRIBE_COMMAND": {
       "type": "string",
       "description": "Advanced custom transcription shell command. Use only trusted commands; Micme cannot inspect which model it uses."
+    },
+    "MICME_ARTIFACT": {
+      "type": "string",
+      "pattern": "^$|^(?=[\\s\\S]*\\S)[^\\u0000-\\u001f\\u007f]*$",
+      "default": "",
+      "description": "Exact qualified ledger variant ID. Empty keeps the existing model resolver. Do not combine with an explicit conflicting backend or exact model path."
+    },
+    "MICME_COMPUTE": {
+      "type": "string",
+      "pattern": "^(?=[\\s\\S]*\\S)[^\\u0000-\\u001f\\u007f]*$",
+      "examples": ["auto", "cpu", "metal", "vulkan"],
+      "default": "auto",
+      "description": "For the optional adapter: auto, cpu, metal, vulkan, or an exact qualified runtime device ID."
+    },
+    "MICME_MODEL_IDLE": {
+      "type": "string",
+      "enum": ["immediate", "5min", "never"],
+      "default": "immediate",
+      "description": "Unload the optional model immediately, after five idle minutes, or only on request/shutdown. Does not keep the microphone open."
+    },
+    "MICME_CHUNKING": {
+      "$ref": "#/$defs/transferFlag",
+      "default": "1",
+      "description": "Enable chunking where supported by the optional adapter. Background jobs always use chunks."
+    },
+    "MICME_DETECTOR": {
+      "type": "string",
+      "enum": ["model", "silero", "off"],
+      "default": "model",
+      "description": "Speech detector for qualified optional adapter combinations; does not change Worker v1."
+    },
+    "MICME_PREFERRED_LANGUAGES": {
+      "$ref": "#/$defs/transferList",
+      "default": "[]",
+      "description": "JSON-encoded array of BCP-47 language tags, in preference order. Explicit language/translation remains authoritative. Do not include auto."
+    },
+    "MICME_WORDS": {
+      "$ref": "#/$defs/transferList",
+      "default": "[]",
+      "description": "JSON-encoded array of literal vocabulary words or phrases."
+    },
+    "MICME_FILLERS": {
+      "$ref": "#/$defs/transferList",
+      "default": "[]",
+      "description": "JSON-encoded array of literal filler phrases. Used only when filler removal is enabled and supported."
+    },
+    "MICME_LOCAL_LID": {
+      "$ref": "#/$defs/transferFlag",
+      "default": "0",
+      "description": "Allow qualified local language identification on eligible batch audio."
+    },
+    "MICME_REMOVE_FILLERS": {
+      "$ref": "#/$defs/transferFlag",
+      "default": "0",
+      "description": "Opt into supported local filler removal; preserve the raw final separately."
+    },
+    "MICME_SCRIPT": {
+      "type": "string",
+      "enum": ["as-spoken", "simplified", "taiwan", "hong-kong"],
+      "default": "as-spoken",
+      "description": "Local Chinese script preference where supported. Does not translate."
+    },
+    "MICME_HISTORY": {
+      "$ref": "#/$defs/transferFlag",
+      "default": "0",
+      "description": "Opt into saving local takes. Off does not open the library or delete existing rows."
+    },
+    "MICME_RETENTION": {
+      "type": "string",
+      "pattern": "^(?:never|count:[0-9]+|days:(?:3|14|90))$",
+      "default": "never",
+      "description": "Proposed history policy. N in count:N must be a nonnegative safe integer (0 is valid). Policy changes require confirmation before deleting; starred and imported takes are exempt."
+    },
+    "MICME_POLISH_PROVIDER": {
+      "type": "string",
+      "enum": ["", "local-openai", "custom-openai", "custom-anthropic", "openai", "anthropic", "groq", "cerebras", "openrouter", "zai", "bedrock-mantle", "apple-device"],
+      "default": "",
+      "description": "Optional provider for explicitly requested processing of final text. Empty selects no provider."
+    },
+    "MICME_POLISH_ENDPOINT": {
+      "type": "string",
+      "pattern": "^(?:$|[Hh][Tt][Tt][Pp][Ss]?://[^/\\s@?#\\\\]+(?:/[^\\s?#\\\\]*)?)$",
+      "default": "",
+      "description": "Explicit HTTP(S) base URL, without user info, query, or fragment. Do not put credentials in the URL."
+    },
+    "MICME_POLISH_MODEL": {
+      "type": "string",
+      "pattern": "^$|^(?=[\\s\\S]*\\S)[^\\u0000-\\u001f\\u007f]*$",
+      "default": "",
+      "description": "Model ID for the selected final-text provider."
+    },
+    "MICME_POLISH_PROMPT": {
+      "type": "string",
+      "default": "",
+      "description": "Instructions for explicitly requested polishing. Empty uses the conservative fidelity instruction."
+    },
+    "MICME_POLISH_KEY_ENV": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*)?$",
+      "default": "",
+      "description": "Name of the environment variable containing the selected provider's key. Never put the key itself in this file."
+    },
+    "MICME_OUTPUT_HOOK": {
+      "type": "string",
+      "pattern": "^(?:$|/[^\\u0000-\\u001f\\u007f]*)$",
+      "default": "",
+      "description": "Absolute path to an explicitly trusted Unix executable for final output. Empty disables it. No shell expansion."
     }
   },
   "patternProperties": {
@@ -196,6 +303,19 @@
     "stringFlag": {
       "type": "string",
       "enum": ["0", "1", "true", "false", "yes", "no", "on", "off"]
+    },
+    "transferFlag": {
+      "type": "string",
+      "enum": ["0", "1"]
+    },
+    "transferList": {
+      "type": "string",
+      "pattern": "^\\s*\\[[\\s\\S]*\\]\\s*$",
+      "contentMediaType": "application/json",
+      "contentSchema": {
+        "type": "array",
+        "items": { "type": "string", "pattern": "^(?=[\\s\\S]*\\S)[^\\u0000-\\u001f\\u007f]*$" }
+      }
     }
   }
 }

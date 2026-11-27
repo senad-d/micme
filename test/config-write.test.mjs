@@ -45,7 +45,7 @@ async function runChildWriter(root, key, value, mask = "") {
 	});
 }
 
-function runConfigFifoCheck(root, script, ...args) {
+function runConfigProbe(root, script, ...args) {
 	// A synchronous FIFO open cannot be interrupted by a timer in the child.
 	return execFileAsync(process.execPath, ["--input-type=module", "--eval", script, configModuleUrl, ...args], {
 		env: { ...process.env, PI_CODING_AGENT_DIR: root },
@@ -54,13 +54,34 @@ function runConfigFifoCheck(root, script, ...args) {
 	});
 }
 
+test("importing the config module does not open the agent config until requested", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-config-import-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "micme.json");
+	await writeFile(path, "{}\n");
+
+	await runConfigProbe(root, `
+		import assert from "node:assert/strict";
+		import fs from "node:fs";
+		import { syncBuiltinESMExports } from "node:module";
+		import { mock } from "node:test";
+		const [moduleUrl, path] = process.argv.slice(1);
+		const open = mock.method(fs, "openSync");
+		syncBuiltinESMExports();
+		const { loadMicmeJson } = await import(moduleUrl);
+		assert.ok(!open.mock.calls.some(({ arguments: [file] }) => file === path));
+		loadMicmeJson();
+		assert.ok(open.mock.calls.some(({ arguments: [file] }) => file === path), "the spy can observe explicit config access");
+	`, path);
+});
+
 test("importing config with a writerless FIFO returns an invalid config state", { skip: process.platform === "win32" && "requires a POSIX FIFO" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-config-fifo-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const path = join(root, "micme.json");
 	await execFileAsync("mkfifo", [path]);
 
-	const { stdout } = await runConfigFifoCheck(root, `
+	const { stdout } = await runConfigProbe(root, `
 		const { loadMicmeJson } = await import(process.argv[1]);
 		console.log(JSON.stringify(loadMicmeJson()));
 	`);
@@ -77,7 +98,7 @@ test("saving settings rejects a writerless config FIFO without replacing it", { 
 	await execFileAsync("mkfifo", [path]);
 
 	// Import with a missing config first to isolate the save path.
-	await runConfigFifoCheck(root, `
+	await runConfigProbe(root, `
 		import assert from "node:assert/strict";
 		const [moduleUrl, fifoDir] = process.argv.slice(1);
 		const { writeMicmeConfigValue } = await import(moduleUrl);
