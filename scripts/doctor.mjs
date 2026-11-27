@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { getPythonWhisperBinary, getWhisperCppBinary, resolveTranscriptionPlan } from "../src/backends.ts";
-import { env, getAudioInputConfigKey, getAutoDownloadModel, getConfiguredRecorderInput, getLegacyStreamSettings, getTranscribeBackend, getTranscriptionMode, getTransferOptions, getTranslateToEnglishLanguage, reloadMicmeConfig } from "../src/config.ts";
+import { env, expandConfigPath, getAudioInputConfigKey, getAutoDownloadModel, getConfiguredRecorderInput, getLegacyStreamSettings, getTranscribeBackend, getTranscriptionMode, getTransferOptions, getTranslateToEnglishLanguage, reloadMicmeConfig } from "../src/config.ts";
 import { getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "../src/models.ts";
 import { findExecutable } from "../src/processes.ts";
 import { probeLiveWorker } from "../src/streaming.ts";
 import { sanitizeTerminalOutput } from "../src/terminal-text.ts";
-import { getCatalogVariant, getWhisperVariant, whisperVadVariant } from "../src/transfer/catalog.ts";
+import { getCatalogVariant, getManagedCatalogVariant, getWhisperVariant, whisperVadVariant } from "../src/transfer/catalog.ts";
 import { COMPUTE_MODES } from "../src/transfer/contracts.ts";
-import { ensureManaged, getDefaultWhisperVadModelPath, ManagedModelError } from "../src/transfer/managed.ts";
+import { getEngineEvidence } from "../src/transfer/engine-evidence.ts";
+import { ensureManaged, ensurePinnedModelFile, getDefaultWhisperVadModelPath, ManagedModelError } from "../src/transfer/managed.ts";
 
 function print(mark, label, detail) {
   const safeDetail = sanitizeTerminalOutput(detail).replaceAll("\n", " ");
@@ -45,14 +46,44 @@ function printModelCatalog(variant) {
   }
 }
 
-async function printManagedIntegrity(label, variant) {
+function nativeReferenceVariant(variant) {
+  const actualCompute = getEngineEvidence(variant.id)?.traits?.actualCompute;
+  if (!actualCompute || actualCompute === "unknown") return null;
+  // Use the recorded scope to authorize the pin check, not to qualify this host.
+  for (const { rig, device, task, language } of variant.measurements) {
+    const qualified = getManagedCatalogVariant(variant.id, { rig, actualCompute, device }, task, language);
+    if (qualified) return qualified;
+  }
+  return null;
+}
+
+async function verifyArtifactFiles(variant, native, signal) {
+  if (native && variant.blobs.length === 1) {
+    const dir = expandConfigPath(env("MICME_MODEL_DIR") || "");
+    const [blob] = variant.blobs;
+    // Native recognition prefers a preseed in an absolute MICME_MODEL_DIR.
+    if (isAbsolute(dir) && basename(blob.path) === blob.path) {
+      const path = join(dir, blob.path);
+      try {
+        await ensurePinnedModelFile(blob, path, { signal, missing: "No preseeded native model" });
+        return path;
+      } catch (error) {
+        if (!(error instanceof ManagedModelError && error.code === "missing")) throw error;
+      }
+    }
+  }
+  return ensureManaged(variant, false, () => {}, signal);
+}
+
+async function printManagedIntegrity(label, variant, native = false) {
   try {
-    const path = await ensureManaged(variant, false, () => {}, new AbortController().signal);
+    const path = await verifyArtifactFiles(variant, native, new AbortController().signal);
     ok(label, `verified size and SHA-256 for all pinned files; primary: ${path}`);
   } catch (error) {
     switch (error instanceof ManagedModelError ? error.code : undefined) {
       case "missing":
-        warn(label, getAutoDownloadModel()
+        if (native) warn(label, `missing; install the exact pinned ${variant.blobs[0].path} offline in an absolute MICME_MODEL_DIR`);
+        else warn(label, getAutoDownloadModel()
           ? "missing; install the exact pinned file(s) offline or let Micme download them when needed"
           : "missing; install the exact pinned file(s) offline (MICME_AUTO_DOWNLOAD_MODEL is off)");
         break;
@@ -95,8 +126,9 @@ async function printArtifactDiagnostics(id) {
     return;
   }
   info("configured artifact", variant.id);
-  printModelCatalog(variant);
-  await printManagedIntegrity("ASR integrity", variant);
+  const native = nativeReferenceVariant(variant);
+  printModelCatalog(native ?? variant);
+  await printManagedIntegrity("ASR integrity", native ?? variant, native !== null);
 }
 
 async function printLiveDiagnostics(live) {
