@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { closeSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { reloadMicmeConfig } from "../src/config.ts";
+import { referenceRows } from "../src/transfer/catalog.ts";
 import { createRecognitionService } from "../src/transfer/recognition.ts";
 import { RecognitionQueue } from "../src/transfer/jobs.ts";
 import { wavHeader } from "./live-native/corpus.mjs";
@@ -73,6 +77,36 @@ async function finishTake(recognizer, pcm, active = signal) {
 	await recognizer.push(0, pcm, active);
 	return recognizer.finish(audio(pcm), active);
 }
+
+test("an explicit Whisper backend rejects an interactive native artifact before inference but not an independent CLI choice", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "micme-recognition-backend-"));
+	const originalEnvironment = process.env;
+	t.after(async () => {
+		process.env = originalEnvironment;
+		reloadMicmeConfig();
+		await rm(dir, { recursive: true, force: true });
+	});
+	process.env = { PI_CODING_AGENT_DIR: dir };
+	const chosen = referenceRows().find(({ id }) => id === "parakeet-tdt-0.6b-v3").variants.find(({ quant }) => quant === "Q4_K_M");
+	const choice = { ...base, variantId: chosen.id };
+	const config = join(dir, "micme.json");
+	const writeBackend = (backend) => writeFileSync(config, JSON.stringify({ MICME_ARTIFACT: chosen.id, MICME_DETECTOR: "off", MICME_TRANSCRIBE_BACKEND: backend }));
+	let loads = 0;
+	const api = createRecognitionService({ load: async () => { loads++; return new FakeNative(); } });
+	const conflict = /MICME_TRANSCRIBE_BACKEND=whisper\.cpp.*MICME_ARTIFACT/;
+
+	writeBackend("whisper.cpp");
+	await assert.rejects(api.openRecognizer(choice, discard, signal), conflict);
+	writeBackend("auto");
+	process.env.MICME_TRANSCRIBE_BACKEND = "whisper.cpp";
+	await assert.rejects(api.openRecognizer(choice, discard, signal), conflict);
+	assert.equal(loads, 0);
+	assert.equal((await api.recognizeFile(audio(waveform), choice, "cli", discard, signal)).raw, "verified final");
+
+	writeBackend("whisper.cpp");
+	process.env.MICME_TRANSCRIBE_BACKEND = "auto";
+	assert.equal((await finishTake(await api.openRecognizer(choice, discard, signal), waveform)).raw, "verified final");
+});
 
 test("the loaded stream emits drafts and returns only its exact verified end as a commit", async () => {
 	const updates = [];
