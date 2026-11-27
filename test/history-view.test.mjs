@@ -18,10 +18,10 @@ function take(id, data = {}) {
 		modelId: "previous", starred: false, state: "ready", doneSamples: 0, totalSamples: null, wav: null, ...data };
 }
 
-function harness(t, overrides = {}, action = "history", width = 40) {
+function harness(t, overrides = {}, action = "history", width = 40, rows = 24) {
 	const controller = new AbortController();
 	let dismissed = 0;
-	const screen = new LibraryScreen(project, action, { terminal: { rows: 24 }, requestRender() {} }, theme, controller.signal, () => { dismissed += 1; }, {
+	const screen = new LibraryScreen(project, action, { terminal: { rows }, requestRender() {} }, theme, controller.signal, () => { dismissed += 1; }, {
 		enabled: () => true, page: async () => [], currentModel: async () => currentModel, ...overrides,
 	});
 	t.after(() => screen.finish());
@@ -297,4 +297,54 @@ test("active import reports per-file progress and its cancel action targets that
 	await ui.choose("Cancel file job");
 	assert.deepEqual(canceled, ["job"]);
 	assert.match(ui.paint(), /import · Canceled[\s\S]*Reselect source file/);
+});
+
+test("failed imports show only their own sanitized, scrollable diagnostics", async (t) => {
+	const inquiries = [];
+	const reasons = new Map([
+		["no-audio", "The selected media contains no audio track."],
+		["no-decoder", `FFmpeg could not read the selected media: ${"unsupported packet type ".repeat(16)}\x1b]52;c;fixture-control\x07\u202eNo decoder found.`],
+	]);
+	const rows = [take("no-audio", { source: "import", filename: "silent.mp4", state: "asr-failed" }),
+		take("no-decoder", { source: "import", filename: "codec.wav", state: "asr-failed" }),
+		take("ready", { source: "import", filename: "speech.wav", raw: "Public speech." })];
+	const copy = t.mock.fn();
+	for (const width of [40, 80]) {
+		const ui = harness(t, { page: async () => rows, copy, localImport: async () => ({ error(id) { inquiries.push(id); return reasons.get(id); } }) }, "import", width, 9);
+		await ui.choose("import · Import failed · silent.mp4");
+		assert.doesNotMatch(ui.paint(), /no audio track/);
+		await ui.choose("Import error details");
+		assert.match(ui.paint(), /contains\s+no\s+audio\s+track\./);
+		ui.press(enter, escape);
+		await ui.choose("Reselect source file");
+		assert.match(ui.paint(), /Reselect original media/);
+		ui.press(escape, escape);
+		await ui.choose("import · Import failed · codec.wav");
+		await ui.choose("Import error details");
+		assert.match(ui.paint(), /FFmpeg could not read the selected/);
+		assert.doesNotMatch(ui.paint(), /No\s+decoder\s+found/);
+		ui.press(pageDown, pageDown, pageDown);
+		assert.match(ui.paint(), /No\s+decoder\s+found\./);
+		assert.doesNotMatch(ui.paint(), /fixture-control|\u202e|no audio track/);
+		ui.press(escape, escape);
+		await ui.choose("import · Ready · speech.wav");
+		await ui.choose("File / model details");
+		assert.match(ui.paint(), /File: speech\.wav/);
+		assert.doesNotMatch(ui.paint(), /Import error details|no audio track|FFmpeg/);
+	}
+	assert.deepEqual(inquiries, ["no-audio", "no-decoder", "no-audio", "no-decoder"]);
+	assert.equal(copy.mock.callCount(), 0);
+});
+
+test("an old failed import without a recent error still offers retry for verified audio", async (t) => {
+	const row = take("old-job", { source: "import", filename: "public audio.opus", state: "asr-failed", wav: savedAudio });
+	const ui = harness(t, {
+		page: async () => [row], verifiedAudio: async () => savedAudio,
+		localImport: async () => ({ error: () => null }),
+	});
+	await ui.choose("import · Import failed");
+	assert.match(ui.paint(), /Retry with current model/);
+	assert.doesNotMatch(ui.paint(), /Reselect source file/);
+	await ui.choose("Import error details");
+	assert.match(ui.paint(), /No import error details are available in\s+this session\./);
 });

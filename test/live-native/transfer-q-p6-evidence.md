@@ -47,4 +47,11 @@ applies after this preview.
 
 At both widths, real `/micme import` accepted a two-line paste containing spaces and `$2`, listed the installed model, and presented the exact file paths and fixed model for confirmation. The form was canceled before queuing. The P6 checkout still used the import service shell; job status, progress and cancellation were exercised at the component boundary only. These are not P7 media-decoding or import integration results.
 
+### Integrated import error details
+
+After the P7 importer was integrated, a separate real Pi 1.6.0 run at each width (40 and 80 columns) queued a video-only MP4, a WAV with an unsupported format tag, and the public JFK WAV together. FFmpeg/ffprobe 6.1.1 produced the first two errors; the installed whisper.cpp executable above and `ggml-tiny.en.bin` (SHA-256 `921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f`) recognized the speech sibling. The delivered `history-view.ts` SHA-256 was `03c28fbdd5777018a56e788c1f1fda000172a7238329ea86c9b1fb794c3eb07a`.
+
+- From each failed row, **Import error details** showed only that file’s reason: “The selected media contains no audio track.” or FFmpeg’s “no decoder found”. Removing ffprobe from the disposable session’s tool directory and queuing another file showed “Micme import requires installed FFmpeg and ffprobe.” All three failed rows offered source reselection rather than saved-audio retry; the successful sibling kept verified audio and its original transcript.
+- After restart the persisted failure still offered reselection and said “No import error details are available in this session.” Esc returned to the row and then the list; the error text did not appear on the list or in the composer. With auto-submit enabled and a hook marker configured, there were zero editor API writes, sends, queues, or hook calls. The input hashes were unchanged. Component tests also scrolled a long sanitized diagnostic and verified the saved-audio retry action when a recent error is absent but verified audio exists.
+
 The component and storage checks are in `test/history-view.test.mjs` and `test/take-storage.test.mjs`. The real-terminal observations used the disposable launcher in `test/live-native/transfer-pi-local.mjs`, public audio replay, and direct comparisons of the SQLite rows and SHA-256 of the library WAV leaves.

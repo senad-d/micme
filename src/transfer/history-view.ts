@@ -49,10 +49,10 @@ async function copyWithHost(text: string) {
 }
 
 // Import ships independently. The scaffold may still be present in an earlier phase.
-async function localImport(): Promise<{ files: ImportFiles; cancel: CancelJob }> {
-	const api: { importFiles?: ImportFiles; cancelJob?: CancelJob } = await import("./import.ts") as object;
+async function localImport(): Promise<{ files: ImportFiles; cancel: CancelJob; error?: (id: EntryId) => string | null }> {
+	const api: { importFiles?: ImportFiles; cancelJob?: CancelJob; getImportError?: (id: EntryId) => string | null } = await import("./import.ts") as object;
 	if (!api.importFiles || !api.cancelJob) throw new Error("Media import is unavailable");
-	return { files: api.importFiles, cancel: api.cancelJob };
+	return { files: api.importFiles, cancel: api.cancelJob, error: api.getImportError };
 }
 
 export async function currentLibraryModel(signal: Signal): Promise<Choice> {
@@ -349,7 +349,8 @@ export class LibraryScreen {
 			items.push({ label: row.starred ? "Unstar take" : "Star take", run: () => this.toggleStar(row) });
 			items.push({ label: "Delete take…", run: () => this.deleteTake(row) });
 		}
-		if (row.filename || row.modelId) items.push({ label: "File / model details", run: () => this.push({ kind: "text", top: 0, title: "Take details", text: [row.filename && `File: ${row.filename}`, row.modelId && `Model: ${row.modelId}`].filter(Boolean).join("\n") }) });
+		const importFailed = row.source === "import" && (row.state === "asr-failed" || row.state === "save-failed");
+		if (importFailed || row.filename || row.modelId) items.push({ label: importFailed ? "Import error details" : "File / model details", run: () => this.openTakeDetails(row, importFailed) });
 		const body = [
 			`${row.createdUtc.slice(0, 16).replace("T", " ")} UTC · ${row.language ?? "Language unknown"}`,
 			hasAudio ? "Verified saved audio" : activeJob(row) && !row.wav ? "No complete saved audio yet" : "No verified saved audio",
@@ -359,7 +360,18 @@ export class LibraryScreen {
 			this.playback ? `Playback requested from ${this.playback.fromMs / 1000}s` : undefined,
 			progress(row),
 		].filter(Boolean).join("\n");
-		return { title: `${row.source} · ${ROW_STATE[row.state]}`, body, items };
+		return { title: `${row.source} · ${stateLabel(row)}`, body, items };
+	}
+
+	private openTakeDetails(row: Row, importFailed: boolean) {
+		const text = [row.filename && `File: ${row.filename}`, row.modelId && `Model: ${row.modelId}`].filter(Boolean).join("\n");
+		if (!importFailed) return this.push({ kind: "text", top: 0, title: "Take details", text });
+		this.run("Opening import error…", "Could not open import error details.", async (signal) => {
+			const imports = await this.api.localImport().catch(() => undefined);
+			signal.throwIfAborted();
+			const reason = imports?.error?.(row.id) ?? "No import error details are available in this session.";
+			this.push({ kind: "text", top: 0, title: "Import error details", text: [text, reason].filter(Boolean).join("\n") });
+		});
 	}
 
 	private openText(label: string, text: string) {
@@ -653,9 +665,13 @@ function displayText(text: string) {
 
 function activeJob(row: Row) { return row.state === "queued" || row.state === "decoding" || row.state === "recognizing"; }
 
+function stateLabel(row: Row) {
+	return row.source === "import" && row.state === "asr-failed" ? "Import failed" : ROW_STATE[row.state];
+}
+
 function listLabel(row: Row) {
 	const date = row.createdUtc.slice(5, 16).replace("T", " ");
-	return `${row.starred ? "★ " : ""}${row.source} · ${ROW_STATE[row.state]} · ${row.filename ?? date}`.replace(/[\r\n]/g, " ");
+	return `${row.starred ? "★ " : ""}${row.source} · ${stateLabel(row)} · ${row.filename ?? date}`.replace(/[\r\n]/g, " ");
 }
 
 function progress(row: Row) {
