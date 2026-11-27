@@ -204,6 +204,25 @@ test("forged tolerance is rejected before collector activation or recording", as
 	assert.equal(collect.mock.callCount(), 0);
 });
 
+test("a duplicated reference take cannot supply independent frozen calibration for parity", async (t) => {
+	const { root, file, frozen, a, b } = await bundle(t);
+	const manifest = "transfer-p1-manifest.json";
+	frozen.calibration = a.slice(0, 2).map((trial) => cpms({ ...trial, pairId: "reference-calibration" }));
+	frozen.toleranceMs[0].ms = 0;
+	await writeJson(root, manifest, frozen);
+	await writeRows(root, file, [...a, ...b].map((trial) => cpms(trial)));
+	assert.match((await generateReport(root, { baselineOnly: true })).markdown, /\*\*pass\*\*.*20\/20 paired slots/);
+
+	const [first] = frozen.calibration;
+	frozen.calibration = [first, structuredClone(first)];
+	await writeJson(root, manifest, frozen);
+	const result = await generateReport(root, { baselineOnly: true }).then(
+		({ markdown }) => markdown.split("\n").find((line) => /20\/20 paired slots/.test(line)) ?? "missing comparison",
+		(error) => { assert.match(error.message, /calibration/i); return "invalid calibration"; },
+	);
+	assert.match(result, /invalid calibration|\*\*(?:fail|unavailable)\*\*/, "one reference observation was counted as two independent repeats");
+});
+
 test("report distinguishes 20 paired repeats, exploratory counts, and incomplete latency", async (t) => {
 	const { root, file, frozen, a, b } = await bundle(t);
 	const first = (await generateReport(root, { baselineOnly: true })).markdown;
