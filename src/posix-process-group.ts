@@ -26,18 +26,18 @@ function report(result) {
 function reportError({ message, code, errno, syscall, path, spawnargs }) {
 	report({ error: { message, code, errno, syscall, path, spawnargs } });
 }
-function launch({ command, args, pipeInput, spawnOptions, directoryLibrary, killOnDisconnect }) {
+function launch({ command, args, hasInput, spawnOptions, directoryLibrary, killOnDisconnect }) {
 	killGroupOnDisconnect = killOnDisconnect === true;
 	try {
 		if (directoryLibrary) enterDirectory(directoryLibrary, 4);
-		const child = spawn(command, args, { ...spawnOptions, stdio: [pipeInput ? 0 : "ignore", 1, 2] });
+		const child = spawn(command, args, { ...spawnOptions, stdio: [hasInput ? 0 : "ignore", 1, 2] });
 		if (child.pid) report({ pid: child.pid });
 		child.once("error", reportError);
 		child.once("exit", (code, signal) => report({ code, signal }));
 	} catch (error) {
 		reportError(error);
 	} finally {
-		if (pipeInput) closeSync(0);
+		if (hasInput) closeSync(0);
 		closeSync(1);
 		closeSync(2);
 	}
@@ -51,16 +51,18 @@ process.on("message", (message) => {
 const supervisors = new WeakSet<ChildProcess>();
 const hookPids = new WeakMap<ChildProcess, number>();
 
-export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean, killOnDisconnect: boolean, spawnOptions?: CommandSpec["spawnOptions"], cwdFd?: number) {
+export type FileStdio = { stdin: number; stdout?: number };
+
+export function spawnPosixGroupProcess(command: string, args: string[], pipeInput: boolean, killOnDisconnect: boolean, spawnOptions?: CommandSpec["spawnOptions"], cwdFd?: number, fileStdio?: FileStdio) {
 	const directoryLibrary = cwdFd === undefined ? undefined : posixDirectoryLibrary();
 	const child = spawn(process.execPath, ["--input-type=commonjs", "-e", LAUNCHER], {
 		detached: true,
-		stdio: [pipeInput ? "pipe" : "ignore", "pipe", "pipe", "ipc", ...(cwdFd === undefined ? [] : [cwdFd])],
+		stdio: [fileStdio?.stdin ?? (pipeInput ? "pipe" : "ignore"), fileStdio?.stdout ?? "pipe", "pipe", "ipc", ...(cwdFd === undefined ? [] : [cwdFd])],
 	});
 	if (child.pid) {
 		supervisors.add(child);
 		child.once("close", () => supervisors.delete(child));
-		child.send({ command, args, pipeInput, spawnOptions, directoryLibrary, killOnDisconnect }, () => undefined);
+		child.send({ command, args, hasInput: pipeInput || fileStdio !== undefined, spawnOptions, directoryLibrary, killOnDisconnect }, () => undefined);
 	}
 	return child;
 }

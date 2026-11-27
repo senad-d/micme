@@ -6,7 +6,7 @@ import { delimiter, join, resolve, win32 } from "node:path";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { MAX_CAPTURED_OUTPUT_CHARS, MIN_AUDIO_BYTES, RECORDER_STOP_GRACE_MS } from "./constants.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
-import { observePosixGroupClose, posixGroupHasWorkers, posixRecorderState, releasePosixGroup, signalPosixGroup, spawnPosixGroupProcess } from "./posix-process-group.ts";
+import { observePosixGroupClose, posixGroupHasWorkers, posixRecorderState, releasePosixGroup, signalPosixGroup, spawnPosixGroupProcess, type FileStdio } from "./posix-process-group.ts";
 import type { RecordingDirectory } from "./recording-dir.ts";
 import { sanitizeTerminalOutput, stripTerminalControlSequences } from "./terminal-text.ts";
 import type { CommandSpec, ExitResult, OwnedProcess, Recording, RunResult } from "./types.ts";
@@ -19,13 +19,16 @@ const HOST_IS_WINDOWS = process.platform === "win32";
 
 type SpawnSpec = Pick<CommandSpec, "command" | "args" | "spawnOptions">;
 
-function spawnOwnedProcess({ command, args, spawnOptions }: SpawnSpec, pipeInput = false, retainUntilStop = false, cwdFd?: number) {
-	if (HOST_IS_WINDOWS) return spawnWindowsJobProcess(command, args, pipeInput, retainUntilStop, spawnOptions);
+function spawnOwnedProcess({ command, args, spawnOptions }: SpawnSpec, pipeInput = false, retainUntilStop = false, cwdFd?: number, fileStdio?: FileStdio) {
+	if (HOST_IS_WINDOWS) {
+		if (fileStdio) throw new Error("Passing held file descriptors to a process requires a POSIX host.");
+		return spawnWindowsJobProcess(command, args, pipeInput, retainUntilStop, spawnOptions);
+	}
 	// Relative executable paths were resolved from Pi's cwd, not the workspace
 	// entered by a descriptor-relative launch.
 	let executable = command;
 	if (cwdFd !== undefined) executable = command === "sh" ? "/bin/sh" : resolve(command);
-	return spawnPosixGroupProcess(executable, args, pipeInput, retainUntilStop, spawnOptions, cwdFd);
+	return spawnPosixGroupProcess(executable, args, pipeInput, retainUntilStop, spawnOptions, cwdFd, fileStdio);
 }
 
 function observeProcessClose(child: ChildProcess, reportExit?: (exit: ExitResult) => void) {
@@ -353,6 +356,8 @@ function windowsDelayedExpansion(command: string) {
 export type RunProcessOptions = {
 	signal?: AbortSignal;
 	cwdFd?: number;
+	/** Borrow seekable file descriptors for a single POSIX run. */
+	fileStdio?: FileStdio;
 };
 
 export function runProcess(command: string, args: string[], timeoutMs: number, options: RunProcessOptions = {}): Promise<RunResult> {
@@ -366,7 +371,7 @@ function cancelledRun(): RunResult {
 async function runCommand(spec: SpawnSpec, timeoutMs: number, options: RunProcessOptions): Promise<RunResult> {
 	if (options.signal?.aborted) return cancelledRun();
 
-	const child = spawnOwnedProcess(spec, false, false, options.cwdFd);
+	const child = spawnOwnedProcess(spec, false, options.fileStdio !== undefined, options.cwdFd, options.fileStdio);
 	const { exitPromise, getExit } = observeProcessClose(child);
 	let stdout = "";
 	let stdoutTruncated = false;
