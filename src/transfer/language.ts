@@ -115,11 +115,13 @@ type Span = { start: number; end: number; text: string };
 type Transform = { text: string; matched: boolean };
 type Phrase = string[];
 
-// Keep quotes and backticks opaque. Whitespace and prose separators expose
-// candidates, but symbols inside a chunk (request.id, e-mail, AB-204, #tag)
-// make the entire chunk ineligible. Unclosed quotes/backticks stay opaque.
-const CHUNKS = /(`+)[\s\S]*?(?:\1(?!`)|$)|"(?:\\(?:[\s\S]|$)|[^"\\])*(?:"|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$)|(?<![\p{L}\p{M}\p{N}])'(?:\\(?:[\s\S]|$)|[^'\\])*(?:'|$)|(?:[^\s,;!?。！？、；，："“”‘’'`]|(?<=[\p{L}\p{M}\p{N}])['’](?=[\p{L}\p{M}\p{N}]))+/gu;
+// Quotes, backticks and grouped expressions are opaque. Whitespace and
+// prose separators expose candidates, but symbols inside a chunk (request.id,
+// e-mail, AB-204, #tag) make the entire chunk ineligible.
+const CHUNKS = /(`+)[\s\S]*?(?:\1(?!`)|$)|"(?:\\(?:[\s\S]|$)|[^"\\])*(?:"|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$)|(?<![\p{L}\p{M}\p{N}])'(?:\\(?:[\s\S]|$)|[^'\\])*(?:'|$)|[()[\]{}]|(?:[^\s,;!?。！？、；，："“”‘’'`()[\]{}]|(?<=[\p{L}\p{M}\p{N}])['’](?=[\p{L}\p{M}\p{N}]))+/gu;
+const GROUP_END = new Map([["(", ")"], ["[", "]"], ["{", "}"]]);
 const PROSE_BOUNDARY = /^[\s,;!?。！？、；，：]$/u;
+const LETTER_WORD = /^\p{L}[\p{L}\p{M}]*$/u;
 const LATIN_WORD = /^\p{Script=Latin}[\p{Script=Latin}\p{M}]*$/u;
 const HAN_WORD = /^\p{Script=Han}+$/u;
 const SPACE = /^[\t ]+$/u;
@@ -127,12 +129,17 @@ const COMMA_SPACE = /^,[\t ]+$/u;
 
 function spans(text: string): Span[] {
 	const result: Span[] = [];
+	const groups: string[] = [];
 	for (const match of text.matchAll(CHUNKS)) {
 		const chunk = match[0];
+		const closer = GROUP_END.get(chunk);
+		if (closer) groups.push(closer);
+		const protectedGroup = groups.length > 0;
+		if (groups.at(-1) === chunk) groups.pop();
 		const start = match.index;
 		const end = start + chunk.length;
 		const token = chunk.endsWith(".") ? chunk.slice(0, -1) : chunk;
-		const prose = (start === 0 || PROSE_BOUNDARY.test(text[start - 1]!)) &&
+		const prose = !protectedGroup && (start === 0 || PROSE_BOUNDARY.test(text[start - 1]!)) &&
 			(end === text.length || PROSE_BOUNDARY.test(text[end]!));
 		result.push({ start, end: start + token.length, text: prose ? token : "" });
 	}
@@ -244,13 +251,20 @@ function script(text: string, target: Exclude<TransferOptions["MICME_SCRIPT"], "
 	return applySpans(text, replacements);
 }
 
-function echo(text: string, words: readonly string[], speech: FinishContext["speech"], source: Final["source"]) {
+function echoReason(text: string, words: readonly string[], speech: FinishContext["speech"], source: Final["source"]): RuleOutcome["reason"] {
+	if (!words.length) return "off";
 	const trimmed = text.trim();
-	if (speech === "speech") return false;
-	if (trimmed === ".") return source !== "live" || speech === "none";
-	if (speech !== "none") return false;
-	const phrase = lower(trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed);
-	return words.some((word) => lower(word.trim()) === phrase);
+	if (!trimmed) return "insufficient-speech";
+	if (speech === "speech") return "no-match";
+	if (trimmed === ".") return source !== "live" || speech === "none" ? "applied" : "insufficient-speech";
+	// An exact configured match is not enough to drop a literal or a repeat.
+	const textWithoutPeriod = trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed;
+	const tokens = textWithoutPeriod.split(/[\t ]+/u);
+	if (!tokens.every((token) => LETTER_WORD.test(token) && proseCase(token))) return "no-match";
+	if (new Set(tokens.map(lower)).size !== tokens.length) return "no-match";
+	const phrase = lower(textWithoutPeriod);
+	if (!words.some((word) => lower(word.trim()) === phrase)) return "no-match";
+	return speech === "none" ? "applied" : "insufficient-speech";
 }
 
 function decision(rule: Rule, reason: RuleOutcome["reason"]): RuleOutcome {
@@ -275,9 +289,8 @@ export const finishLocal = ((raw, language, source, context: FinishContext = {})
 	const words = preferences.MICME_WORDS;
 	const hasWords = words.length > 0;
 	const bias = decision("bias", context.nativeBias ? "applied" : hasWords ? "incompatible" : "off");
-	const removeEcho = hasWords && echo(raw, words, context.speech, source);
-	const echoRule = decision("echo", !hasWords ? "off" : removeEcho ? "applied" : raw.trim() ? "no-match" : "insufficient-speech");
-	const initial = removeEcho ? "" : raw;
+	const echoRule = decision("echo", echoReason(raw, words, context.speech, source));
+	const initial = echoRule.result === "applied" ? "" : raw;
 	const corrected = applyRule("vocabulary", initial, hasWords && !context.nativeBias, latin, () => vocabulary(initial, words));
 	const fillerWords = primary ? BUILTIN_FILLERS[primary] ?? [] : [];
 	const unfilled = applyRule("fillers", corrected.text, preferences.MICME_REMOVE_FILLERS, latin,

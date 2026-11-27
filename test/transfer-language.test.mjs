@@ -153,6 +153,14 @@ test("vocabulary restores only unambiguous whole prose phrases and preserves ide
 	assert.equal(outcome(ambiguous, "vocabulary").reason, "no-match");
 });
 
+test("prose finishing leaves identifiers inside nested code delimiters untouched", () => {
+	const raw = 'Call f({ name: jose, args: [ jose, ")", jose ] }), then ask jose.';
+	const final = finishLocal(raw, "en", "clip", { settings: settings({ MICME_WORDS: '["José"]' }) });
+	assert.equal(final.raw, raw);
+	assert.equal(final.local, 'Call f({ name: jose, args: [ jose, ")", jose ] }), then ask José.');
+	assert.equal(outcome(final, "vocabulary").result, "applied");
+});
+
 test("accepted native bias is not followed by a second vocabulary rewrite", () => {
 	const final = finishLocal("Ask jose.", "en", "live", { settings: settings({ MICME_WORDS: '["José"]' }), nativeBias: true });
 	assert.equal(final.local, final.raw);
@@ -183,6 +191,21 @@ test("a period or a vocabulary-only negative can be suppressed without mistaking
 	assert.equal(finishLocal("Tokyo Tokyo.", "en", "clip", { settings: enabled, speech: "none" }).local, "Tokyo Tokyo.");
 	assert.equal(outcome(finishLocal("", "en", "clip", { settings: enabled }), "echo").reason, "insufficient-speech");
 	assert.equal(finishLocal(".", "en", "clip", { settings: settings() }).local, ".");
+});
+
+test("an isolated vocabulary match reports missing speech evidence rather than deleting a name", () => {
+	const final = finishLocal("Tokyo.", "en", "clip", { settings: settings({ MICME_WORDS: '["Tokyo"]' }) });
+	assert.equal(final.local, final.raw);
+	assert.deepEqual(outcome(final, "echo"), { rule: "echo", result: "skipped", reason: "insufficient-speech" });
+});
+
+test("vocabulary echo suppression protects configured numbers, identifiers and deliberate repeats", () => {
+	const enabled = settings({ MICME_WORDS: '["204","requestId","New York New York"]' });
+	for (const raw of ["204.", "requestId.", "New York New York."]) {
+		const final = finishLocal(raw, "en", "clip", { settings: enabled, speech: "none" });
+		assert.equal(final.local, raw);
+		assert.equal(outcome(final, "echo").reason, "no-match");
+	}
 });
 
 test("script uses region-specific Chinese phrase forms and leaves protected Han names and other languages alone", () => {
