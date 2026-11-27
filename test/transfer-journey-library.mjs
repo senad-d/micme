@@ -218,7 +218,7 @@ test("Pi applies approved count:1 to two later saves and restart without pruning
 	await leave(restarted, history.pending);
 });
 
-test("Pi's confirmed UTC age policy survives a canceled edit, subsequent save, and enabled restart", posix, async (t) => {
+test("Pi preserves a confirmed UTC age policy after a canceled edit, but only enforces it on opted-in restarts", posix, async (t) => {
 	const f = await isolatedJourney(t, { MICME_HISTORY: "1" });
 	t.mock.timers.enable({ apis: ["Date"], now: jan });
 	const ui = await f.host();
@@ -232,8 +232,14 @@ test("Pi's confirmed UTC age policy survives a canceled edit, subsequent save, a
 	const next = await namedTake(f, ui, "Will expire while Pi is closed.", 39);
 	await checkInventory(f, [...protectedRows, next]);
 	await ui.close();
-	t.mock.timers.setTime(jan + day * 10);
+	const restartTime = jan + day * 10;
+	t.mock.timers.setTime(restartTime);
+	await writeMicmeConfigValues({ MICME_HISTORY: "0" });
+	const before = await f.audio();
+	const { beforeListing } = await coldLibraryRestart(f, restartTime, { list: false });
+	assert.deepEqual(beforeListing, before, "history-off startup pruned the existing library without consent");
+	await writeMicmeConfigValues({ MICME_HISTORY: "1" });
 	// Read the directory before page() in a fresh process. A list-time prune
 	// must not hide missing enforcement at enabled session_start.
-	checkColdInventory(await coldLibraryRestart(f, jan + day * 10), protectedRows);
+	checkColdInventory(await coldLibraryRestart(f, restartTime), protectedRows);
 });

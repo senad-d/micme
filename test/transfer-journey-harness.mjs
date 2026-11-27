@@ -298,24 +298,29 @@ export async function take(f, ui, state = {}) {
 	await ui.command();
 }
 
-export async function coldLibraryRestart(f, now) {
-	const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(import.meta.url), "--library-restart-probe", f.root, String(now)], { env: fixtureEnvironment(f) });
+export async function coldLibraryRestart(f, now, { list = true } = {}) {
+	const args = [fileURLToPath(import.meta.url), "--library-restart-probe", f.root, String(now)];
+	if (!list) args.push("--startup-only");
+	const { stdout } = await promisify(execFile)(process.execPath, args, { env: fixtureEnvironment(f) });
 	return JSON.parse(stdout);
 }
 
-async function observeColdLibrary(root, now) {
+async function observeColdLibrary(root, now, list) {
 	const f = { root, project: join(root, "project"), agent: join(root, "agent") };
 	// The parent has already supplied the fixture-only environment. Set only the
 	// clock here; the real product and library are freshly imported in this process.
 	mock.timers.enable({ apis: ["Date"], now });
 	const ui = await host(f, { width: 40 });
 	try {
-		const beforeListing = await audioSnapshot(f.agent);
-		const { page } = await import("../src/transfer/library.ts");
-		assert.equal(typeof page, "function", "L library listing is not implemented yet");
-		const rows = await page(null);
+		const snapshot = { beforeListing: await audioSnapshot(f.agent) };
+		if (list) {
+			const { page } = await import("../src/transfer/library.ts");
+			assert.equal(typeof page, "function", "L library listing is not implemented yet");
+			snapshot.rows = await page(null);
+			snapshot.afterListing = await audioSnapshot(f.agent);
+		}
 		assertUntouched(ui);
-		console.log(JSON.stringify({ beforeListing, rows, afterListing: await audioSnapshot(f.agent) }));
+		console.log(JSON.stringify(snapshot));
 	} finally {
 		await ui.close();
 		mock.timers.reset();
@@ -324,5 +329,5 @@ async function observeColdLibrary(root, now) {
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url && process.argv[2] === "--library-restart-probe") {
 	globalThis.fetch = () => { throw new Error("unexpected network request during cold library restart"); };
-	await observeColdLibrary(process.argv[3], Number(process.argv[4]));
+	await observeColdLibrary(process.argv[3], Number(process.argv[4]), process.argv[5] !== "--startup-only");
 }
