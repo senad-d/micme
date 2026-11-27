@@ -37,7 +37,8 @@
     "node": ">=22.19.0"
   },
   "bin": {
-    "micme-doctor": "./dist/doctor/scripts/doctor.mjs"
+    "micme-doctor": "./dist/doctor/scripts/doctor.mjs",
+    "micme-transcribe": "./dist/doctor/scripts/transcribe.mjs"
   },
   "files": [
     "README.md",
@@ -51,12 +52,19 @@
     "img/micme_logo.svg",
     "src/**/*.ts",
     "scripts/*.mjs",
-    "dist/doctor",
+    "dist/doctor/scripts/doctor.mjs",
+    "dist/doctor/scripts/transcribe.mjs",
+    "dist/doctor/src/**/*.js",
     "native/live/CMakeLists.txt",
     "native/live/main.cpp",
     "native/live/decoder.cpp",
     "native/live/decoder.hpp",
     "native/live/README.md",
+    "native/recognizer/CMakeLists.txt",
+    "native/recognizer/instrument.cmake",
+    "native/recognizer/main.cpp",
+    "native/recognizer/README.md",
+    "native/polish/apple-final.swift",
     "docs/**/*.md",
     "tsconfig.json"
   ],
@@ -64,7 +72,7 @@
     "doctor": "node scripts/doctor.mjs",
     "build:doctor": "tsc --project scripts/tsconfig.doctor.json",
     "prepack": "npm run build:doctor",
-    "check": "node --check scripts/doctor.mjs && node --check scripts/check-format.mjs && node --check scripts/check-package-contents.mjs && node --check scripts/publish-npm.mjs",
+    "check": "node --check scripts/doctor.mjs && node --check scripts/transcribe.mjs && node --check scripts/check-format.mjs && node --check scripts/check-package-contents.mjs && node --check scripts/publish-npm.mjs",
     "test": "node --test test/*.test.mjs",
     "test:pi-contract": "node --test test/pi-contract.test.mjs",
     "test:live-native": "node test/live-native-quality.mjs",
@@ -89,6 +97,10 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@earendil-works/pi-tui": { "optional": true }
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.6.0",
