@@ -1,0 +1,333 @@
+Sanitized excerpts from isolated Pi 1.6.0 Linux PTYs. Run conditions: transfer-q-p3-evidence.md.
+
+40 cols / clean setup
+Micme Setup
+Local Whisper CLI found · mic not tested
+→ Prerequisites and SDL migration
+  Speech language
+  Translate to English
+  Models and repair
+  Microphone input
+  Try It: local sample
+  Try It: microphone
+↑↓ move · Enter select · Esc back
+
+40 cols / migration preview
+Setup · Prerequisites
+Whisper CLI: executable found. No model
+load performed.
+
+Requested input: Custom recorder. Actual
+device, channel, fallback and
+permissions not tested.
+
+Live prerequisites incomplete. Run
+micme-doctor for worker or task
+diagnostics. This does not indicate mic
+failure.
+
+Legacy SDL settings were found and are
+unchanged. Install micme-live and set
+MICME_LIVE_BIN for stream mode, or
+choose clip mode in /micme conf.
+
+If capture is denied, check your
+terminal's microphone permission and the
+selected input in your OS. Preview never
+opens a mic or changes permissions.
+
+Run micme-doctor for a standalone
+offline check.
+Enter/Esc close
+
+40 cols / catalog
+Speech model catalog
+73 Handy reference entries · not
+download offers
+Type to filter: names, lang:en,
+installed (local file), stream,
+translate
+→ Managed: Whisper tiny.en
+  Managed: Whisper tiny
+  Managed: Whisper base.en
+  Managed: Whisper base
+  Managed: Whisper small.en
+  Managed: Whisper small
+  Managed: Whisper medium.en
+  (1/85)
+Managed: Whisper tiny.en
+Found · unchecked · Managed ·
+measured/known languages: en.
+↑↓ move · Enter select · Esc back
+
+40 cols / stream + name filter
+Speech model catalog
+73 Handy reference entries · not
+download offers
+Search: stream moonshine
+→ Reference: moonshine-streaming-mediu
+  Reference: moonshine-streaming-small
+  Reference: moonshine-streaming-tiny
+Reference: moonshine-streaming-medium
+Not offered here · search-only in Handy
+Reference claims: stream yes; translate
+no. Measured languages: unknown.
+↑↓ move · Enter select · Esc back
+
+40 cols / offline verification
+Whisper tiny.en
+Verified during this visit · checks run
+again before use
+Rights: cleared. Clip smoke: passed (see
+evidence).
+  Use for Whisper dictation
+→ Verify local weights
+  Published model evidence
+  Remove Micme-owned files
+  Back to models
+↑↓ move · Enter select · Esc back
+
+40 cols / native sample review
+Try It · Review only
+And so my fellow Americans ask not what
+your country can do for you, ask what
+you can do for your country.
+Enter/Esc close
+
+40 cols / separate mic confirmation
+Try microphone?
+Stop with alt+m or /micme. This take is
+for review only; nothing is pasted, sent
+or queued.
+→ Cancel
+  Start recording
+↑↓ move · Enter select · Esc back
+
+40 cols / running (actual device unknown)
+ Recorder running · ○ 00:00:00  ▁▁▁▁▁▁▁
+
+40 cols / native close-only mic review
+Try It · Review only
+And so my fellow Americans ask not what
+your country can do for you, ask what
+you can do for your country.
+Enter/Esc close
+Receiver: 0 sends, 0 queues, 0 editor writes; MICME_AUTO_SUBMIT still 1.
+
+40 cols / default settings
+╭─ Micme Configuration ────── General ─╮
+│↑↓ move  Enter edit  Esc back  /      │
+│search  q quit                        │
+├──────────────────────────────────────┤
+│GENERAL                            1/6│
+│▶ Auto-download models             OFF│
+│  Language                     English│
+│  Translate from                   Off│
+│  Shortcut                       alt+m│
+│  Advanced controls             Hidden│
+│  Stream diagnostics               OFF│
+├──────────────────────────────────────┤
+│1/6 • Download missing whisper.cpp    │
+│models automatically when selected or │
+│first used.                           │
+╰──────────────────────────────────────╯
+
+40 cols / advanced diagnostics
+╭─ Micme Configuration ─────── Search ─╮
+│↑↓ move  Enter edit  Esc back  /      │
+│search  q quit                        │
+├──────────────────────────────────────┤
+│SEARCH FINAL PROCESSING            1/9│
+│▶ Final processing (G…   Explicit only│
+│  Transcribe sample r…           16000│
+│  Audio filter (Audio) highpass=f=80,…│
+│  Stream final pass (…             OFF│
+│  Shortcut (General)             alt+m│
+│  Clip binary (Transc… …in/whisper-cli│
+│  Advanced controls (…           Shown│
+│  Transcription mode …          stream│
+│  Optional runtime (T…     Unavailable│
+├──────────────────────────────────────┤
+│Advanced controls shown for this visit│
+│• 1/9 • Optional provider and hook    │
+│configuration (redacted). No test     │
+│request is sent here.                 │
+│Polish provider: off. Use /micme      │
+│polish or /micme preview to confirm it│
+│for one take.                         │
+│Output hook: off. Ordinary takes and  │
+│Try It never invoke it.               │
+│Endpoint, prompt, model name,         │
+│credential source, hook path and text │
+│lists are hidden from diagnostics.    │
+╰──────────────────────────────────────╯
+
+40 cols / standalone doctor — verified weights (protocol-only worker fixture)
+- capture readiness: not tested; actual device, channel and fallback unknown; no samples observed
+- SDL migration: For legacy Whisper stream mode, install micme-live and set MICME_LIVE_BIN if needed, or use clip mode. Retain saved SDL settings; doctor makes no changes.
+- processing configuration: model, prompt, credential source, words configured; values redacted
+✓ ASR integrity: verified size and SHA-256 for all pinned files; primary: <isolated>/model-cache/ggml-tiny.en.bin
+✓ live worker protocol: Worker v1 available; model readiness and capture not tested
+
+40 cols / standalone doctor — missing weights (protocol-only worker fixture)
+- capture readiness: not tested; actual device, channel and fallback unknown; no samples observed
+- SDL migration: For legacy Whisper stream mode, install micme-live and set MICME_LIVE_BIN if needed, or use clip mode. Retain saved SDL settings; doctor makes no changes.
+- processing configuration: model, prompt, credential source, words configured; values redacted
+! ASR integrity: missing; install the exact pinned file(s) offline (MICME_AUTO_DOWNLOAD_MODEL is off)
+✓ live worker protocol: Worker v1 available; model readiness and capture not tested
+
+40 cols / standalone doctor — corrupt weights (protocol-only worker fixture)
+- capture readiness: not tested; actual device, channel and fallback unknown; no samples observed
+- SDL migration: For legacy Whisper stream mode, install micme-live and set MICME_LIVE_BIN if needed, or use clip mode. Retain saved SDL settings; doctor makes no changes.
+- processing configuration: model, prompt, credential source, words configured; values redacted
+! ASR integrity: corrupt; size or SHA-256 mismatch. Use confirmed managed removal only for Micme-owned files; keep or move user-managed files yourself before installing a verified copy.
+✓ live worker protocol: Worker v1 available; model readiness and capture not tested
+
+80 cols / populated setup
+Micme Setup
+Local Whisper CLI found · mic not tested
+→ Prerequisites and SDL migration
+  Speech language                 English
+  Translate to English            Off
+  Models and repair               tiny.en
+  Microphone input                Custom recorder
+  Try It: local sample
+  Try It: microphone
+↑↓ move · Enter select · Esc back
+
+80 cols / migration preview
+Setup · Prerequisites
+Whisper CLI: executable found. No model load performed.
+
+Requested input: Custom recorder. Actual device, channel, fallback and
+permissions not tested.
+
+Live prerequisites incomplete. Run micme-doctor for worker or task diagnostics.
+This does not indicate mic failure.
+
+Legacy SDL settings were found and are unchanged. Install micme-live and set
+MICME_LIVE_BIN for stream mode, or choose clip mode in /micme conf.
+
+If capture is denied, check your terminal's microphone permission and the
+selected input in your OS. Preview never opens a mic or changes permissions.
+
+Run micme-doctor for a standalone offline check.
+Enter/Esc close
+
+80 cols / catalog
+Speech model catalog
+73 Handy reference entries · not download offers
+Type to filter: names, lang:en, installed (local file), stream, translate
+→ Managed: Whisper tiny.en
+  Managed: Whisper tiny
+  Managed: Whisper base.en
+  Managed: Whisper base
+  Managed: Whisper small.en
+  Managed: Whisper small
+  Managed: Whisper medium.en
+  (1/85)
+Managed: Whisper tiny.en
+Found · unchecked · Managed · measured/known languages: en.
+↑↓ move · Enter select · Esc back
+
+80 cols / stream + name filter
+Speech model catalog
+73 Handy reference entries · not download offers
+Search: stream moonshine
+→ Reference: moonshine-streaming-medium
+  Reference: moonshine-streaming-small
+  Reference: moonshine-streaming-tiny
+Reference: moonshine-streaming-medium
+Not offered here · search-only in Handy
+Reference claims: stream yes; translate no. Measured languages: unknown.
+↑↓ move · Enter select · Esc back
+
+80 cols / offline verification
+Whisper tiny.en
+Verified during this visit · checks run again before use
+Rights: cleared. Clip smoke: passed (see evidence).
+  Use for Whisper dictation
+→ Verify local weights
+  Published model evidence
+  Remove Micme-owned files
+  Back to models
+↑↓ move · Enter select · Esc back
+
+80 cols / translation is a distinct task
+Translate to English from
+Search: French
+→ French → English
+↑↓ move · Enter select · Esc back
+Incompatible explicit tiny.en choice blocked before sample confirmation or recorder start.
+
+80 cols / native sample review
+Try It · Review only
+And so my fellow Americans ask not what your country can do for you, ask what
+you can do for your country.
+Enter/Esc close
+
+80 cols / separate mic confirmation
+Try microphone?
+Stop with alt+m or /micme. This take is for review only; nothing is pasted, sent
+or queued.
+→ Cancel
+  Start recording
+↑↓ move · Enter select · Esc back
+
+80 cols / running (actual device unknown)
+ Recorder running · ○ 00:00:00  ▁▁▁▁▁▁▁▁▁▁▁▁▁
+
+80 cols / native close-only mic review
+Try It · Review only
+And so my fellow Americans ask not what your country can do for you, ask what
+you can do for your country.
+Enter/Esc close
+Receiver: 0 sends, 0 queues, 0 editor writes; MICME_AUTO_SUBMIT still 1.
+
+80 cols / default settings
+╭─ Micme Configuration ────────────────────────────────────────────── General ─╮
+│↑↓ move  Tab pane  Enter edit  / search  Esc back  q quit                     │
+├─────────────────────┬────────────────────────────────────────────────────────┤
+│▶ General            │GENERAL                                              1/6│
+│  Transcription      │▶ Auto-download models                               OFF│
+│  Streaming          │  Language                                       English│
+│  Audio              │  Translate from                                     Off│
+│                     │  Shortcut                                         alt+m│
+│                     │  Advanced controls                               Hidden│
+│                     │  Stream diagnostics                                 OFF│
+│                     │                                                        │
+├─────────────────────┴────────────────────────────────────────────────────────┤
+│1/6 • Download missing whisper.cpp models automatically when selected or first│
+│used.                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+80 cols / advanced diagnostics
+╭─ Micme Configuration ─────────────────────────────────────────────── Search ─╮
+│↑↓ move  Tab pane  Enter edit  / search  Esc back  q quit                     │
+├─────────────────────┬────────────────────────────────────────────────────────┤
+│▶ General            │SEARCH FINAL PROCESSING                              1/9│
+│  Transcription      │▶ Final processing (General)               Explicit only│
+│  Streaming          │  Transcribe sample rate (Audio)                   16000│
+│  Audio              │  Audio filter (Audio)            highpass=f=80,lowpass…│
+│                     │  Stream final pass (Streaming)                      OFF│
+│                     │  Shortcut (General)                               alt+m│
+│                     │  Clip binary (Transcription)     …build/bin/whisper-cli│
+│                     │  Advanced controls (General)                      Shown│
+│                     │  Transcription mode (Transcript…                 stream│
+│                     │  Optional runtime (Transcriptio…            Unavailable│
+├─────────────────────┴────────────────────────────────────────────────────────┤
+│Advanced controls shown for this visit • 1/9 • Optional provider and hook     │
+│configuration (redacted). No test request is sent here.                       │
+│Polish provider: off. Use /micme polish or /micme preview to confirm it for   │
+│one take.                                                                     │
+│Output hook: off. Ordinary takes and Try It never invoke it.                  │
+│Endpoint, prompt, model name, credential source, hook path and text lists are │
+│hidden from diagnostics.                                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+80 cols / standalone doctor — verified weights (protocol-only worker fixture)
+- capture readiness: not tested; actual device, channel and fallback unknown; no samples observed
+- SDL migration: For legacy Whisper stream mode, install micme-live and set MICME_LIVE_BIN if needed, or use clip mode. Retain saved SDL settings; doctor makes no changes.
+- processing configuration: model, prompt, credential source, words configured; values redacted
+✓ ASR integrity: verified size and SHA-256 for all pinned files; primary: <isolated>/model-cache/ggml-tiny.en.bin
+✓ live worker protocol: Worker v1 available; model readiness and capture not tested
