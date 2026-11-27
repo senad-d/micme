@@ -1,5 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+<<<<<<< HEAD
 import { resolve } from "node:path";
+=======
+import { basename } from "node:path";
+>>>>>>> origin/main
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
 	env,
@@ -27,6 +31,7 @@ import {
 } from "./config.ts";
 import { discoverAudioDevices, LIVE_CAPTURE_RATE } from "./audio.ts";
 import { formatBackendLabel, resolveTranscriptionPlan } from "./backends.ts";
+<<<<<<< HEAD
 import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, getWhisperCppModelNameFromPath, getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
@@ -36,9 +41,22 @@ import { MODEL_IDLE_MODES, SCRIPTS, type Detector, type RecognitionTask, type Tr
 import { getManagedCatalogVariant } from "./transfer/catalog.ts";
 import { getEngineEvidence } from "./transfer/engine-evidence.ts";
 import { checkSetupModelSelection, cleanSettingText, configuredModelLabel, createSettingsPicker, discoverAdvancedRuntime, getPrintableInput, LANGUAGE_LABELS, managedWhisperName, sensitiveOptionsSummary, TRANSLATE_FROM_VALUE_LABELS, TRANSCRIPTION_LANGUAGE_VALUES, TRANSLATION_SOURCE_LANGUAGE_VALUES, whisperModelCompatibility, type AdvancedRuntime } from "./transfer/settings.ts";
+=======
+import { hostDefaultShortcut, isOmp } from "./host.ts";
+import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "./models.ts";
+import { findExecutable } from "./processes.ts";
+import { fitTerminalTail } from "./recording-widget.ts";
+import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
+import { type Component, decodeKittyPrintable, fuzzyFilter, Key, matchesKey, parseKey, type SelectItem, type SettingItem, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
+>>>>>>> origin/main
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
+
+// Each host supplies only its own picker dependencies.
+const piSelectorPath = "./terminal-ui-pi.ts";
+const piSelector = isOmp ? undefined : await import(piSelectorPath) as typeof import("./terminal-ui-pi.ts");
+const ompSelector = isOmp ? await import("./model-selector-omp.ts") : undefined;
 
 type ConfigurationCategoryId = "general" | "transcription" | "streaming" | "audio";
 type FocusedPane = "categories" | "settings";
@@ -305,7 +323,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	private handleCloseInput(data: string) {
-		if (!matchesKey(data, Key.ctrl("c")) && data !== "q" && data !== "Q") return false;
+		if (!matchesKey(data, "ctrl+c") && data !== "q" && data !== "Q") return false;
 		this.close();
 		return true;
 	}
@@ -317,7 +335,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	private handlePaneSwitchInput(data: string) {
-		if (!matchesKey(data, Key.tab) && !matchesKey(data, Key.shift("tab"))) return false;
+		if (!matchesKey(data, Key.tab) && !matchesKey(data, "shift+tab")) return false;
 		this.focusedPane = this.focusedPane === "categories" ? "settings" : "categories";
 		this.requestRender();
 		return true;
@@ -839,7 +857,7 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 	const diagnostics = flagValue(envFlag("MICME_STREAM_DIAGNOSTICS"));
 	const whisperCppBinValues = uniqueStrings([env("MICME_WHISPER_CPP_BIN") ?? "", findExecutable(["whisper-cli"]) ?? "", findExecutable(["whisper-cpp"]) ?? "", "whisper-cli", "whisper-cpp"]);
 	const audioFilter = getAudioFilter();
-	const shortcut = getShortcutSettingValue();
+	const shortcut = getShortcutSettingValue(hostDefaultShortcut);
 	const translateToEnglish = getTranslateToEnglishLanguage() ?? "off";
 	const backendValues = ["auto", "whisper.cpp", "python"];
 	const processing = flagValue(mode === "stream" ? getFlagSetting("MICME_PROCESS_AUDIO", true) : env("MICME_PROCESS_AUDIO") !== "0");
@@ -1349,10 +1367,49 @@ export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTh
 		maxVisible: 12,
 		rows: candidates.map((candidate) => ({
 			value: candidate.value,
+<<<<<<< HEAD
 			label: `${candidate.installed ? "✓" : "○"} ${candidate.label}`,
 			description: candidate.description,
 		})),
 	}, theme, done);
+=======
+			label: candidate.installed ? `✓ ${label}` : `○ ${label}`,
+			description: sanitizeTerminalText(candidate.description),
+		};
+	});
+	if (ompSelector) return ompSelector.createOmpModelSelector(items, theme, done);
+	const { Container, DynamicBorder, SelectList, Text } = piSelector!;
+
+	const container = new Container();
+	container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+	container.addChild(new Text(theme.fg("accent", theme.bold("Select whisper.cpp model")), 1, 0));
+	container.addChild(new Text(theme.fg("dim", "✓ found locally • ○ missing; selecting downloads automatically when enabled"), 1, 0));
+
+	const list = new SelectList(items, Math.min(items.length, 16), {
+		selectedPrefix: (text) => theme.fg("accent", text),
+		selectedText: (text) => theme.fg("accent", text),
+		description: (text) => theme.fg("muted", text),
+		scrollInfo: (text) => theme.fg("dim", text),
+		noMatch: (text) => theme.fg("warning", text),
+	});
+	list.onSelect = (item) => done(item.value);
+	list.onCancel = () => done(undefined);
+	container.addChild(list);
+	container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to search • enter select • esc back"), 1, 0));
+	container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+
+	return {
+		render(width: number) {
+			return container.render(width);
+		},
+		invalidate() {
+			container.invalidate();
+		},
+		handleInput(data: string) {
+			list.handleInput(data);
+		},
+	};
+>>>>>>> origin/main
 }
 
 export async function saveConfigurationValue(ctx: ExtensionContext, id: string, value: string, options: { signal?: AbortSignal; artifactDetector?: Detector } = {}): Promise<Record<string, string>> {

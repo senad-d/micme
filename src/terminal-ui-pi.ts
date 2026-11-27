@@ -1,3 +1,4 @@
+export { DynamicBorder } from "@earendil-works/pi-coding-agent";
 export {
 	Container,
 	Editor,
