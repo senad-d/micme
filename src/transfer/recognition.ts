@@ -5,13 +5,13 @@ import { cpus } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { hasNonzeroPcm } from "../audio-level.ts";
 import { installedWhisperModels } from "../backends.ts";
-import { env, expandConfigPath, getTransferOptions } from "../config.ts";
+import { env, expandConfigPath, getTranscribeBackend, getTransferOptions } from "../config.ts";
 import { LIVE_CAPTURE_RATE as RATE } from "../constants.ts";
 import { assertLoadedBinding, loadedRecognitionRoute } from "../live-plan.ts";
 import { isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName } from "../models.ts";
 import { findExecutable, normalizeTranscript } from "../processes.ts";
 import { transcribeInstalledWhisper } from "../transcription.ts";
-import { getManagedCatalogVariant, referenceRows } from "./catalog.ts";
+import { getManagedCatalogVariant, referenceRows, whisperVariants } from "./catalog.ts";
 import type { Choice, DeviceIdentity, EnsureManaged, FileJob, Final, ListCompute, ListInstalled, OpenRecognizer, RecognizedFile, RecognizeFile, Recognizer, Signal, SpeechLanguage, Traits, TransferOptions, Unload, Variant, VerifiedAudio, WordUpdate } from "./contracts.ts";
 import { listCompute as enumerateNative, loadEngine, type EngineProvisioning, type NativeEngine, type NativeEvent } from "./engine.ts";
 import { getEngineEvidence } from "./engine-evidence.ts";
@@ -418,6 +418,12 @@ function whisperChoice(model: ReturnType<typeof legacyModels>[number], choice: C
 	return { ...choice, language: en ? "en" : choice.language };
 }
 
+export function assertInteractiveArtifactBackend(variantId: string) {
+	if (getTranscribeBackend() === "whisper.cpp" && !whisperVariants().some(({ row }) => row.id === variantId)) {
+		throw new Error("MICME_TRANSCRIBE_BACKEND=whisper.cpp cannot use the selected artifact. Clear MICME_ARTIFACT to use Whisper, or select the Auto backend to use this artifact.");
+	}
+}
+
 export function createRecognitionService(options: ServiceOptions = {}) {
 	const observe = (event: Observation) => options.observe && publish(options.observe, event);
 	const settings = options.settings ?? getTransferOptions;
@@ -430,6 +436,7 @@ export function createRecognitionService(options: ServiceOptions = {}) {
 	const openRecognizer: OpenRecognizer = async (requested, onText, signal) => {
 		const choice = { ...requested };
 		const prefs = settings();
+		assertInteractiveArtifactBackend(choice.variantId);
 		const giveBack = await queue.acquire("foreground", signal);
 		let lease: Lease | undefined;
 		try {
