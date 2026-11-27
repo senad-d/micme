@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { AUXILIARY_ROWS, REVIEWED_EXPORTS, STANDARD_VAD, STANDARD_WHISPER, TAGGED_ROWS } from "./catalog-data.ts";
 import type { Cell, DeviceIdentity, Entry, GetEngineEvidence, Lang, RecognitionTask, Traits, Variant } from "./contracts.ts";
 import { getEngineEvidence } from "./engine-evidence.ts";
@@ -33,24 +34,25 @@ function measuredTrait(traits: Traits, cell: Cell): boolean {
 	return traits.languages.includes(cell.language) && (cell.task === "transcribe" ? traits.stream || traits.batch : traits.translateEn);
 }
 
-// The lookup key is generated from the exact blob identity, not from a model name.
-// One loaded Traits snapshot can qualify only one rig/device; otherwise keep the cells
-// as observations, without treating any as proof of binding the selected runtime.
+// One loaded Traits snapshot can qualify only one rig/device. Without a scope,
+// keep measurements as observations, not as proof of the selected runtime.
 export function applyCatalogEvidence(variant: Variant, lookup: GetEngineEvidence, scope?: CatalogRig): Variant {
-	if (variant.rights !== "cleared" || !variant.blobs.length) return variant;
-	// An incoming row may already have observations or qualification from another scope.
-	const baseline: Variant = scope ? {
+	if (variant.rights !== "cleared") return variant;
+	// An incoming row may carry qualification from another scope (or no longer match its pin).
+	const baseline: Variant = {
 		...variant,
 		runtime: variant.runtime === "passed" ? "untested" : variant.runtime,
 		traits: null,
 		languages: [],
 		measurements: [],
-		reason: variant.reason ?? "No qualified native evidence for this rig and device.",
-	} : variant;
-	const observation = lookup(variant.id);
+		reason: variant.reason ?? (scope ? "No qualified native evidence for this rig and device." : "Native qualification requires an exact rig and device."),
+	};
+	const pinned = REVIEWED_EXPORTS.find(({ id }) => id === variant.id);
+	if (!pinned || pinned.quant !== variant.quant || !isDeepStrictEqual(pinned.blobs, variant.blobs)) return baseline;
+	const observation = lookup(pinned.id);
 	if (!observation) return baseline;
 	const { traits, runtime, measurements } = observation;
-	if (!scope) return { ...variant, measurements: structuredClone(measurements) };
+	if (!scope) return { ...baseline, measurements: structuredClone(measurements) };
 	if (!traits || traits.actualCompute === "unknown" || traits.actualCompute !== scope.actualCompute || !sameDevice(traits.boundDevice, scope.device)) return baseline;
 	const cells = measurements.filter((cell) => cell.rig === scope.rig && sameDevice(cell.device, scope.device));
 	const result = { ...baseline, measurements: structuredClone(cells) };
