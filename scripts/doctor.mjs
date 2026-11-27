@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { getPythonWhisperBinary, getWhisperCppBinary, resolveTranscriptionPlan } from "../src/backends.ts";
 import { env, expandConfigPath, getAudioInputConfigKey, getAutoDownloadModel, getConfiguredRecorderInput, getLegacyStreamSettings, getLiveSpeechLanguage, getTranscribeBackend, getTranscriptionMode, getTransferOptions, getTranslateToEnglishLanguage, reloadMicmeConfig } from "../src/config.ts";
 import { getWhisperVadModelPath, isEnglishOnlyWhisperModelName, isRegularFile, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "../src/models.ts";
@@ -387,7 +388,19 @@ async function main() {
   if (process.platform === "darwin" && (!ffmpeg || !whisperCpp.path)) info("macOS prerequisites", "Install the missing ffmpeg or whisper-cpp package with Homebrew.");
 }
 
-if (import.meta.main) await main().catch(() => {
+function isDirectInvocation() {
+  const entry = process.argv[1];
+  // In eval/print mode argv[1] can be an argument to the evaluated code.
+  if (!entry || process.execArgv.some((arg) => /^(?:-(?:e|p|ep|pe)$|--(?:eval|print)(?:=|$))/.test(arg))) return false;
+  try {
+    // Node resolves an npm bin symlink for import.meta.url but not for argv[1].
+    return pathToFileURL(entry).href === import.meta.url || pathToFileURL(realpathSync(entry)).href === import.meta.url;
+  } catch {
+    return false;
+  }
+}
+
+if (import.meta.main ?? isDirectInvocation()) await main().catch(() => {
   console.error("Micme doctor could not complete its checks. Check configuration and local file permissions.");
   process.exitCode = 1;
 });

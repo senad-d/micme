@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -619,6 +619,31 @@ test("importing doctor does not run diagnostics or probe a configured worker", {
 	});
 	assert.equal(output, "");
 	await assert.rejects(access(`${worker}.args`), { code: "ENOENT" });
+});
+
+test("compiled doctor starts as a direct entry or npm-style bin symlink, not when imported", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-entry-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const doctor = await buildDoctorFixture(root);
+	const bin = join(root, "micme-doctor");
+	const importer = join(root, "importer.mjs");
+	const worker = join(root, "micme-live");
+	await symlink(doctor, bin);
+	await writeFile(importer, `await import(${JSON.stringify(pathToFileURL(doctor).href)});\n`);
+	await createLoggedCommand(worker, 1);
+	const run = (...args) => runNode(["--no-experimental-strip-types", "--import", noDownload, ...args], {
+		...isolatedEnvironment(root, root), MICME_TRANSCRIPTION_MODE: "stream", MICME_MODEL_DIR: join(root, "models"),
+	});
+
+	assert.equal(run(importer), "");
+	assert.equal(run("--input-type=module", "--eval", "await import(process.argv[1]);", doctor), "");
+	await assert.rejects(access(`${worker}.args`), { code: "ENOENT" });
+	const direct = run(doctor);
+	assert.match(direct, /^Micme doctor$/m);
+	assert.match(direct, /^✓ live worker protocol: Worker v1 available;/m);
+	assert.match(direct, /^- capture readiness: not tested;/m);
+	assert.equal(run(bin), direct);
+	assert.equal(await readFile(`${worker}.args`, "utf8"), "--protocol-version\n--protocol-version\n");
 });
 
 test("doctor uses the default config directory without attempting to load Pi peer modules", async (t) => {
