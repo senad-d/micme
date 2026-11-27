@@ -343,6 +343,21 @@ test("clip observation waits through padded metadata and a partial stereo frame,
 	assert.equal(states[2].channel, null);
 });
 
+test("clip observation excludes a possible RIFF pad byte from unsigned 8-bit PCM", { timeout: 3_000 }, async (t) => {
+	const directory = await makeDirectory(t, createClipRecordingDirectory);
+	const path = join(directory.path, "raw.wav");
+	const recording = recordingFixture(directory, path);
+	const controller = new AbortController();
+	const states = [];
+	const header = wavHeader(0, { growing: true, bits: 8 });
+	await writeFile(path, Buffer.concat([header, Buffer.from([128, 0])])); // A silent sample and RIFF padding before lengths are patched.
+	await observeCapture(recording, "clip", "builtin", (state) => {
+		states.push(state.stage);
+		if (state.firstSampleMs !== null) controller.abort();
+	}, AbortSignal.any([t.signal, controller.signal]));
+	assert.deepEqual(states, ["waiting", "digital-zero"]);
+});
+
 test("clip observation reports an exited device without publishing late PCM", { timeout: 3_000 }, async (t) => {
 	const directory = await makeDirectory(t);
 	const path = join(directory.path, "raw.wav");
