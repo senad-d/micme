@@ -10,12 +10,14 @@ const piAdapter = "./terminal-ui-pi.ts";
 
 export const {
 	Container,
+	Editor,
 	Key,
 	SelectList,
 	Text,
 	decodeKittyPrintable,
 	fuzzyFilter,
 	Input,
+	isKeyRelease,
 	matchesKey,
 	parseKey,
 	sliceByColumn,

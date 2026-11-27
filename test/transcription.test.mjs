@@ -8,7 +8,8 @@ import { promisify } from "node:util";
 
 import { MAX_CAPTURED_OUTPUT_CHARS } from "../src/constants.ts";
 import { shellQuote } from "../src/processes.ts";
-import { transcribeWithCustomCommand } from "../src/transcription.ts";
+import { RecordingDirectory } from "../src/recording-dir.ts";
+import { transcribeInstalledWhisper, transcribeWithCustomCommand } from "../src/transcription.ts";
 
 const execFileAsync = promisify(execFile);
 const transcriptionModule = new URL("../src/transcription.ts", import.meta.url).href;
@@ -34,6 +35,22 @@ function transcribeStdout(tempDir, length) {
 	const command = `${shellQuote(process.execPath)} -e "process.stdout.write('a' + 'x'.repeat(${length - 1}))" {audio}`;
 	return transcribeWithCustomCommand(command, join(tempDir, "raw.wav"), tempDir);
 }
+
+test("installed Whisper file inference reports observed compute and uses the fixed task and language", { skip: process.platform === "win32" }, async (t) => {
+	const dir = await createTranscriptDir(t);
+	const model = join(dir, "manual.bin");
+	const cli = join(dir, "whisper-cli");
+	await writeFile(model, "manual model fixture");
+	await writeFile(cli, `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[args.indexOf('-l') + 1] !== 'fr' || !args.includes('-tr') || args.includes('-ng')) process.exit(23);
+process.stderr.write('whisper_backend_init_gpu: using Vulkan0 backend\\n');
+process.stdout.write('fixed language/task');
+`, { mode: 0o700 });
+	const choice = { language: "fr", task: "translate-en", compute: "auto" };
+	const result = await transcribeInstalledWhisper(cli, model, join(dir, "audio.wav"), new RecordingDirectory(dir), choice, new AbortController().signal);
+	assert.deepEqual(result, { text: "fixed language/task", actualCompute: "vulkan", boundDevice: null });
+});
 
 test("a successful custom hook with a writerless FIFO rejects promptly", { skip: process.platform === "win32" && "requires a POSIX FIFO" }, async (t) => {
 	const dir = await createTranscriptDir(t);

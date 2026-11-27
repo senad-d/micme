@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, readFile } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -9,6 +10,7 @@ import { MAX_CAPTURED_OUTPUT_CHARS } from "./constants.ts";
 import { ensureWhisperCppModel, getPythonWhisperModelName } from "./models.ts";
 import { formatProcessOutput, formatRunExit, runProcess, runShell } from "./processes.ts";
 import type { RecordingDirectory } from "./recording-dir.ts";
+import type { Choice, Traits } from "./transfer/contracts.ts";
 import type { RunResult } from "./types.ts";
 
 export { getWhisperCppBinary, resolveExecutableConfig } from "./backends.ts";
@@ -48,20 +50,46 @@ export async function transcribeWithCustomCommand(template: string, audioPath: s
 	return readTranscriptOutput(transcriptPath, result, directory);
 }
 
+type WhisperCppOptions = { allowDownload?: boolean; signal?: AbortSignal; directory?: RecordingDirectory };
+type FileWhisperChoice = Pick<Choice, "language" | "task" | "compute">;
+
 export async function transcribeWithWhisperCpp(
 	binary: string,
 	modelPath: string,
 	audioPath: string,
 	tempDir: string,
 	ctx?: ExtensionContext,
-	options: { allowDownload?: boolean; signal?: AbortSignal; directory?: RecordingDirectory } = {},
+	options: WhisperCppOptions = {},
 ) {
+	return (await runWhisperCpp(binary, modelPath, audioPath, tempDir, options, ctx)).text;
+}
+
+/** Installed file jobs never inherit the ambient language/task or download policy. */
+export async function transcribeInstalledWhisper(binary: string, model: string, audio: string, directory: RecordingDirectory, choice: FileWhisperChoice, signal: AbortSignal) {
+	return runWhisperCpp(binary, model, audio, directory.filesPath, { directory, signal, allowDownload: false }, undefined, choice);
+}
+
+function observedWhisperCompute(stderr: string): Traits["actualCompute"] {
+	if (/whisper_backend_init(?:_gpu)?: failed to initialize/iu.test(stderr)) return "unknown";
+	if (/whisper_backend_init_gpu: using .*Metal|ggml_backend_metal_device_init:.*using/iu.test(stderr)) return "metal";
+	if (/whisper_backend_init_gpu: using .*Vulkan/iu.test(stderr)) return "vulkan";
+	if (/whisper_backend_init: using (?!CPU\b)/iu.test(stderr)) return "unknown";
+	if (/whisper_backend_init_gpu: no GPU found|whisper_backend_init: using CPU backend/iu.test(stderr)) return "cpu";
+	return "unknown";
+}
+
+async function runWhisperCpp(binary: string, modelPath: string, audioPath: string, tempDir: string, options: WhisperCppOptions,
+	ctx?: ExtensionContext, choice?: FileWhisperChoice) {
 	await ensureWhisperCppModel(modelPath, ctx, options);
-	const outputBase = join(tempDir, "whisper-cpp");
+	const outputBase = join(tempDir, choice ? `whisper-${randomUUID()}` : "whisper-cpp");
 	const model = options.directory?.cwdFd === undefined ? modelPath : resolve(modelPath);
-	const args = ["-m", model, "-f", audioPath, "-otxt", "-of", outputBase, "-nt", "-np", "-nf", "-sns"];
-	const translateLanguage = getTranslateToEnglishLanguage();
-	if (translateLanguage) {
+	const args = ["-m", model, "-f", audioPath, "-otxt", "-of", outputBase, "-nt", ...(!choice ? ["-np"] : []), "-nf", "-sns"];
+	const translateLanguage = choice ? undefined : getTranslateToEnglishLanguage();
+	if (choice) {
+		if (choice.compute === "cpu") args.push("-ng");
+		if (choice.task === "translate-en") args.push("-tr");
+		args.push("-l", choice.language);
+	} else if (translateLanguage) {
 		args.push("-tr", "-l", translateLanguage);
 	} else {
 		const language = env("MICME_LANGUAGE");
@@ -73,7 +101,9 @@ export async function transcribeWithWhisperCpp(
 		throw new Error(`whisper.cpp failed (${formatRunExit(result)}):\n${formatProcessOutput(result.stderr, result.stdout)}`);
 	}
 
-	return readTranscriptOutput(`${outputBase}.txt`, result, options.directory);
+	const actualCompute = choice ? observedWhisperCompute(result.stderr) : "unknown";
+	if (choice && choice.compute !== "auto" && actualCompute !== choice.compute) throw new Error("whisper.cpp did not confirm the selected compute backend.");
+	return { text: await readTranscriptOutput(`${outputBase}.txt`, result, options.directory), actualCompute, boundDevice: null } as const;
 }
 
 export async function transcribeWithOpenAiWhisper(binary: string, audioPath: string, tempDir: string, modelName?: string, signal?: AbortSignal, directory?: RecordingDirectory) {

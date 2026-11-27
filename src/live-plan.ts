@@ -6,6 +6,7 @@ import { env, getLiveSpeechLanguage, getStreamFinalizeWithClip, getTranslateToEn
 import { DEFAULT_TRANSCRIBE_BACKEND } from "./constants.ts";
 import { ensureWhisperCppModel, ensureWhisperVadModel, getWhisperVadModelPath, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
+import type { Choice, Engine, Traits } from "./transfer/contracts.ts";
 import type { LivePlan } from "./types.ts";
 
 export function resolveLivePlan() {
@@ -30,6 +31,27 @@ export function resolveLivePlanDetails(backend = env("MICME_TRANSCRIBE_BACKEND")
 		finalizeWithClip: getStreamFinalizeWithClip(),
 	};
 	return { live, model };
+}
+
+/** Route the optional engine only after load. Worker v1 does not use this policy. */
+export function loadedRecognitionRoute(choice: Choice, engine: Pick<Engine, "traits" | "batchFile">) {
+	const { traits } = engine;
+	assertLoadedBinding(choice, traits);
+	if (choice.task === "translate-en" && !traits.translateEn) throw new Error("The loaded recognition model cannot translate to English.");
+	if ((choice.detector === "model" ? "native" : choice.detector) !== traits.vad) {
+		throw new Error("The loaded recognition model does not support the selected speech detector.");
+	}
+	if (traits.stream) return "stream";
+	if (traits.longForm && engine.batchFile) return "long-form";
+	if (traits.batch) return choice.chunking && !traits.longForm ? "chunks" : "whole";
+	throw new Error("The loaded model does not expose a usable recognition route.");
+}
+
+export function assertLoadedBinding(choice: Choice, traits: Traits) {
+	if ((choice.compute !== "auto" && choice.compute !== traits.actualCompute) ||
+		(choice.requestedDeviceId !== null && traits.boundDevice?.id !== choice.requestedDeviceId)) {
+		throw new Error("The loaded recognition device does not match the selected compute option.");
+	}
 }
 
 export async function ensureLiveModels(plan: ReturnType<typeof resolveLivePlan>, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {

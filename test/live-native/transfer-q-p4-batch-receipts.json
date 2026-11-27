@@ -1,0 +1,1509 @@
+{
+  "variantId": "parakeet-tdt-0.6b-v3/Q4_K_M@536c7023afb9030c8e6f4d238607c7dc5d9b5b27361a79e8ff4139321822cab4",
+  "sourceSha256": "9b741325f3d6c65d28d69e428b347380a80babb3cf7de1e703037ee51c2ac243",
+  "manifestSha256": "d7ed1856d22869925c07f847fe34d34c819429279d5a5d85ce54d15f16e5d367",
+  "comparison": {
+    "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9": {
+      "raw": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "compute": "cpu",
+      "device": {
+        "id": null,
+        "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+      },
+      "pcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9"
+    },
+    "ff58760aeeeb52e6a61a850e9934207a7a4b4667f1a4e7255ad773efd8978bc7": {
+      "raw": "But now it doesn't seem to matter very much. My uncle was delighted. For myself, moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald being lean. Give me my horse and arms, and wait for me here. I will go in quest of this knight, and dead or alive, I will make him keep his word plighted to so great a beauty. It was written in the upper Rangatada district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch in the press newspaper, June 13, 1863.",
+      "compute": "cpu",
+      "device": {
+        "id": null,
+        "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+      },
+      "pcmSha256": "ff58760aeeeb52e6a61a850e9934207a7a4b4667f1a4e7255ad773efd8978bc7"
+    }
+  },
+  "receipts": [
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-jfk-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-jfk-80-warm",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-jfk-80-reload",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-jfk-80-kill",
+      "score": "fail",
+      "gates": {
+        "outcome": {
+          "state": "fail",
+          "message": "lost"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "take: no-result"
+        },
+        "pcm": {
+          "state": "unverified",
+          "message": "Need captured, closed and consumed PCM length/digest from the actual route"
+        },
+        "wire": {
+          "state": "unverified",
+          "message": "No native route/transport trace"
+        },
+        "loads": {
+          "state": "unverified",
+          "message": "Missing native inference/model/VAD counts"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "unverified",
+          "message": "Need human reference and observed raw final"
+        },
+        "seams": {
+          "state": "unverified",
+          "message": "Missing native endpoint/seam observer"
+        },
+        "target": {
+          "state": "unverified",
+          "message": "Need independently observed target and send/queue/insertion counts"
+        }
+      },
+      "wer": null,
+      "fault": {
+        "kind": "killed",
+        "error": null,
+        "injectedMs": 15561.906109999996,
+        "confirmMs": 15659.199496999994,
+        "wire": [
+          {
+            "ms": 4445.554858018448,
+            "rss": null,
+            "kind": "loaded",
+            "fresh": true,
+            "traits": {
+              "stream": false,
+              "batch": true,
+              "longForm": false,
+              "nativeLid": true,
+              "bias": false,
+              "translateEn": false,
+              "languages": [
+                "bg",
+                "hr",
+                "cs",
+                "da",
+                "nl",
+                "en",
+                "et",
+                "fi",
+                "fr",
+                "de",
+                "el",
+                "hu",
+                "it",
+                "lv",
+                "lt",
+                "mt",
+                "pl",
+                "pt",
+                "ro",
+                "ru",
+                "sk",
+                "sl",
+                "es",
+                "sv",
+                "uk"
+              ],
+              "vad": "off",
+              "actualCompute": "cpu",
+              "boundDevice": {
+                "id": null,
+                "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+              }
+            },
+            "pid": 1265656,
+            "sha256": "75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a",
+            "threads": 4,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 895303680,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 15629.207755972442,
+            "rss": null,
+            "kind": "snapshot",
+            "samples": 176000,
+            "pcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9"
+          },
+          {
+            "ms": 15653.861556996402,
+            "rss": null,
+            "kind": "failed"
+          },
+          {
+            "ms": 15655.112725009021,
+            "rss": null,
+            "kind": "released",
+            "resident": false,
+            "pid": 1265656,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 895303680,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 18831.248799969253,
+            "rss": null,
+            "kind": "loaded",
+            "fresh": true,
+            "traits": {
+              "stream": false,
+              "batch": true,
+              "longForm": false,
+              "nativeLid": true,
+              "bias": false,
+              "translateEn": false,
+              "languages": [
+                "bg",
+                "hr",
+                "cs",
+                "da",
+                "nl",
+                "en",
+                "et",
+                "fi",
+                "fr",
+                "de",
+                "el",
+                "hu",
+                "it",
+                "lv",
+                "lt",
+                "mt",
+                "pl",
+                "pt",
+                "ro",
+                "ru",
+                "sk",
+                "sl",
+                "es",
+                "sv",
+                "uk"
+              ],
+              "vad": "off",
+              "actualCompute": "cpu",
+              "boundDevice": {
+                "id": null,
+                "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+              }
+            },
+            "pid": 1265755,
+            "sha256": "75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a",
+            "threads": 4,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 895672320,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 19794.70445399433,
+            "rss": 901664768,
+            "kind": "released",
+            "resident": true,
+            "pid": 1265755,
+            "evidence": {
+              "asrCalls": 1,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 948703232,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 19794.946770001945,
+            "rss": null,
+            "kind": "final",
+            "final": {
+              "raw": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+              "local": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+              "language": "en",
+              "source": "import",
+              "rules": []
+            },
+            "evidence": {
+              "asrCalls": 1,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 948703232,
+              "inputSamples": 176000,
+              "inputPcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9",
+              "workerCleanExit": false
+            },
+            "inputSamples": 176000,
+            "inputPcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9"
+          }
+        ],
+        "capture": [
+          {
+            "ms": 4530.28724001794,
+            "type": "capture-start"
+          },
+          {
+            "ms": 4551.3563160195845,
+            "type": "capture-first",
+            "samples": 320
+          },
+          {
+            "ms": 15549.388998021182,
+            "type": "capture-end",
+            "samples": 176000,
+            "maxPaceDelayMs": 20.126859962940216
+          },
+          {
+            "ms": 15599.340112020072,
+            "type": "capture-close",
+            "samples": 176000
+          }
+        ],
+        "mutations": [
+          {
+            "ms": 19801.115594000003,
+            "text": "PUBLIC BENCHMARK: And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. "
+          }
+        ]
+      }
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-jfk-80-kill-next",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-jfk-80-hang",
+      "score": "fail",
+      "gates": {
+        "outcome": {
+          "state": "fail",
+          "message": "timeout"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "take: no-result"
+        },
+        "pcm": {
+          "state": "unverified",
+          "message": "Need captured, closed and consumed PCM length/digest from the actual route"
+        },
+        "wire": {
+          "state": "unverified",
+          "message": "No native route/transport trace"
+        },
+        "loads": {
+          "state": "unverified",
+          "message": "Missing native inference/model/VAD counts"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "unverified",
+          "message": "Need human reference and observed raw final"
+        },
+        "seams": {
+          "state": "unverified",
+          "message": "Missing native endpoint/seam observer"
+        },
+        "target": {
+          "state": "unverified",
+          "message": "Need independently observed target and send/queue/insertion counts"
+        }
+      },
+      "wer": null,
+      "fault": {
+        "kind": "hung",
+        "error": null,
+        "injectedMs": 15503.546174999996,
+        "confirmMs": 20596.271305999995,
+        "wire": [
+          {
+            "ms": 4402.972601019923,
+            "rss": null,
+            "kind": "loaded",
+            "fresh": true,
+            "traits": {
+              "stream": false,
+              "batch": true,
+              "longForm": false,
+              "nativeLid": true,
+              "bias": false,
+              "translateEn": false,
+              "languages": [
+                "bg",
+                "hr",
+                "cs",
+                "da",
+                "nl",
+                "en",
+                "et",
+                "fi",
+                "fr",
+                "de",
+                "el",
+                "hu",
+                "it",
+                "lv",
+                "lt",
+                "mt",
+                "pl",
+                "pt",
+                "ro",
+                "ru",
+                "sk",
+                "sl",
+                "es",
+                "sv",
+                "uk"
+              ],
+              "vad": "off",
+              "actualCompute": "cpu",
+              "boundDevice": {
+                "id": null,
+                "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+              }
+            },
+            "pid": 1265921,
+            "sha256": "75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a",
+            "threads": 4,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 895799296,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 15544.685062014643,
+            "rss": null,
+            "kind": "snapshot",
+            "samples": 176000,
+            "pcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9"
+          },
+          {
+            "ms": 20591.285726034228,
+            "rss": null,
+            "kind": "released",
+            "resident": false,
+            "pid": 1265921,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 895799296,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 20592.954786026065,
+            "rss": null,
+            "kind": "failed"
+          },
+          {
+            "ms": 23959.49696000773,
+            "rss": null,
+            "kind": "loaded",
+            "fresh": true,
+            "traits": {
+              "stream": false,
+              "batch": true,
+              "longForm": false,
+              "nativeLid": true,
+              "bias": false,
+              "translateEn": false,
+              "languages": [
+                "bg",
+                "hr",
+                "cs",
+                "da",
+                "nl",
+                "en",
+                "et",
+                "fi",
+                "fr",
+                "de",
+                "el",
+                "hu",
+                "it",
+                "lv",
+                "lt",
+                "mt",
+                "pl",
+                "pt",
+                "ro",
+                "ru",
+                "sk",
+                "sl",
+                "es",
+                "sv",
+                "uk"
+              ],
+              "vad": "off",
+              "actualCompute": "cpu",
+              "boundDevice": {
+                "id": null,
+                "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+              }
+            },
+            "pid": 1266371,
+            "sha256": "75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a",
+            "threads": 4,
+            "evidence": {
+              "asrCalls": 0,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 895041536,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 25056.264350020472,
+            "rss": 901271552,
+            "kind": "released",
+            "resident": true,
+            "pid": 1266371,
+            "evidence": {
+              "asrCalls": 1,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 948269056,
+              "inputSamples": 0,
+              "inputPcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "workerCleanExit": false
+            }
+          },
+          {
+            "ms": 25056.56729301173,
+            "rss": null,
+            "kind": "final",
+            "final": {
+              "raw": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+              "local": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+              "language": "en",
+              "source": "import",
+              "rules": []
+            },
+            "evidence": {
+              "asrCalls": 1,
+              "asrLoads": 1,
+              "vadLoads": 0,
+              "peakRssBytes": 948269056,
+              "inputSamples": 176000,
+              "inputPcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9",
+              "workerCleanExit": false
+            },
+            "inputSamples": 176000,
+            "inputPcmSha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9"
+          }
+        ],
+        "capture": [
+          {
+            "ms": 4488.485211038176,
+            "type": "capture-start"
+          },
+          {
+            "ms": 4528.483072006289,
+            "type": "capture-first",
+            "samples": 320
+          },
+          {
+            "ms": 15498.994664036814,
+            "type": "capture-end",
+            "samples": 176000,
+            "maxPaceDelayMs": 20.073491990566254
+          },
+          {
+            "ms": 15516.236691021506,
+            "type": "capture-close",
+            "samples": 176000
+          }
+        ],
+        "mutations": [
+          {
+            "ms": 25062.140530999997,
+            "text": "PUBLIC BENCHMARK: And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. "
+          }
+        ]
+      }
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-jfk-80-hang-next",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-continuous-40",
+      "score": "pass",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Batch route does not produce speculative drafts"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 112,
+        "substitutions": 3,
+        "deletions": 0,
+        "insertions": 1,
+        "wer": 0.03571428571428571
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-continuous-80",
+      "score": "pass",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Batch route does not produce speculative drafts"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 112,
+        "substitutions": 3,
+        "deletions": 0,
+        "insertions": 1,
+        "wer": 0.03571428571428571
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-immediate-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed readyCue"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "pass",
+          "message": "No visible, committed, final or delivered words"
+        },
+        "speech": {
+          "state": "not-applicable",
+          "message": "Negative control"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Negative control must leave the target unchanged"
+        }
+      },
+      "wer": {
+        "words": 0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": null
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-noise-80",
+      "score": "pass",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "pass",
+          "message": "No visible, committed, final or delivered words"
+        },
+        "speech": {
+          "state": "not-applicable",
+          "message": "Negative control"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Negative control must leave the target unchanged"
+        }
+      },
+      "wer": {
+        "words": 0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": null
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-overload-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 22,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-pause-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 9,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-quiet-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 9,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-repeat-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 11,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-short-80",
+      "score": "unverified",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "unverified",
+          "message": "Missing observed speechOnset, speechEnd"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 2,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-parakeet-tdt-0.6b-v3-d7ed1856-silence-80",
+      "score": "pass",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "not-applicable",
+          "message": "Batch route has no streaming transport"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "not-applicable",
+          "message": "Not a display fixture with applicable aligned preview"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "pass",
+          "message": "Digital silence requires zero native ASR calls"
+        },
+        "negatives": {
+          "state": "pass",
+          "message": "No visible, committed, final or delivered words"
+        },
+        "speech": {
+          "state": "not-applicable",
+          "message": "Negative control"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Negative control must leave the target unchanged"
+        }
+      },
+      "wer": {
+        "words": 0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": null
+      },
+      "fault": null
+    }
+  ]
+}
