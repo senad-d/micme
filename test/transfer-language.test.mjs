@@ -54,8 +54,12 @@ class StubRecognizerEngine {
 
 function isolateConfig(t, textOptions) {
 	const dir = mkdtempSync(join(tmpdir(), "micme-language-"));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
-	t.mock.property(process, "env", { PI_CODING_AGENT_DIR: dir, ...textOptions });
+	const originalEnvironment = process.env;
+	t.after(() => {
+		process.env = originalEnvironment;
+		rmSync(dir, { recursive: true, force: true });
+	});
+	process.env = { PI_CODING_AGENT_DIR: dir, ...textOptions };
 	return () => settings(textOptions);
 }
 
