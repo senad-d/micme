@@ -13,18 +13,31 @@ const workerSources = [
 	"native/live/decoder.cpp",
 	"native/live/decoder.hpp",
 ];
+const helperSources = [
+	"native/recognizer/CMakeLists.txt",
+	"native/recognizer/instrument.cmake",
+	"native/recognizer/main.cpp",
+	"native/recognizer/README.md",
+	"native/polish/apple-final.swift",
+];
 const forbiddenFiles = [
 	["micme.json", "generated Micme config"],
 	["native/live/build/CMakeCache.txt", "unexpected native files"],
 	["native/live/worker-contract.test.mjs", "unexpected native files"],
+	["native/recognizer/micme-recognizer", "unexpected native files"],
+	["native/polish/apple-final", "unexpected native files"],
+	["dist/doctor/src/extension.js", "extension in headless build"],
+	["fixtures/micme-fixture.json", "test fixtures"],
+	["models/model.safetensors", "model artifacts"],
 	["build/live/CMakeCache.txt", "local build products"],
 	["bin/micme-live", "local build products"],
 	["bin/micme-live.exe", "local build products"],
+	["bin/micme-recognizer", "local build products"],
 	["models/ggml-silero-v5.1.2.bin", "model artifacts"],
 	["recordings/sample.wav", "audio artifacts"],
 ];
 
-async function stagePackage(t, { includeForbidden = false } = {}) {
+async function stagePackage(t, { includeForbidden = false, editManifest } = {}) {
 	const root = await mkdtemp(join(tmpdir(), "micme package guard-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const manifest = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
@@ -32,8 +45,12 @@ async function stagePackage(t, { includeForbidden = false } = {}) {
 	delete manifest.scripts;
 	const forbiddenPaths = forbiddenFiles.map(([path]) => path);
 	if (includeForbidden) manifest.files.push(...forbiddenPaths);
+	const declaredPaths = [...manifest.pi.extensions, ...Object.values(manifest.bin)];
+	editManifest?.(manifest);
 	await writeFile(join(root, "package.json"), JSON.stringify(manifest));
-	for (const path of [...manifest.pi.extensions, ...Object.values(manifest.bin), ...workerSources, ...forbiddenPaths]) {
+	// Simulate an accidentally emitted extension only for the explicit negative case.
+	const stagedArtifacts = includeForbidden ? forbiddenPaths : forbiddenPaths.filter((path) => path !== "dist/doctor/src/extension.js");
+	for (const path of [...declaredPaths, ...workerSources, ...helperSources, ...stagedArtifacts]) {
 		const target = join(root, path);
 		await mkdir(dirname(target), { recursive: true });
 		await writeFile(target, "fixture\n");
@@ -61,7 +78,7 @@ test("the npm allowlist packs worker sources and excludes local artifacts", asyn
 	const result = checkWithoutNpmOnPath(await stagePackage(t));
 	assert.equal(result.status, 0, result.stdout + result.stderr);
 	const packed = new Set(result.stdout.split(/\r?\n/));
-	for (const source of workerSources) assert.ok(packed.has(`- ${source}`), result.stdout);
+	for (const source of [...workerSources, ...helperSources]) assert.ok(packed.has(`- ${source}`), result.stdout);
 	for (const [path] of forbiddenFiles) assert.ok(!packed.has(`- ${path}`), result.stdout);
 });
 
@@ -71,4 +88,23 @@ test("the package guard rejects forbidden manifest entries without npm on PATH",
 	assert.doesNotMatch(result.stderr, /^Missing required package paths:\r?$/m);
 	const violations = new Set(result.stderr.split(/\r?\n/));
 	for (const [path, label] of forbiddenFiles) assert.ok(violations.has(`- ${path} (${label})`), result.stderr);
+});
+
+test("the package guard requires the public transcription bin declaration", async (t) => {
+	const result = checkWithoutNpmOnPath(await stagePackage(t, { editManifest(manifest) { delete manifest.bin["micme-transcribe"]; } }));
+	assert.equal(result.status, 1, result.stdout + result.stderr);
+	assert.match(result.stderr, /micme-transcribe.*dist\/doctor\/scripts\/transcribe\.mjs/);
+});
+
+test("the package guard requires the packaged helper build inputs", async (t) => {
+	const missing = "native/recognizer/instrument.cmake";
+	const result = checkWithoutNpmOnPath(await stagePackage(t, { editManifest(manifest) { manifest.files = manifest.files.filter((path) => path !== missing); } }));
+	assert.equal(result.status, 1, result.stdout + result.stderr);
+	assert.match(result.stderr, /Missing required package paths:\s+- native\/recognizer\/instrument\.cmake/);
+});
+
+test("the package guard forbids install hooks in the headless package", async (t) => {
+	const result = checkWithoutNpmOnPath(await stagePackage(t, { editManifest(manifest) { manifest.scripts = { install: "false" }; } }));
+	assert.equal(result.status, 1, result.stdout + result.stderr);
+	assert.match(result.stderr, /install lifecycle hook/);
 });

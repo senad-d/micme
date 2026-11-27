@@ -8,5 +8,5 @@
     "rootDir": "..",
     "outDir": "../dist/doctor"
   },
-  "include": ["doctor.mjs"]
+  "include": ["doctor.mjs", "transcribe.mjs"]
 }
