@@ -123,6 +123,12 @@ Micme declares `*` as the peer dependency range for both `@earendil-works/pi-cod
 
 Before adopting another Pi release, review both published peer ranges and update the development pins and the contract test together.
 
+Oh My Pi 19.2 uses its own terminal UI and composer integration. Install with `omp plugin install @senad-d/micme`. The standalone OMP binary needs Node.js 22.19 or newer for Micme's recorder and cleanup helpers: on Linux and macOS, put Node.js on `PATH`; on Windows, use the standard machine-wide `Program Files\nodejs` installation. Micme does not search `PATH` for its Windows helper.
+
+In OMP, press `F8` to start recording and again to stop. OMP keeps `Alt+M` for Models. If your keyboard or terminal intercepts `F8`, use `/micme` or set a different `MICME_SHORTCUT`.
+
+For OMP’s `F8` and printable shortcuts such as `§`, wait until recording has started before tapping again. If your terminal reports key releases, Micme recognizes a quick second tap. Otherwise, wait at least one second between taps.
+
 ---
 
 ## Backend Setup
@@ -197,7 +203,7 @@ Common settings:
 | `MICME_LANGUAGE=en` | Transcription language when translation is off. Use `auto` for detection with multilingual weights. |
 | `MICME_TRANSLATE_TO_ENGLISH=off` | “Translate from” option. Leave `off`, or set the spoken source language code such as `hr`, `bs`, `de`, or `tr` to output English. |
 | `MICME_AUTO_SUBMIT=0` | Review in the editor. Set `1` to send eligible results automatically. Live RPC results always require explicit replay. |
-| `MICME_SHORTCUT=alt+m` | Toggle shortcut. Use terminal syntax (`alt+m`, `ctrl+space`, `f8`) or a printable character such as `§`. Restart or `/reload` after changing. |
+| `MICME_SHORTCUT` | Override the host’s default toggle shortcut. Use terminal syntax (`alt+m`, `ctrl+space`, `f8`) or a printable character such as `§`. Restart or `/reload` after changing. |
 | `MICME_VALIDATE_AUDIO=1` | Clip transcription and optional refinement: reject near-silent audio and fail closed if ffmpeg omits or truncates `max_volume`. With a custom recorder and no ffmpeg, Micme warns and skips this guard. Set `0` to disable it. |
 | `MICME_RECORD_SAMPLE_RATE=auto` | Clip recording sample-rate override. Leave `auto` to use the input's native rate. Stream capture is fixed at 16 kHz. |
 | `MICME_RECORD_SYNC=1` | Preserve wall-clock recording duration from ffmpeg timestamps in the built-in recorder. |

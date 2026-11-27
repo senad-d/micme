@@ -4,6 +4,7 @@ All notable changes to Micme will be documented in this file.
 
 ## Unreleased
 
+- Support Oh My Pi 19.2 settings, device panels, and dictation without changing the upstream Pi UI. Use Node for subprocess helpers under Bun-compiled hosts. Thanks to [@JasonLandbridge](https://github.com/JasonLandbridge) for the contribution in [#156](https://github.com/senad-d/micme/pull/156).
 - Preserve Pi's built-in keyboard shortcuts by installing Micme's editor fallback only for printable-character shortcuts and retaining the `CustomEditor` app-handler contract when wrapping another extension's editor.
 - Move normal Micme persistence to the global `~/.pi/agent/micme.json` store; shell environment variables still override saved settings.
 - Update `/micme conf`, `micme-doctor`, docs, and package examples for the new global JSON config path.
