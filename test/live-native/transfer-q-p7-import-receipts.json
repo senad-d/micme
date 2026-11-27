@@ -1,0 +1,104 @@
+{
+  "build": {
+    "whisperSha256": "40e7b2cd455c9a4fc8e412da781492f73b08be0d6557207ba2e6f20e83657413",
+    "modelSha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+    "ffmpegVersion": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+    "importerSha256": "5237d946a5864b81b94d72495fd767ece85bf032788ea35d5f1bb2d53d9fb1f7"
+  },
+  "rig": {
+    "os": "linux 7.0.0-44-generic",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz",
+    "actualCompute": "cpu",
+    "boundDevice": null
+  },
+  "publicJfkWavSha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "completed": [
+    {
+      "filename": "JFK speech.opus",
+      "state": "ready",
+      "raw": "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.",
+      "local": "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.",
+      "sourceSha256Before": "bea613a65bd70c5138282f700e7e7dd783661a4030c96c02c1ed9cb976a4f772",
+      "sourceSha256After": "bea613a65bd70c5138282f700e7e7dd783661a4030c96c02c1ed9cb976a4f772",
+      "verifiedWav": {
+        "bytes": 352044,
+        "sha256": "b9bd1eb10c5deb08a233fc649bbab987abd92c4d79e8ef48023539ddcbab6e6b"
+      },
+      "normalizedPcm": {
+        "samples": 176000,
+        "sha256": "46e8f951459f15fc40660d0818b3aa0ac570a5e1a1aeb5e7917b47364d05c85d"
+      }
+    },
+    {
+      "filename": "JFK two-track video.mp4",
+      "state": "ready",
+      "raw": "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.",
+      "local": "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.",
+      "sourceSha256Before": "0f0947b79b9ec085f3ce3c63644064b007dbe5be0260e47275702c776046595b",
+      "sourceSha256After": "0f0947b79b9ec085f3ce3c63644064b007dbe5be0260e47275702c776046595b",
+      "verifiedWav": {
+        "bytes": 352300,
+        "sha256": "f0f4a154006729681af306dceb686c795d0e31d8d88b5c554b8255d3bde135ef"
+      },
+      "normalizedPcm": {
+        "samples": 176128,
+        "sha256": "be168664d3ec24f4bd6e6480fde062293836ec549d27c35fddd644034c08d91a"
+      }
+    }
+  ],
+  "errors": [
+    {
+      "filename": "no-audio.mp4",
+      "state": "asr-failed",
+      "wav": null,
+      "unchangedSha256": "417ce98d30aa6ca5ed4bca1736c6d9d40f57183baaf023cb11ec48d9190c887c",
+      "detail": "The selected media contains no audio track."
+    },
+    {
+      "filename": "malformed.wav",
+      "state": "asr-failed",
+      "wav": null,
+      "unchangedSha256": "e7dc598d18ebee9d8b524b45db9ee6e6766bd1257f801c9962ec6c21dd70b846",
+      "detail": "ffprobe could not read the selected media: fd:: Invalid data found when processing input"
+    },
+    {
+      "filename": "unsupported.wav",
+      "state": "asr-failed",
+      "wav": null,
+      "unchangedSha256": "4e6333d022d5c271b2d7b6f358c04a0fe19b695083b7912e328d06c7bdd14679",
+      "detail": "FFmpeg could not read the selected media: [aist#0:0/none @ <address>] Decoding requested, but no decoder found for: none [aost#0:0/pcm_s16le @ <address>] Error initializing a simple filtergraph Error opening output file fd:. Error opening output files: Invalid argument"
+    },
+    {
+      "filename": "external.ffconcat",
+      "state": "asr-failed",
+      "wav": null,
+      "unchangedSha256": "8a096c410159ef66be5c2277a7847658623445822f794bcedfffc5581a13033f",
+      "detail": "ffprobe could not read the selected media: [concat @ <address>] Format not on whitelist 'wav,mp3,aac,flac,ogg,aiff,mov,matroska,webm,avi,mpegts' fd:: Invalid argument"
+    }
+  ],
+  "longImport": {
+    "progress": [
+      [
+        640000,
+        704000
+      ]
+    ],
+    "canceled": "canceled",
+    "canceledRaw": null,
+    "retryState": "ready",
+    "verifiedWav": {
+      "bytes": 1408044,
+      "sha256": "72029470eb86233786fba8c3b1447eb24b923f8d4833a617dba418ebea0d5dc2"
+    },
+    "retryThrough": 704000,
+    "retrySamples": 704000,
+    "repeatedSpeechSha256": "e97e70102166e82c3194e1bda7be20010d6a12f503648992452cb86fbd8a2080"
+  },
+  "retention": {
+    "confirmedPolicy": "count:0",
+    "audioRowsBeforeExplicitDelete": 3,
+    "retryRowPresentAfterDelete": false
+  },
+  "fixtureOutputHookInvoked": false
+}
