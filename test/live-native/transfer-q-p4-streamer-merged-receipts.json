@@ -1,0 +1,142 @@
+{
+  "variantId": "moonshine-streaming-tiny/Q8_0@3b75b3ab1d29bee2112deb73514de0657337db559134956af809d3dd70231174",
+  "sourceSha256": "8da4a59e3f515c8dbb8e26809da7289e9bbc388f5b999d31e744e02ffda358c5",
+  "manifestSha256": "532559ead5b09d0b0e05f8bb3f70f7f137fa28f93e6076739fbe30c9622561fb",
+  "comparison": {
+    "ff58760aeeeb52e6a61a850e9934207a7a4b4667f1a4e7255ad773efd8978bc7": {
+      "raw": "But now it doesn't seem to matter very much. My uncle was delighted. For myself, Moody and DeSataside, I appeared almost to expect a glimpse of the ghost of Hamlet. Mr. Morton seemed particularly struck with the account of Waverley's visit to Donald B. Lee. Give me my horse and arms, and wait for me here. I will go in quest of this night, and dead or alive, I will make him keep his word-plighted to so great beauty. It was written in the upper Rangatade district of the Canterbury Province, as it then was of New Zealand, and appeared at Christchurch in the press newspaper June 13, 1863.",
+      "compute": "cpu",
+      "device": {
+        "id": null,
+        "label": "Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"
+      },
+      "pcmSha256": "ff58760aeeeb52e6a61a850e9934207a7a4b4667f1a4e7255ad773efd8978bc7"
+    }
+  },
+  "receipts": [
+    {
+      "pairId": "p4-moonshine-streaming-tiny-532559ea-continuous-40",
+      "score": "fail",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "fail",
+          "message": "Stale or irrelevant drafts at checkpoints"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 112,
+        "substitutions": 8,
+        "deletions": 2,
+        "insertions": 0,
+        "wer": 0.08928571428571429
+      },
+      "fault": null
+    },
+    {
+      "pairId": "p4-moonshine-streaming-tiny-532559ea-continuous-80",
+      "score": "pass",
+      "gates": {
+        "outcome": {
+          "state": "pass",
+          "message": "completed"
+        },
+        "stages": {
+          "state": "pass",
+          "message": "Required trigger, capture, final and receiver stages observed"
+        },
+        "pcm": {
+          "state": "pass",
+          "message": "Same complete PCM was captured, closed and consumed, and the worker exited cleanly"
+        },
+        "wire": {
+          "state": "pass",
+          "message": "Ordered feeds, exact ACKs and final drain"
+        },
+        "loads": {
+          "state": "pass",
+          "message": "Native loads distinguish a fresh/idle reload from a reused model"
+        },
+        "preview": {
+          "state": "pass",
+          "message": "Early advancing preview and relevant clipped tail"
+        },
+        "idleMic": {
+          "state": "pass",
+          "message": "The capture source must not stay open while idle"
+        },
+        "silenceCalls": {
+          "state": "not-applicable",
+          "message": "Not digital silence"
+        },
+        "negatives": {
+          "state": "not-applicable",
+          "message": "Speech fixture"
+        },
+        "speech": {
+          "state": "pass",
+          "message": "Raw accuracy and control keywords"
+        },
+        "seams": {
+          "state": "pass",
+          "message": "No spurious repeated words at chunk or endpoint boundaries"
+        },
+        "target": {
+          "state": "pass",
+          "message": "Correct observed receiver content exactly once, preserving prompt prefix"
+        }
+      },
+      "wer": {
+        "words": 112,
+        "substitutions": 8,
+        "deletions": 2,
+        "insertions": 0,
+        "wer": 0.08928571428571429
+      },
+      "fault": null
+    }
+  ]
+}
