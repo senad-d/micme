@@ -60,8 +60,7 @@ test("importing the config module does not open the agent config until requested
 	const path = join(root, "micme.json");
 	await writeFile(path, "{}\n");
 
-	await runConfigProbe(root, `
-		import assert from "node:assert/strict";
+	const { stdout } = await runConfigProbe(root, `
 		import fs from "node:fs";
 		import { syncBuiltinESMExports } from "node:module";
 		import { mock } from "node:test";
@@ -69,10 +68,13 @@ test("importing the config module does not open the agent config until requested
 		const open = mock.method(fs, "openSync");
 		syncBuiltinESMExports();
 		const { loadMicmeJson } = await import(moduleUrl);
-		assert.ok(!open.mock.calls.some(({ arguments: [file] }) => file === path));
+		const openedOnImport = open.mock.calls.some(({ arguments: [file] }) => file === path);
 		loadMicmeJson();
-		assert.ok(open.mock.calls.some(({ arguments: [file] }) => file === path), "the spy can observe explicit config access");
+		const openedAfterLoad = open.mock.calls.some(({ arguments: [file] }) => file === path);
+		console.log(JSON.stringify({ openedOnImport, openedAfterLoad }));
 	`, path);
+
+	assert.deepEqual(JSON.parse(stdout), { openedOnImport: false, openedAfterLoad: true });
 });
 
 test("importing config with a writerless FIFO returns an invalid config state", { skip: process.platform === "win32" && "requires a POSIX FIFO" }, async (t) => {
