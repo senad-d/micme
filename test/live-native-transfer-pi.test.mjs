@@ -54,7 +54,7 @@ async function workspace(t) {
 	return dir;
 }
 
-async function provision(t) {
+async function provision(t, backendDiagnostic = "using CPU backend") {
 	const workDir = await workspace(t);
 	const assetsDir = join(workDir, "wavs");
 	await mkdir(assetsDir);
@@ -63,7 +63,7 @@ async function provision(t) {
 	const fixtureModel = "Scripted public test fixture; not model weights.";
 	const clip = `const {writeFileSync} = require('node:fs');\nwriteFileSync(process.argv[process.argv.indexOf('-of') + 1] + '.json', JSON.stringify({transcription: [{text: ${JSON.stringify(text)}}]}));\n`;
 	await Promise.all([
-		writeFile(workerFile, `#!${process.execPath}\n${worker}`, { mode: 0o700 }),
+		writeFile(workerFile, `#!${process.execPath}\n${worker.replace("using CPU backend", backendDiagnostic)}`, { mode: 0o700 }),
 		writeFile(clipFile, `#!${process.execPath}\n${clip}`, { mode: 0o700 }),
 		writeFile(modelFile, fixtureModel), writeFile(vadFile, fixtureModel),
 	]);
@@ -125,6 +125,7 @@ test("Pi collector stops and drains a single zero block without contaminating th
 	const fixture = await stageFixture(local, "immediate", Buffer.alloc(640));
 	const take = validateTake(await collect({ ...trial, ...fixture }, t.signal, { local }));
 	assertComplete(take);
+	assert.equal(take.trial.rig.actualBackend, "cpu");
 	const stamp = times(take);
 	assert.ok(stamp.firstSample < stamp.readyCue && stamp.readyCue < stamp.stopGesture && stamp.stopGesture < stamp.drained);
 	assert.equal(take.native.asrCalls, 0);
@@ -133,6 +134,26 @@ test("Pi collector stops and drains a single zero block without contaminating th
 	assert.equal(take.observedTarget, publicPrefix);
 	assert.deepEqual(take.mutations, []);
 	assert.equal(take.replayed, null);
+});
+
+test("Pi collector refuses a Vulkan request before triggering the provisioned Worker v1 route", linux, async (t) => {
+	const { local, trial } = await provision(t);
+	const fixture = await stageFixture(local, "immediate", Buffer.alloc(640));
+	const take = validateTake(await collect({ ...trial, ...fixture, rig: { ...trial.rig, requestedDevice: "vulkan" } }, t.signal, { local }));
+	assert.equal(take.outcome, "unavailable");
+	assert.deepEqual(take.events, []);
+	assert.equal(take.trial.rig.actualBackend, "unknown");
+	assert.equal(take.gaps[0].code, "unsupported");
+	assert.match(take.gaps[0].detail, /compute selection/i);
+});
+
+test("Pi collector does not certify CPU when the Worker v1 default reports a different backend", linux, async (t) => {
+	const { local, trial } = await provision(t, "whisper_backend_init_gpu: using Vulkan");
+	const fixture = await stageFixture(local, "immediate", Buffer.alloc(640));
+	const take = validateTake(await collect({ ...trial, ...fixture }, t.signal, { local }));
+	assert.equal(take.outcome, "unavailable");
+	assert.equal(take.gaps[0].code, "identity-mismatch");
+	assert.match(take.gaps[0].detail, /planned CPU backend/);
 });
 
 test("Pi collector refuses to grade a new process as an idle model reload", linux, async (t) => {

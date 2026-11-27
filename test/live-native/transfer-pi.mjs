@@ -111,6 +111,11 @@ async function preflight(trial, local) {
 	if (trial.track === "pcm" && (trial.target !== "none" || trial.fixture === "overload")) {
 		block("unsupported", "Direct PCM has no destination or paced overload gesture.");
 	}
+	// Worker v1 uses the pinned binary's default, not an explicit CPU selection.
+	// Accept a CPU condition only if the decoder diagnostics establish CPU use.
+	if (trial.rig.requestedDevice !== null && trial.rig.requestedDevice !== "cpu") {
+		block("unsupported", "This Pi collector has no accelerator or device-specific compute selection.");
+	}
 	const routed = trial.track !== "pcm";
 	const routeRig = { display: routed ? "Linux PTY" : null, mic: routed ? "paced public WAV hook" : null,
 		gpu: null, driver: null, threads: null, actualDevice: null };
@@ -481,6 +486,9 @@ export async function collect(trial, signal, { local, clock = takeClock() } = {}
 			}
 		}
 		take.trial.rig.actualBackend = backend;
+		if (trial.rig.requestedDevice === "cpu" && backend !== "cpu") {
+			block(backend === "unknown" ? "no-observer" : "identity-mismatch", "The decoder did not establish the planned CPU backend.");
+		}
 		if (backend === "unknown") take.gaps.push({ stage: null, code: "no-observer", detail: "Native diagnostics did not identify the loaded compute backend." });
 		if (!isPlannedTake(trial, take.trial)) block("identity-mismatch", "Observed host, backend, or device does not match the frozen condition.");
 	} catch (error) {
