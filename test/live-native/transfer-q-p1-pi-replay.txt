@@ -1,0 +1,12 @@
+Pi replay: scripted ASR with real Pi; network blocked except installed loopback fixture, no microphone or coding prompts.
+Pi 40 columns [scripted ASR, real PTY]: first pair and advancing draft rendered (clipped) before commit; stop-to-target 106 ms; confirmed "PUBLIC BENCHMARK: Public sample for the isolated Pi replay."; replay "Public sample for the isolated Pi replay." (after Left Arrow); no sends or queues
+Pi 80 columns [scripted ASR, real PTY]: first pair and advancing draft rendered before commit; stop-to-target 91 ms; confirmed "PUBLIC BENCHMARK: Public sample for the isolated Pi replay."; replay "Public sample for the isolated Pi replay." (after Left Arrow); no sends or queues
+Restarted only the disposable session; public seed survived the restart.
+Pi replay: scripted ASR with real Pi; network blocked except installed loopback fixture, no microphone or coding prompts.
+Pi 40 columns [scripted ASR, real PTY]: first pair and advancing draft rendered (clipped) before commit; stop-to-target 56 ms; confirmed "PUBLIC BENCHMARK: Public sample for the isolated Pi replay."; replay "Public sample for the isolated Pi replay." (after Left Arrow); no sends or queues
+Pi 80 columns [scripted ASR, real PTY]: first pair and advancing draft rendered before commit; stop-to-target 66 ms; confirmed "PUBLIC BENCHMARK: Public sample for the isolated Pi replay."; replay "Public sample for the isolated Pi replay." (after Left Arrow); no sends or queues
+Restarted only the disposable session; public seed survived the restart.
+Pi replay: scripted ASR with real Pi; network blocked except installed loopback fixture, no microphone or coding prompts.
+Pi 40 columns [scripted ASR, real PTY]: first pair and advancing draft rendered (clipped) before commit; stop-to-target 54 ms; confirmed "PUBLIC BENCHMARK: Public sample for the isolated Pi replay."; replay "Public sample for the isolated Pi replay." (after Left Arrow); no sends or queues
+Pi 80 columns [scripted ASR, real PTY]: first pair and advancing draft rendered before commit; stop-to-target 55 ms; confirmed "PUBLIC BENCHMARK: Public sample for the isolated Pi replay."; replay "Public sample for the isolated Pi replay." (after Left Arrow); no sends or queues
+Restarted only the disposable session; public seed survived the restart.
