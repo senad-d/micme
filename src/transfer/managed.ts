@@ -16,7 +16,7 @@ type AcquireOptions = ModelDownloadOptions & { missing?: string; resume?: boolea
 type Waiter = { signal?: AbortSignal; onProgress?: Progress };
 type Transfer = { controller: AbortController; promise: Promise<void>; waiters: Set<Waiter>; blob: Blob; got: number };
 type ManagedErrorCode = "missing" | "integrity" | "unsafe" | "unqualified" | "unowned" | "busy";
-type Directory = { path: string; stats: BigIntStats };
+type Directory = { path: string; stats: BigIntStats; cache?: Directory };
 
 const downloads = new Map<string, Transfer>();
 const NO_FOLLOW = (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
@@ -90,7 +90,7 @@ export const ensureManaged: EnsureManaged = async (variant, download, progress, 
 	for (const { blob, target, resume } of files) {
 		await ensurePinnedModelFile(blob, target, {
 			signal, resume,
-			missing: isExplicitModelPath(target) ? `Micme will not write to an explicit model path: ${target}` : managedMissingMessage(target, download),
+			missing: managedMissingMessage(target, download),
 			onProgress: (got) => progress(verified + got, total),
 		});
 		signal.throwIfAborted();
@@ -112,6 +112,10 @@ export async function ensurePinnedModelFile(blob: Blob, path: string, options: A
 	options.signal?.throwIfAborted();
 	const target = resolve(path);
 	if (await verifyFile(target, blob, options.signal)) return;
+	options.signal?.throwIfAborted();
+	if (isExplicitModelPath(target)) {
+		throw new ManagedModelError("unowned", `Micme will not download to an explicit model path: ${target}. Install the configured file or clear the override.`);
+	}
 	if (options.missing) throw new ManagedModelError("missing", options.missing);
 	let transfer = downloads.get(target);
 	while (transfer?.controller.signal.aborted) {
@@ -192,7 +196,7 @@ function prepareRemoval(blob: Blob, target: string) {
 	if (isExplicitModelPath(target)) {
 		throw new ManagedModelError("unowned", `Micme will not remove an explicit model path: ${target}`);
 	}
-	const parent = directoryAt(dirname(target));
+	const parent = modelParent(target);
 	if (!parent) return null;
 	if (process.getuid && (parent.stats.uid !== BigInt(process.getuid()) || (parent.stats.mode & 0o022n) !== 0n)) {
 		throw new ManagedModelError("unsafe", `Micme will not remove files from an unowned or shared writable model cache: ${parent.path}`);
@@ -267,7 +271,25 @@ function directoryAt(path: string): Directory | undefined {
 	return { path, stats };
 }
 
+function modelParent(target: string, create = false) {
+	const path = dirname(target);
+	const cachePath = resolve(getWhisperCppModelCacheDir());
+	// VAD and native variants have an app-managed subdirectory in the cache.
+	// The cache boundary itself must still be a directory, not a redirect.
+	const nested = path !== cachePath && dirname(path) === cachePath;
+	let cache = nested ? directoryAt(cachePath) : undefined;
+	if (create) {
+		mkdirSync(path, { recursive: true, mode: 0o700 });
+		if (cache) assertDirectory(cache);
+		else if (nested) cache = directoryAt(cachePath);
+	}
+	if (nested && !cache) return undefined;
+	const parent = directoryAt(path);
+	return parent && { ...parent, cache };
+}
+
 function assertDirectory(dir: Directory) {
+	if (dir.cache) assertDirectory(dir.cache);
 	const current = directoryAt(dir.path);
 	if (!current || !sameIdentity(current.stats, dir.stats)) throw changed(dir.path);
 }
@@ -289,7 +311,7 @@ function changed(path: string) {
 
 async function verifyFile(path: string, integrity: Integrity, signal?: AbortSignal) {
 	signal?.throwIfAborted();
-	const parent = directoryAt(dirname(path));
+	const parent = modelParent(path);
 	const entry = parent && regularAt(path, basename(path) === WHISPER_VAD_MODEL.file ? "Micme VAD model path" : undefined);
 	if (!parent || !entry) return false;
 	const file = await open(path, constants.O_RDONLY | NO_FOLLOW);
@@ -305,7 +327,9 @@ async function verifyFile(path: string, integrity: Integrity, signal?: AbortSign
 }
 
 async function verifyHandle(file: FileHandle, path: string, target: string, entry: BigIntStats, integrity: Integrity, signal?: AbortSignal) {
+	signal?.throwIfAborted();
 	const before = await file.stat({ bigint: true });
+	signal?.throwIfAborted();
 	if (!before.isFile() || !unchanged(entry, before)) throw changed(path);
 	if (before.size !== BigInt(integrity.bytes)) throw badSize(target, integrity.bytes);
 	const hash = createHash("sha256");
@@ -345,9 +369,8 @@ export async function downloadFile(url: string, path: string, options: TransferO
 	const signal = options.signal ? AbortSignal.any([options.signal, timeout.signal]) : timeout.signal;
 	const temp = `${target}.download-${randomUUID()}`;
 	const resume = options.resume !== false && options.blob;
-	const parentPath = dirname(target);
-	mkdirSync(parentPath, { recursive: true, mode: 0o700 });
-	const parent = directoryAt(parentPath)!;
+	const parent = modelParent(target, true);
+	if (!parent) throw changed(dirname(target));
 	let file: FileHandle | undefined;
 	let identity: BigIntStats | undefined;
 	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -396,7 +419,7 @@ export async function downloadFile(url: string, path: string, options: TransferO
 			if (integrity && offset + result.value.byteLength > total) throw badSize(target, total);
 			offset = await activity(writeChunk(file, result.value, offset, signal), signal, timeout, timeoutMs, "file output");
 			const now = Date.now();
-			if (now - lastUpdate > 1_000) {
+			if (offset !== total && now - lastUpdate > 1_000) {
 				options.onProgress?.(offset, total);
 				lastUpdate = now;
 			}
@@ -404,13 +427,15 @@ export async function downloadFile(url: string, path: string, options: TransferO
 		signal.throwIfAborted();
 		if (integrity && offset !== total) throw badSize(target, total);
 		mayCheckpoint = false;
+		// Bytes received, not readiness. Report before the final verification and
+		// publication so a last waiter can still cancel from this callback.
+		options.onProgress?.(offset, total);
 		const stats = await file.stat({ bigint: true });
 		const verified = integrity ? await verifyHandle(file, temp, target, stats, integrity, signal) : stats;
 		assertDirectory(parent);
 		assertUnchanged(temp, verified);
 		signal.throwIfAborted();
 		if (!publish(temp, target, verified, options.blob) && !await cacheHasFile(target, integrity, signal)) throw changed(target);
-		options.onProgress?.(offset, total);
 	} catch (error) {
 		if (resume && file && mayCheckpoint && offset > 0 && offset < resume.bytes) {
 			await keepPartial(resume, parent, target, temp, file, offset).catch(ignoreCleanupError);
