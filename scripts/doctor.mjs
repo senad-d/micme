@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { getPythonWhisperBinary, getWhisperCppBinary, resolveTranscriptionPlan } from "../src/backends.ts";
 import { env, expandConfigPath, getAudioInputConfigKey, getAutoDownloadModel, getConfiguredRecorderInput, getLegacyStreamSettings, getTranscribeBackend, getTranscriptionMode, getTransferOptions, getTranslateToEnglishLanguage, reloadMicmeConfig } from "../src/config.ts";
-import { getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "../src/models.ts";
+import { getWhisperVadModelPath, isEnglishOnlyWhisperModelName, isRegularFile, isTranslationUnsupportedWhisperModelName, resolveWhisperCppModel } from "../src/models.ts";
 import { findExecutable } from "../src/processes.ts";
 import { probeLiveWorker } from "../src/streaming.ts";
 import { sanitizeTerminalOutput } from "../src/terminal-text.ts";
@@ -37,12 +37,21 @@ function resolveDoctorBinary(resolver) {
   }
 }
 
+function yesNo(value) {
+  return value ? "yes" : "no";
+}
+
 function printModelCatalog(variant) {
-  const { rights, runtime, reason, measurements } = variant;
+  const { rights, runtime, reason, measurements, traits } = variant;
   info("artifact catalog status", `rights: ${rights}; reference runtime: ${runtime}${reason ? `; ${reason}` : ""}`);
+  if (traits) {
+    info("model reference capabilities", `streaming: ${yesNo(traits.stream)}; batch: ${yesNo(traits.batch)}; long-form: ${yesNo(traits.longForm)}; translate to English: ${yesNo(traits.translateEn)}; detector: ${traits.vad}; not tested here`);
+  } else {
+    info("model reference capabilities", "unknown; no recorded trait snapshot");
+  }
   if (!measurements.length) info("model reference measurement", "unknown; no measurements for this artifact");
-  for (const { task, language, rig, wer, cer, xrt } of measurements) {
-    info("model reference measurement", `${task} (${language}), ${rig}; WER ${wer ?? "unknown"}, CER ${cer ?? "unknown"}, xRT ${xrt ?? "unknown"}; not measured here`);
+  for (const { task, language, rig, wer, cer, xrt, disposition } of measurements) {
+    info("model reference measurement", `${task} (${language}), ${rig}; WER ${wer ?? "unknown"}, CER ${cer ?? "unknown"}, xRT ${xrt ?? "unknown"}; ${disposition}; not measured here`);
   }
 }
 
@@ -104,6 +113,16 @@ function printManualIntegrity(label, present, repair) {
   else warn(label, `not verified; ${repair}`);
 }
 
+function printClipTranslationRepair(model) {
+  if (model.source !== "explicit-path" || !getTranslateToEnglishLanguage()) return;
+  // The resolver may show a multilingual sibling, but Pi clip preflight rejects
+  // an incompatible explicit model before capture rather than using that sibling.
+  const selected = (model.translationFallbackFrom ?? model.modelName)?.replace(/-q\d+_\d+$/i, "");
+  if (isEnglishOnlyWhisperModelName(selected) || isTranslationUnsupportedWhisperModelName(selected)) {
+    warn("Pi clip translation", "The explicit model cannot translate to English. Pi will not substitute another model. Set MICME_WHISPER_CPP_MODEL to a translation-capable multilingual model or turn off MICME_TRANSLATE_TO_ENGLISH.");
+  }
+}
+
 async function printWhisperCppModelDiagnostics(model, effectiveBackend) {
   info("Whisper path check", "file presence only");
   if (model.exists) ok("resolved whisper.cpp model", model.path);
@@ -128,6 +147,11 @@ async function printArtifactDiagnostics(id) {
   info("configured artifact", variant.id);
   const native = nativeReferenceVariant(variant);
   printModelCatalog(native ?? variant);
+  if (native) {
+    const binary = findExecutable(["micme-recognizer"]);
+    if (binary && isAbsolute(binary)) info("native recognizer", "found on an absolute PATH entry; path discovery only (not probed)");
+    else warn("native recognizer", "micme-recognizer not found on an absolute PATH entry; see native/recognizer/README.md for the matching helper, or clear MICME_ARTIFACT to use legacy dictation.");
+  }
   await printManagedIntegrity("ASR integrity", native ?? variant, native !== null);
 }
 
@@ -166,7 +190,7 @@ function printCaptureDiagnostics(recordCommand, ffmpeg) {
       info("audio repair", `If a take fails to capture, check terminal microphone permission and review inputs in /micme devices before changing ${getAudioInputConfigKey(platform)}.`);
     }
   }
-  info("capture readiness", "not tested; actual device, channel and fallback unknown; no samples observed");
+  info("capture readiness", "not tested; actual device, channel and fallback unknown; permissions not checked; no samples observed");
 }
 
 function printTransferDiagnostics(options, transcriptionMode) {
@@ -234,7 +258,9 @@ function printConfigDiagnostics(micmeConfig, keyEnv) {
   if (existsSync(micmeConfig.path)) ok("micme.json loaded", `${micmeConfig.path} (${Object.keys(micmeConfig.values).length} MICME_* key(s))`);
   else info("micme.json", `not found; /micme conf will create ${micmeConfig.path}`);
 
-  const micmeEnvKeys = Object.keys(process.env).filter((key) => key.startsWith("MICME_") && key !== keyEnv).sort((a, b) => a.localeCompare(b));
+  // A shell override can hide a saved credential source, but neither alias belongs in diagnostics.
+  const hiddenKeys = new Set([keyEnv, micmeConfig.values.MICME_POLISH_KEY_ENV]);
+  const micmeEnvKeys = Object.keys(process.env).filter((key) => key.startsWith("MICME_") && !hiddenKeys.has(key)).sort((a, b) => a.localeCompare(b));
   const overrides = micmeEnvKeys.filter((key) => micmeConfig.values[key] !== undefined);
   const shellOnly = micmeEnvKeys.filter((key) => micmeConfig.values[key] === undefined);
   if (overrides.length) warn("shell env overrides micme.json", overrides.join(", "));
@@ -315,12 +341,13 @@ async function main() {
     whisperCppModel,
   });
   printBackendPlanDiagnostics(plan);
+  if (transcriptionMode === "clip" && plan.effectiveBackend === "whisper.cpp") printClipTranslationRepair(whisperCppModel);
   await printWhisperCppModelDiagnostics(whisperCppModel, plan.effectiveBackend);
   if (transcriptionMode === "stream") await printLiveDiagnostics(plan.live);
   if (process.platform === "darwin" && (!ffmpeg || !whisperCpp.path)) info("macOS prerequisites", "Install the missing ffmpeg or whisper-cpp package with Homebrew.");
 }
 
-main().catch(() => {
+if (import.meta.main) await main().catch(() => {
   console.error("Micme doctor could not complete its checks. Check configuration and local file permissions.");
   process.exitCode = 1;
 });

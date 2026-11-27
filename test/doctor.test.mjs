@@ -168,6 +168,20 @@ test("JavaScript doctor starts without type stripping and matches the runtime mo
 	}
 });
 
+test("doctor identifies an incompatible explicit Whisper model before a Pi clip translation", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-clip-translation-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const binDir = join(root, "bin");
+	await createWhisperCppFixture(binDir);
+	const sibling = join(root, "ggml-base.bin");
+	await writeFile(sibling, "multilingual fixture");
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, binDir), MICME_WHISPER_CPP_MODEL: join(root, "ggml-base.en.bin"), MICME_TRANSLATE_TO_ENGLISH: "fr",
+	});
+	assert.equal(getDoctorField(output, "effective model path"), sibling);
+	assert.match(output, /^! Pi clip translation: .*explicit.*cannot translate.*MICME_WHISPER_CPP_MODEL.*MICME_TRANSLATE_TO_ENGLISH/m);
+});
+
 test("stream doctor and runtime agree on worker and weights, but doctor only probes Worker v1", { skip: process.platform === "win32" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-doctor-live-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -421,7 +435,6 @@ test("doctor verifies native pins offline without claiming local runtime qualifi
 	const managedDir = join(modelDir, `.micme-managed-${createHash("sha256").update(artifact.id).digest("hex")}`);
 	const managed = join(managedDir, blob.path);
 	const helper = join(root, "micme-recognizer");
-	await createLoggedCommand(helper);
 	const bytes = Buffer.from("native model fixture");
 	const sha256 = createHash("sha256").update(bytes).digest("hex");
 	const pins = overrideCatalogFixture((source) => `
@@ -433,8 +446,11 @@ test("doctor verifies native pins offline without claiming local runtime qualifi
 	const run = runNode.bind(undefined, ["--import", noDownload, "--import", pins, "scripts/doctor.mjs"], {
 		...isolatedEnvironment(root, root), MICME_ARTIFACT: artifact.id, MICME_MODEL_DIR: modelDir, MICME_AUTO_DOWNLOAD_MODEL: "1",
 	});
-	assert.match(run(), /^! ASR integrity: missing;.*install.*exact pinned.*offline/m);
+	const missing = run();
+	assert.match(missing, /^! ASR integrity: missing;.*install.*exact pinned.*offline/m);
+	assert.match(missing, /^! native recognizer: .*micme-recognizer.*native\/recognizer\/README\.md/m);
 	await assert.rejects(access(modelDir), { code: "ENOENT" });
+	await createLoggedCommand(helper);
 	await mkdir(managedDir, { recursive: true });
 	await writeFile(managed, bytes);
 	assert.ok(run().split("\n").some((line) => line.startsWith("✓ ASR integrity: verified") && line.endsWith(`primary: ${managed}`)));
@@ -448,6 +464,9 @@ test("doctor verifies native pins offline without claiming local runtime qualifi
 	await writeFile(preseeded, bytes);
 	const verified = run();
 	assert.ok(verified.split("\n").some((line) => line.startsWith("✓ ASR integrity: verified") && line.endsWith(`primary: ${preseeded}`)));
+	assert.match(getDoctorField(verified, "native recognizer"), /found.*path discovery only/);
+	assert.match(getDoctorField(verified, "model reference capabilities"), /streaming: yes;.*batch: yes;.*translate to English: no;.*not tested here/);
+	assert.match(getDoctorField(verified, "model reference measurement"), /transcribe \(en\).*adapted-verified; not measured here/);
 	assert.match(getDoctorField(verified, "actual compute and bound device"), /unknown.*not loaded/);
 	assert.match(getDoctorField(verified, "capture readiness"), /not tested.*no samples observed/);
 	assert.doesNotMatch(verified, /^✓ (?:effective backend|live worker protocol):/m);
@@ -484,7 +503,7 @@ test("doctor reports configured audio input but never invokes a recorder or clai
 		...isolatedEnvironment(root, root), MICME_PULSE_SOURCE: "fixture-in", MICME_AVFOUNDATION_INPUT: ":fixture-in",
 	});
 	assert.match(getDoctorField(output, "configured audio input"), /fixture-in/);
-	assert.match(getDoctorField(output, "capture readiness"), /not tested.*actual device, channel and fallback unknown/);
+	assert.match(getDoctorField(output, "capture readiness"), /not tested.*actual device, channel and fallback unknown.*permissions not checked/);
 	assert.doesNotMatch(output, /^- configured (?:recognition preferences|language rules):/m);
 	await assert.rejects(access(`${recorder}.args`), { code: "ENOENT" });
 });
@@ -493,6 +512,7 @@ test("doctor redacts processing configuration and leaves hooks, network and save
 	const root = await mkdtemp(join(tmpdir(), "micme-doctor-processing-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const transcript = "dummy-private-transcript";
+	const savedKeyName = "MICME_SAVED_FAKE_PROVIDER_KEY";
 	const keyName = "MICME_ONLY_FOR_FAKE_PROVIDER";
 	const key = "dummy-private-key";
 	const hook = join(root, "private-hook-name");
@@ -502,7 +522,7 @@ test("doctor redacts processing configuration and leaves hooks, network and save
 		MICME_POLISH_ENDPOINT: `https://example.invalid/${key}`,
 		MICME_POLISH_MODEL: transcript,
 		MICME_POLISH_PROMPT: `Polish this: ${transcript}`,
-		MICME_POLISH_KEY_ENV: keyName,
+		MICME_POLISH_KEY_ENV: savedKeyName,
 		MICME_OUTPUT_HOOK: hook,
 		MICME_WORDS: JSON.stringify([transcript]),
 		MICME_HISTORY: "1",
@@ -511,12 +531,14 @@ test("doctor redacts processing configuration and leaves hooks, network and save
 	});
 	const configPath = join(root, "micme.json");
 	await writeFile(configPath, values);
-	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], { ...isolatedEnvironment(root, root), [keyName]: key });
+	const output = runNode(["--import", noDownload, "scripts/doctor.mjs"], {
+		...isolatedEnvironment(root, root), MICME_POLISH_KEY_ENV: keyName, [keyName]: key, [savedKeyName]: key,
+	});
 	assert.match(getDoctorField(output, "final processing"), /custom-openai.*explicit action/);
 	assert.match(getDoctorField(output, "processing configuration"), /endpoint.*model.*prompt.*credential source.*hook.*redacted/);
 	assert.match(getDoctorField(output, "SDL migration"), /MICME_LIVE_BIN.*retain.*settings/i);
 	assert.match(getDoctorField(output, "configured history preferences"), /count:0; no library or active policy inspected/);
-	for (const privateValue of [transcript, key, keyName, hook, "example.invalid", "ignored-old-sdl-value"]) {
+	for (const privateValue of [transcript, key, keyName, savedKeyName, hook, "example.invalid", "ignored-old-sdl-value"]) {
 		assert.equal(output.includes(privateValue), false, `exposed ${privateValue}`);
 	}
 	assert.equal(await readFile(configPath, "utf8"), values);
@@ -535,6 +557,18 @@ test("doctor does not probe the worker when configuration validation fails", { s
 	assert.match(output, /^! micme\.json invalid: .*MICME_POLISH_ENDPOINT.*without credentials/m);
 	assert.match(getDoctorField(output, "configuration repair"), /correct.*probe/i);
 	assert.doesNotMatch(output, /invalid-secret|^✓ live worker protocol:/m);
+	await assert.rejects(access(`${worker}.args`), { code: "ENOENT" });
+});
+
+test("importing doctor does not run diagnostics or probe a configured worker", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "micme-doctor-import-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const worker = join(root, "micme-live");
+	await createLoggedCommand(worker, 1);
+	const output = runNode(["--import", noDownload, "--input-type=module", "--eval", "await import('./scripts/doctor.mjs')"], {
+		...isolatedEnvironment(root, root), MICME_TRANSCRIPTION_MODE: "stream",
+	});
+	assert.equal(output, "");
 	await assert.rejects(access(`${worker}.args`), { code: "ENOENT" });
 });
 
