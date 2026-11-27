@@ -38,13 +38,22 @@ function measuredTrait(traits: Traits, cell: Cell): boolean {
 // as observations, without treating any as proof of binding the selected runtime.
 export function applyCatalogEvidence(variant: Variant, lookup: GetEngineEvidence, scope?: CatalogRig): Variant {
 	if (variant.rights !== "cleared" || !variant.blobs.length) return variant;
+	// An incoming row may already have observations or qualification from another scope.
+	const baseline: Variant = scope ? {
+		...variant,
+		runtime: variant.runtime === "passed" ? "untested" : variant.runtime,
+		traits: null,
+		languages: [],
+		measurements: [],
+		reason: variant.reason ?? "No qualified native evidence for this rig and device.",
+	} : variant;
 	const observation = lookup(variant.id);
-	if (!observation) return variant;
+	if (!observation) return baseline;
 	const { traits, runtime, measurements } = observation;
 	if (!scope) return { ...variant, measurements: structuredClone(measurements) };
-	if (!traits || traits.actualCompute === "unknown" || traits.actualCompute !== scope.actualCompute || !sameDevice(traits.boundDevice, scope.device)) return variant;
+	if (!traits || traits.actualCompute === "unknown" || traits.actualCompute !== scope.actualCompute || !sameDevice(traits.boundDevice, scope.device)) return baseline;
 	const cells = measurements.filter((cell) => cell.rig === scope.rig && sameDevice(cell.device, scope.device));
-	const result = { ...variant, measurements: structuredClone(cells) };
+	const result = { ...baseline, measurements: structuredClone(cells) };
 	if (runtime !== "passed") return result;
 	const verified = measurements.filter(verifiedCell);
 	if (!verified.length || verified.some((cell) => cell.rig !== scope.rig || !sameDevice(cell.device, scope.device) || !measuredTrait(traits, cell))) return result;

@@ -143,6 +143,24 @@ test("exact native evidence is loaded only for the qualified rig and bound devic
 	assert.equal(applyCatalogEvidence({ ...variant, id: "different export" }, passEvidence(variant), rig).traits, null);
 });
 
+test("rescoping a qualified row never carries forward its previous observations or traits", () => {
+	const variant = candidate();
+	const lookup = passEvidence(variant);
+	const qualified = applyCatalogEvidence(variant, lookup, rig);
+	assert.deepEqual(qualified.measurements, [cell]);
+	for (const result of [
+		applyCatalogEvidence(qualified, lookup, { ...rig, rig: "another rig" }),
+		applyCatalogEvidence(qualified, () => null, rig),
+	]) {
+		assert.deepEqual(result.measurements, []);
+		assert.deepEqual(result.languages, []);
+		assert.equal(result.traits, null);
+		assert.notEqual(result.runtime, "passed");
+		assert.equal(result.id, qualified.id);
+		assert.deepEqual(result.blobs, qualified.blobs);
+	}
+});
+
 test("passed flags cannot promote restricted rights, ambiguous traits or unverified tasks", () => {
 	const variant = candidate();
 	const passed = passEvidence(variant)(variant.id);
