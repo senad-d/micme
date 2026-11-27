@@ -93,11 +93,11 @@ class NativePipe {
 		}
 	}
 
-	async request(op: string, fields: readonly Uint8Array[], signal: AbortSignal, timeout = DEADLINE_MS): Promise<Reply> {
+	async request(op: string, fields: readonly Uint8Array[], signal: AbortSignal): Promise<Reply> {
 		if (this.#failed || this.#pending) throw new Error("Native recognizer is unavailable or busy.");
 		const abort = () => this.fail(signal.reason);
 		signal.addEventListener("abort", abort, { once: true });
-		const timer = setTimeout(() => this.fail(new Error("The native recognizer timed out.")), timeout);
+		const timer = setTimeout(() => this.fail(new Error("The native recognizer timed out.")), DEADLINE_MS);
 		try {
 			if (signal.aborted) { abort(); signal.throwIfAborted(); }
 			const header = Buffer.alloc(5);
@@ -119,6 +119,10 @@ class NativePipe {
 		}
 	}
 
+	async acknowledge(op: "B" | "R" | "Q", fields: readonly Uint8Array[], signal: AbortSignal) {
+		if (Object.keys(await this.request(op, fields, signal)).length !== 0) throw badReply();
+	}
+
 	fail(error: unknown) {
 		if (this.#failed) return;
 		this.#failed = true;
@@ -130,21 +134,23 @@ class NativePipe {
 		pending?.reject(error);
 	}
 
-	async close(): Promise<boolean> {
+	async close(caller?: AbortSignal): Promise<boolean> {
 		if (this.#pending) this.fail(new Error("The native recognizer was closed."));
-		let graceful = false;
-		const signal = AbortSignal.timeout(CLOSE_MS);
-		const timer = setTimeout(() => this.fail(new Error("Native recognizer shutdown timed out.")), CLOSE_MS);
+		const deadline = AbortSignal.timeout(CLOSE_MS);
+		const signal = caller ? AbortSignal.any([caller, deadline]) : deadline;
+		// Keep the deadline and cancellation active even after the reply; Q must also exit.
+		const abort = () => this.fail(signal.reason);
+		signal.addEventListener("abort", abort, { once: true });
 		try {
-			await this.request("Q", [], signal, CLOSE_MS);
-			graceful = true;
-		} catch {
-			// Faults/cancel already killed the process; do not report a graceful exit.
-		} finally {
+			await this.acknowledge("Q", [], signal);
+			return await this.exit === 0 && !signal.aborted;
+		} catch (error) {
+			this.fail(error);
 			await this.exit;
-			clearTimeout(timer);
+			return false;
+		} finally {
+			signal.removeEventListener("abort", abort);
 		}
-		return graceful && await this.exit === 0;
 	}
 }
 
@@ -260,18 +266,23 @@ export async function listCompute(provision: Partial<NativeHelper> = {}, signal 
 	const binary = await helper(provision, signal);
 	if (!binary) return [];
 	let pipe: NativePipe | undefined;
+	let options: DeviceOption[];
+	let clean: boolean | undefined;
 	try {
 		pipe = new NativePipe(binary.file);
 		const { devices } = await pipe.request("V", [], signal);
 		if (!sameFile(binary.stat, await binary.file.stat({ bigint: true })) || !Array.isArray(devices)) throw badReply();
-		return devices.map((entry: unknown) => {
+		options = devices.map((entry: unknown) => {
 			const row = object(entry);
 			return { backend: backend(row.backend), device: device(row.device) };
 		});
 	} finally {
-		await pipe?.close();
+		clean = await pipe?.close(signal);
 		await binary.file.close();
 	}
+	signal.throwIfAborted();
+	if (!clean) throw new Error("The native recognizer did not shut down cleanly after probing.");
+	return options;
 }
 
 /** Open exact local bytes, including for an opt-in trial. Product selection must apply the catalog's rig/task gate first. */
@@ -379,7 +390,7 @@ class BoundEngine implements NativeEngine {
 	async begin(lang: SpeechLanguage, words: readonly string[], signal: AbortSignal) {
 		if (!this.traits.stream || this.#active || words.length || !supportedLanguage(lang, this.traits)) throw new Error("Unsupported native recognizer stream options.");
 		await this.run(signal, async () => {
-			await this.#pipe.request("B", [stringField(lang, 64)], signal);
+			await this.#pipe.acknowledge("B", [stringField(lang, 64)], signal);
 			this.clearInput();
 			this.#active = true;
 		});
@@ -435,7 +446,7 @@ class BoundEngine implements NativeEngine {
 
 	async reset(signal: AbortSignal) {
 		await this.run(signal, async () => {
-			await this.#pipe.request("R", [], signal);
+			await this.#pipe.acknowledge("R", [], signal);
 			this.#active = false;
 			this.clearInput();
 		});
