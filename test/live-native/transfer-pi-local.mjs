@@ -207,7 +207,8 @@ export default function(pi) {
     writeFileSync(restart, ''); ctx.shutdown();
   }});
   const api = new Proxy(pi, {get(target, key) {
-    if (key === 'sendUserMessage') return (text, options) => { log('send', {queued: !!options?.deliverAs}); return target[key](text, options); };
+    // Record a sent/queued attempt as a benchmark violation, but never forward it.
+    if (key === 'sendUserMessage') return (_text, options) => { log('send', {queued: !!options?.deliverAs}); };
     if (key === 'registerCommand') return (name, spec) => target[key](name, {...spec, handler: observe(spec.handler, name === 'micme' ? 'command' : null)});
     if (key === 'registerShortcut') return (name, spec) => target[key](name, {...spec, handler: ctx => observe((_event, wrapped) => spec.handler(wrapped), 'shortcut')(null, ctx)});
     return target[key];
@@ -355,22 +356,39 @@ export function observedPi(state, binary, width, signal) {
 
 export const enterCommand = (pi, command) => pi.send(`\x15${command}\r`);
 
+const promptBorder = /^\s*[─━]{5,}/u;
+const scrollAbove = /^\s*[─━]+\s+↑\s+\d+\s+more\s+[─━]+\s*$/u;
+const scrollBelow = /^\s*[─━]+\s+↓\s+\d+\s+more\s+[─━]+\s*$/u;
+const compact = (s) => s.replace(/\s+/gu, " ").trim();
+
 export function promptOnScreen(lines, text) {
-	const compact = (s) => s.replace(/\s+/gu, " ").trim();
+	return matchPrompt(lines, text, false);
+}
+
+// Only use this with exact editor readback from an observed write. The PTY can
+// corroborate the displayed tail of a scrolled prompt, never its hidden lines.
+export function promptReadbackOnScreen(lines, text) {
+	return matchPrompt(lines, text, true);
+}
+
+function matchPrompt(lines, text, allowTail) {
 	const desired = compact(text);
 	for (let i = 1; i < lines.length; i++) {
-		if (!/^\s*[─━]{5,}/u.test(lines[i - 1])) continue;
-		const end = lines.findIndex((line, index) => index > i && /^\s*[─━]{5,}/u.test(line));
-		if (end <= i) continue;
+		if (!promptBorder.test(lines[i - 1]) || scrollBelow.test(lines[i - 1])) continue;
+		const end = lines.findIndex((line, index) => index > i && promptBorder.test(line));
+		if (end <= i || scrollBelow.test(lines[end]) || scrollAbove.test(lines[end])) continue;
+		const tail = scrollAbove.test(lines[i - 1]);
+		if (tail && !allowTail) continue;
+		const rows = lines.slice(i, end).map(compact);
+		if (tail) rows.reverse();
 		let rest = desired;
-		for (const line of lines.slice(i, end)) {
-			const cells = compact(line);
-			if (!rest.startsWith(cells)) { rest = null; break; }
+		for (const cells of rows) {
 			// Pi can soft-wrap mid-word (including CJK). The editor readback
 			// preserves the whitespace that terminal padding cannot establish.
-			rest = rest.slice(cells.length).trimStart();
+			if (tail ? !rest.endsWith(cells) : !rest.startsWith(cells)) { rest = null; break; }
+			rest = tail ? rest.slice(0, rest.length - cells.length).trimEnd() : rest.slice(cells.length).trimStart();
 		}
-		if (rest === "") return true;
+		if (tail ? rest && rest !== desired : rest === "") return true;
 	}
 	return false;
 }
