@@ -28,12 +28,12 @@ function detectorOffArtifacts() {
 	}));
 }
 
-async function withArtifactConfig(t, { shellDetector, savedDetector } = {}) {
+async function withArtifactConfig(t, { shellDetector, savedDetector, language = "en", compute, shellArtifact } = {}) {
 	const agentDir = await mkdtemp(join(tmpdir(), "micme-artifact-settings-"));
 	const configPath = join(agentDir, "micme.json");
-	const initial = { MICME_LANGUAGE: "en", MICME_TRANSCRIBE_BACKEND: "auto", ...(savedDetector ? { MICME_DETECTOR: savedDetector } : {}) };
+	const initial = { MICME_LANGUAGE: language, MICME_TRANSCRIBE_BACKEND: "auto", ...(savedDetector ? { MICME_DETECTOR: savedDetector } : {}), ...(compute ? { MICME_COMPUTE: compute } : {}) };
 	const scoped = { PI_CODING_AGENT_DIR: agentDir, MICME_DETECTOR: shellDetector, MICME_LANGUAGE: undefined, MICME_TRANSLATE_TO_ENGLISH: undefined,
-		MICME_ARTIFACT: undefined, MICME_TRANSCRIBE_BACKEND: undefined, MICME_WHISPER_CPP_MODEL: undefined, MICME_TRANSCRIBE_COMMAND: undefined };
+		MICME_ARTIFACT: shellArtifact, MICME_COMPUTE: undefined, MICME_TRANSCRIBE_BACKEND: undefined, MICME_WHISPER_CPP_MODEL: undefined, MICME_TRANSCRIBE_COMMAND: undefined };
 	const previous = Object.fromEntries(Object.keys(scoped).map((key) => [key, process.env[key]]));
 	t.after(async () => {
 		for (const [key, value] of Object.entries(previous)) setEnvValue(key, value);
@@ -89,6 +89,27 @@ test("an incompatible shell detector blocks artifact selection without changing 
 	assert.deepEqual(picked, []);
 	await assert.rejects(saveConfigurationValue(createCtx(), "MICME_ARTIFACT", artifacts[0].id, { artifactDetector: "off" }), /Shell override MICME_DETECTOR/);
 	assert.equal(process.env.MICME_DETECTOR, "model");
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), initial);
+});
+
+test("Auto language accepts an artifact with a qualified transcription language without changing the preference", async (t) => {
+	const { configPath, initial } = await withArtifactConfig(t, { language: "auto", savedDetector: "off" });
+	const [artifact] = detectorOffArtifacts();
+	await saveConfigurationValue(createCtx(), "MICME_ARTIFACT", artifact.id);
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { ...initial, MICME_ARTIFACT: artifact.id });
+});
+
+test("artifact selection cannot replace an incompatible requested compute with a qualified backend", async (t) => {
+	const { configPath, initial } = await withArtifactConfig(t, { compute: "vulkan", savedDetector: "off" });
+	const [artifact] = detectorOffArtifacts();
+	await assert.rejects(saveConfigurationValue(createCtx(), "MICME_ARTIFACT", artifact.id), /requested compute/i);
+	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), initial);
+});
+
+test("a shell artifact override prevents an ineffective selection from changing the saved detector", async (t) => {
+	const [artifact] = detectorOffArtifacts();
+	const { configPath, initial } = await withArtifactConfig(t, { shellArtifact: artifact.id });
+	await assert.rejects(saveConfigurationValue(createCtx(), "MICME_ARTIFACT", artifact.id, { artifactDetector: "off" }), /Shell override MICME_ARTIFACT/);
 	assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), initial);
 });
 

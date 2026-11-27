@@ -9,6 +9,7 @@ import {
 	getAudioInputConfigKey,
 	getFlagSetting,
 	getAutoDownloadModel,
+	getLiveSpeechLanguage,
 	getAvfoundationDropLateFrames,
 	getMeterGain,
 	getRecordMeter,
@@ -32,7 +33,7 @@ import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
 import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
 import { type Component, Container, decodeKittyPrintable, fuzzyFilter, Input, Key, matchesKey, parseKey, type SettingItem, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
-import { MODEL_IDLE_MODES, SCRIPTS, type Detector, type RecognitionTask, type TransferOptionKey, type Variant } from "./transfer/contracts.ts";
+import { COMPUTE_MODES, MODEL_IDLE_MODES, SCRIPTS, type Detector, type RecognitionTask, type Traits, type TransferOptionKey, type Variant } from "./transfer/contracts.ts";
 import { getManagedCatalogVariant } from "./transfer/catalog.ts";
 import { getEngineEvidence } from "./transfer/engine-evidence.ts";
 import { checkSetupModelSelection, cleanSettingText, configuredModelLabel, createSettingsPicker, discoverAdvancedRuntime, getPrintableInput, LANGUAGE_LABELS, managedWhisperName, sensitiveOptionsSummary, TRANSLATE_FROM_VALUE_LABELS, TRANSCRIPTION_LANGUAGE_VALUES, TRANSLATION_SOURCE_LANGUAGE_VALUES, whisperModelCompatibility, type AdvancedRuntime } from "./transfer/settings.ts";
@@ -1175,18 +1176,25 @@ const DETECTOR_LABELS: Record<Detector, string> = { model: "Model's native detec
 function artifactSpeechSettings() {
 	const translation = getTranslateToEnglishLanguage();
 	const task: RecognitionTask = translation ? "translate-en" : "transcribe";
-	return { task, language: translation ?? (env("MICME_LANGUAGE")?.trim().toLowerCase() || "en") };
+	return { task, language: getLiveSpeechLanguage(translation) };
 }
 
 function qualifiedArtifact(id: string, task: RecognitionTask, language: string) {
 	const evidence = getEngineEvidence(id);
 	const observed = evidence?.traits;
 	if (!observed || observed.actualCompute === "unknown") return null;
-	for (const { rig } of evidence.measurements) {
-		const variant = getManagedCatalogVariant(id, { rig, actualCompute: observed.actualCompute, device: observed.boundDevice }, task, language);
+	for (const cell of evidence.measurements) {
+		if (cell.task !== task || (language !== "auto" && cell.language !== language)) continue;
+		const variant = getManagedCatalogVariant(id, { rig: cell.rig, actualCompute: observed.actualCompute, device: observed.boundDevice }, task, cell.language);
 		if (variant) return variant;
 	}
 	return null;
+}
+
+function matchesQualifiedCompute(requested: string, traits: Traits | null) {
+	if (!traits) return false;
+	const family = COMPUTE_MODES.find((mode) => mode === requested);
+	return family === "auto" || (family ? family === traits.actualCompute : requested === traits.boundDevice?.id);
 }
 
 function observedDetector(vad: NonNullable<Variant["traits"]>["vad"]): Detector {
@@ -1231,22 +1239,31 @@ export function createArtifactSelector(variants: Variant[], value: string, curre
 function buildArtifactItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRuntime, theme: MicmeTheme, row: AdvancedRow): ConfigurationItem[] {
 	const options = getTransferOptions();
 	const { task, language } = artifactSpeechSettings();
-	const available = runtime.installed.flatMap(({ variantId }) => {
-		if (plan.requestedBackend === "whisper.cpp" && !variantId.startsWith("whisper.cpp/")) return [];
-		return qualifiedArtifact(variantId, task, language) ?? [];
-	});
 	const selected = options.MICME_ARTIFACT;
 	const canSelect = !env("MICME_WHISPER_CPP_MODEL")?.trim() && plan.requestedBackend !== "python" && plan.requestedBackend !== "custom"
 		&& !(plan.requestedBackend === "auto" && env("MICME_TRANSCRIBE_COMMAND")?.trim());
+	const qualified = canSelect ? runtime.installed.flatMap(({ variantId }) => {
+		if (plan.requestedBackend === "whisper.cpp" && !variantId.startsWith("whisper.cpp/")) return [];
+		return qualifiedArtifact(variantId, task, language) ?? [];
+	}) : [];
+	const available = qualified.filter(({ traits }) => matchesQualifiedCompute(options.MICME_COMPUTE, traits));
+	const computeRepair = "The requested compute does not match an observed device for the artifact. Use Auto or a qualified device.";
 	const status = { id: "micme-runtime", categoryId: "transcription" as const, label: "Optional runtime", rawValue: "", currentValue: "Unavailable",
-		emptyLabel: "Unavailable", description: "No installed artifact has qualified evidence for the current task and language. Legacy Whisper remains available where configured." };
-	if (!selected && (!canSelect || !available.length)) return [status];
+		emptyLabel: "Unavailable", description: !canSelect ? "The configured backend or manual Whisper model prevents optional artifact selection."
+			: "No installed artifact has qualified evidence for the current task and language. Legacy Whisper remains available where configured." };
+	if (!selected && !available.length) {
+		if (!qualified.length) return [status];
+		return [row("MICME_COMPUTE", "Requested compute", computeRepair, {
+			categoryId: "transcription", rawValue: options.MICME_COMPUTE,
+			values: process.env.MICME_COMPUTE === undefined ? ["auto"] : undefined,
+		})];
+	}
 	const result = [row("MICME_ARTIFACT", "Qualified artifact", "Select an installed exact variant, or return to legacy dictation.", {
 		categoryId: "transcription", rawValue: selected ?? "", emptyLabel: "Legacy dictation",
 		valueLabels: selected ? { [selected]: selected.split("@")[0]! } : undefined,
-		submenu: (value, done) => createArtifactSelector(available, value, options.MICME_DETECTOR, theme, done),
+		submenu: process.env.MICME_ARTIFACT === undefined ? (value, done) => createArtifactSelector(available, value, options.MICME_DETECTOR, theme, done) : undefined,
 	})];
-	const evidence = available.find(({ id }) => id === selected);
+	const evidence = qualified.find(({ id }) => id === selected);
 	const traits = evidence?.traits;
 	if (!traits) return [...result, status];
 	const identity = traits.boundDevice;
@@ -1255,12 +1272,18 @@ function buildArtifactItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRu
 	const computeValues = ["auto", ...runtime.compute.filter(({ backend, device }) => backend === traits.actualCompute
 		&& (device?.id ?? null) === (identity?.id ?? null) && (device?.label ?? null) === (identity?.label ?? null))
 		.map(({ backend, device }) => device?.id ?? backend)];
+	const computeCompatible = matchesQualifiedCompute(options.MICME_COMPUTE, traits);
+	result.push(row("MICME_COMPUTE", "Requested compute", "Only devices with matching runtime observation are selectable. No device is probed by this preference.", {
+		categoryId: "transcription", rawValue: options.MICME_COMPUTE,
+		values: process.env.MICME_COMPUTE === undefined ? uniqueStrings(computeValues) : undefined,
+		details: [
+			...(!computeCompatible ? [computeRepair] : []),
+			`Prior loaded evidence: ${traits.actualCompute} / ${identity ? [identity.label, identity.id].filter(Boolean).join(" / ") : "unknown device"}. Current binding: not observed here.`,
+			`Observed rig: ${evidence.measurements.find((cell) => cell.task === task && evidence.languages.includes(cell.language))?.rig ?? "unknown"}.`,
+		],
+	}));
+	if (!computeCompatible) return result;
 	result.push(
-		row("MICME_COMPUTE", "Requested compute", "Only devices with matching runtime observation are selectable. No device is probed by this preference.", {
-			categoryId: "transcription", rawValue: options.MICME_COMPUTE, values: uniqueStrings(computeValues),
-			details: [`Prior loaded evidence: ${traits.actualCompute} / ${identity ? [identity.label, identity.id].filter(Boolean).join(" / ") : "unknown device"}. Current binding: not observed here.`,
-				`Observed rig: ${evidence.measurements.find((cell) => cell.task === task && cell.language === language)?.rig ?? "unknown"}.`],
-		}),
 		row("MICME_MODEL_IDLE", "Unload model after", "Controls model residency only; it never keeps a microphone open.", {
 			categoryId: "transcription", rawValue: options.MICME_MODEL_IDLE, values: [...MODEL_IDLE_MODES], valueLabels: { immediate: "Immediately", "5min": "5 minutes", never: "Never" },
 		}),
@@ -1367,10 +1390,14 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 	)) throw new Error("Clear the selected artifact in Advanced controls before changing to this backend.");
 
 	const valuesToWrite = getConfigurationValuesToWrite(id, value);
+	if (id === "MICME_ARTIFACT" && process.env.MICME_ARTIFACT !== undefined) {
+		throw new Error("Shell override MICME_ARTIFACT. Change or unset it in the shell before selecting an artifact.");
+	}
 	if (id === "MICME_ARTIFACT" && value) {
 		const { task, language } = artifactSpeechSettings();
 		const traits = qualifiedArtifact(value, task, language)?.traits;
 		if (!traits) throw new Error("This artifact is not qualified for the current task and language.");
+		if (!matchesQualifiedCompute(transfer.MICME_COMPUTE, traits)) throw new Error("This artifact is not qualified for the requested compute. Choose Auto or a qualified device first.");
 		const required = observedDetector(traits.vad);
 		const conflict = detectorShellConflict(required, transfer.MICME_DETECTOR);
 		if (conflict) throw new Error(conflict);

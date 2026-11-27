@@ -1,0 +1,29 @@
+Observed in isolated Pi 1.6.0 PTYs from candidate source SHA-256
+ff9120a5d274d9eae178d764e5278361f76ece9817a778aa13c6b6b11e70c9b6.
+Both runs started without a selected artifact or detector, with Auto language
+and a saved, incompatible Vulkan preference. No model load or recorder start
+occurred in settings. The recorder later paced public JFK PCM, not a physical mic.
+
+40 columns · Moonshine Q8_0
+│▶ Requested compute (…          vulkan│
+│• 1/12 • The requested compute does   │
+│not match an observed device for the  │
+│▶ Requested compute (…            auto│
+│Prior loaded evidence: cpu / Intel(R) │
+│Current binding: not observed here.   │
+Requested compute saved by keyboard: cpu; language still auto, detector Off.
+Runtime load receipt: {"actualCompute":"cpu","boundDevice":{"id":null,"label":"Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"},"vad":"off","sha256":"75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a","threads":4}
+Route: native streaming. Editor readback: And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+0 sends / 0 queues.
+
+80 columns · Parakeet Q4_K_M
+│  Transcription      │▶ Requested compute (Transcripti…                 vulkan│
+│Advanced controls shown for this visit • 1/12 • The requested compute does not│
+│match an observed device for the artifact. Use Auto or a qualified device.    │
+│  Transcription      │▶ Requested compute (Transcripti…                   auto│
+│Prior loaded evidence: cpu / Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz. Current │
+│binding: not observed here.                                                   │
+Requested compute saved by keyboard: cpu; language still auto, detector Off.
+Runtime load receipt: {"actualCompute":"cpu","boundDevice":{"id":null,"label":"Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz"},"vad":"off","sha256":"75f3202cf290f69973a5e23cf64cb761bbdefd859d24cf0d21a33442d2a3005a","threads":4}
+Route: final-only delivery. Editor readback: And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+0 sends / 0 queues.
