@@ -117,8 +117,10 @@ export function availableClipPcm(layout: WavLayout, size: number) {
 	if (!provisionalRiff && dataBytes === RIFF_PLACEHOLDER) return 0; // Header is being patched at close.
 	if (!provisionalRiff && dataOffset + paddedLength(dataBytes) > riffBytes + 8) throw invalidClipWav("PCM data extends beyond the declared RIFF length");
 	const available = size - dataOffset;
-	// With provisional sizes an odd trailing byte could be padding, not an 8-bit sample.
-	const bytes = dataBytes === RIFF_PLACEHOLDER ? available - available % 2 : Math.min(available, dataBytes);
+	// RIFF pads an odd payload to an even size. With a provisional data length,
+	// the last byte of an even span may be padding after a whole odd-sized payload.
+	const possiblePad = available > 0 && available % 2 === 0 && (available - 1) % frameBytes === 0;
+	const bytes = dataBytes === RIFF_PLACEHOLDER ? available - Number(possiblePad) : Math.min(available, dataBytes);
 	return bytes - bytes % frameBytes;
 }
 
