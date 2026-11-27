@@ -241,7 +241,13 @@ if (process.argv[2] === "--hold-stdout") {
   appendFileSync(process.env.MICME_TEST_PROCESS_LOG, \`stream \${process.pid}\\n\`);
   const ready = { type:"ready", version: options.version ?? 1, rate:16000, loadMs:0, asrLoads:1, vadLoads:1 };
   const send = (event, callback) => process.stdout.write(JSON.stringify(event) + "\\n", callback);
-  if (!options.hangReady) send(ready);
+  if (options.readyGate) {
+    const watcher = setInterval(() => {
+      if (!existsSync(options.readyGate)) return;
+      clearInterval(watcher);
+      send(ready);
+    }, 10);
+  } else if (!options.hangReady) send(ready);
   if (options.exitBeforeReady) process.exit(0);
   if (options.exitGate) setInterval(() => {
     if (!existsSync(options.exitGate)) return;
@@ -532,9 +538,10 @@ test("registered command, terminal shortcut, and printable fallback serialize de
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const stream = join(root, "micme-live");
 	const processLog = join(root, "processes.log");
-	await Promise.all([writeStreamingProcess(stream), writeFfmpegProcess(join(root, "ffmpeg"))]);
-	const response = createDeferred();
-	const fetchStarted = createDeferred();
+	const readyGate = join(root, "worker-ready");
+	const model = join(root, "fixture.model");
+	await Promise.all([writeStreamingProcess(stream, { readyGate }), writeFfmpegProcess(join(root, "ffmpeg")), writeFile(model, "manual test weights")]);
+	t.mock.method(globalThis, "fetch", () => assert.fail("manual weights must not trigger network during startup"));
 
 	await withEnv(
 		{
@@ -544,55 +551,44 @@ test("registered command, terminal shortcut, and printable fallback serialize de
 			...workerEnv(stream),
 			PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
 			MICME_RECORD_COMMAND: undefined,
-			MICME_WHISPER_CPP_MODEL: undefined,
-			MICME_DEFAULT_WHISPER_CPP_MODEL: "tiny",
-			MICME_MODEL_DIR: join(root, "models"),
-			MICME_AUTO_DOWNLOAD_MODEL: "1",
+			MICME_WHISPER_CPP_MODEL: model,
+			MICME_AUTO_DOWNLOAD_MODEL: "0",
 			MICME_SHORTCUT: "alt+m",
 			MICME_PRINTABLE_SHORTCUTS: "§",
 			MICME_STREAM_FINALIZE_WITH_CLIP: "0",
 			MICME_TEST_PROCESS_LOG: processLog,
 		},
 		async () => {
-			await withMockFetch(
-				async () => {
-					fetchStarted.resolve();
-					return response.promise;
-				},
-				async () => {
-					const harness = createExtensionHarness(root);
-					await emit(harness, "session_start", { reason: "startup" });
-					const command = harness.commands.get("micme");
-					const shortcut = harness.shortcuts.get("alt+m");
-					assert.ok(command);
-					assert.ok(shortcut);
+			const harness = createExtensionHarness(root);
+			await emit(harness, "session_start", { reason: "startup" });
+			const command = harness.commands.get("micme");
+			const shortcut = harness.shortcuts.get("alt+m");
+			assert.ok(command);
+			assert.ok(shortcut);
 
-					const commandStart = command.handler("", harness.ctx);
-					try {
-						await fetchStarted.promise;
-						assert.equal(harness.owner.getPhase(), "starting");
-						await new Promise((resolve) => setTimeout(resolve, 1_050));
-						const shortcutAttempt = shortcut.handler(harness.ctx);
-						harness.getEditor().handleInput("§");
-						await shortcutAttempt;
-						assert.equal(harness.owner.getPhase(), "starting");
-						assert.equal((await readProcessRows(processLog)).length, 0);
+			const commandStart = command.handler("", harness.ctx);
+			try {
+				await waitFor(async () => (await readProcessRows(processLog)).some((row) => row.startsWith("stream ")), "stream fixture did not start");
+				assert.equal(harness.owner.getPhase(), "starting");
+				await new Promise((resolve) => setTimeout(resolve, 1_050));
+				const shortcutAttempt = shortcut.handler(harness.ctx);
+				harness.getEditor().handleInput("§");
+				await shortcutAttempt;
+				assert.equal(harness.owner.getPhase(), "starting");
+				assert.match((await readProcessRows(processLog)).join("\n"), /^stream \d+$/);
 
-						response.resolve(modelResponse());
-						await commandStart;
-						assert.equal(harness.owner.getPhase(), "streaming");
-						await waitFor(async () => (await readProcessRows(processLog)).some((row) => row.startsWith("stream ")), "stream fixture did not start");
-						const rows = await readProcessRows(processLog);
-						assert.equal(rows.filter((row) => row.startsWith("stream ")).length, 1);
-						assert.ok(harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "warning").length >= 2);
-					} finally {
-						await emit(harness, "session_shutdown", { reason: "reload" });
-						await commandStart;
-					}
-					assert.equal(harness.owner.getPhase(), "shutting_down");
-					await assertProcessesStopped(await readProcessRows(processLog));
-				},
-			);
+				await writeFile(readyGate, "ready");
+				await commandStart;
+				assert.equal(harness.owner.getPhase(), "streaming");
+				const rows = await readProcessRows(processLog);
+				assert.equal(rows.filter((row) => row.startsWith("stream ")).length, 1);
+				assert.ok(harness.uiCalls.filter((entry) => entry.method === "notify" && entry.level === "warning").length >= 2);
+			} finally {
+				await emit(harness, "session_shutdown", { reason: "reload" });
+				await commandStart;
+			}
+			assert.equal(harness.owner.getPhase(), "shutting_down");
+			await assertProcessesStopped(await readProcessRows(processLog));
 		},
 	);
 });
