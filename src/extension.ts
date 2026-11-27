@@ -250,6 +250,10 @@ export class MicmeSessionOwner {
 			ctx.ui.notify(`/micme ${action} requires interactive TUI mode.`, "warning");
 			return;
 		}
+		if (isOmp) {
+			ctx.ui.notify(`/micme ${action} is only available in Pi.`, "warning");
+			return;
+		}
 		if (this.current || this.actionController) {
 			ctx.ui.notify("Micme is busy. Finish or cancel the current take or view first.", "warning");
 			return;
@@ -309,16 +313,13 @@ export class MicmeSessionOwner {
 	async shutdown(ctx: ExtensionContext) {
 		if (this.closed) return;
 		this.closed = true;
-<<<<<<< HEAD
-=======
 		this.removeOmpShortcuts?.();
 		this.removeOmpShortcuts = undefined;
 		const active = this.current;
 		this.current = undefined;
->>>>>>> origin/main
 		this.sessionController.abort();
 		const pendingSessionWork = Promise.allSettled(this.sessionWork);
-		if (this.current) await this.cancelOperation(this.current, ctx);
+		if (active) await this.cancelOperation(active, ctx);
 		else {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			this.clearRecordingWidget(ctx);
@@ -404,7 +405,9 @@ export class MicmeSessionOwner {
 		} else if (state.stage === "waiting" || state.stage === "opaque-running" || state.stage === "samples" || state.stage === "digital-zero") {
 			const clip = !operation.live;
 			const ready = state.firstSampleMs !== null;
-			const prefix = clip ? (ready ? "● recording " : "○ recording ") : (ready ? "● streaming " : "");
+			// OMP's legacy clip cue means the recorder can be stopped, not that PCM was seen.
+			const armed = ready || (isOmp && state.stage === "opaque-running");
+			const prefix = clip ? (armed ? "● recording " : "○ recording ") : (ready ? "● streaming " : "");
 			operation.context.ui.setStatus(STATUS_KEY, `${prefix}(${label}; ${operation.stopHint} or /micme to stop; /micme cancel to discard)`);
 		} else {
 			operation.context.ui.setStatus(STATUS_KEY, label);
@@ -563,7 +566,7 @@ export class MicmeSessionOwner {
 			processes: new Set(),
 			directories: new Set(),
 			capture: initialCapture("builtin"),
-			stopHint: sanitizeTerminalOutput(getShortcut()) || "shortcut",
+			stopHint: sanitizeTerminalOutput(getShortcut(hostDefaultShortcut)) || "shortcut",
 			history: !target?.trial && getTransferOptions().MICME_HISTORY,
 			modelId: null,
 			...target,
@@ -679,10 +682,9 @@ function formatOperationPhase(phase: MicmeOperation["phase"]) {
 function getHelpText() {
 	const shortcut = sanitizeTerminalOutput(getShortcut(hostDefaultShortcut)) || "not set";
 	const actions = MICME_ACTIONS.filter((action) => action !== "help").join("|");
-	return `Usage: /micme [${actions}]. Shortcut: ${shortcut} starts or stops recording. /micme cancel stops without transcription or delivery.`;
+	return `Usage: /micme [${actions}]. Shortcut: ${shortcut} toggles recording; tap once to start, tap again to stop/transcribe. /micme cancel stops without transcription or delivery.`;
 }
 
-<<<<<<< HEAD
 async function runSampleTrial(owner: MicmeSessionOwner, operation: MicmeOperation, path: string) {
 	const { controller: { signal }, trial } = operation;
 	if (!trial) return;
@@ -701,11 +703,6 @@ async function reviewTrial(operation: MicmeOperation, text: string) {
 	signal.throwIfAborted();
 	if (!text) {
 		context.ui.notify("Micme Try It did not recognize any words. Check the audio input and selected language.", "warning");
-=======
-async function startRecording(owner: MicmeSessionOwner, operation: MicmeOperation, ctx: ExtensionContext, stopHint = getShortcut(hostDefaultShortcut)) {
-	if (getTranscriptionMode() === "stream") {
-		await startStreamingTranscription(owner, operation, ctx, stopHint);
->>>>>>> origin/main
 		return;
 	}
 	await showTakeReview(context, "Try It · Review only", text, signal);
