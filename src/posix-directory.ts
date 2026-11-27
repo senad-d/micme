@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, renameSync, rmdirSync, statSync, type BigIntStats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, renameSync, rmdirSync, statSync, unlinkSync, type BigIntStats } from "node:fs";
 import { readdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -228,6 +228,12 @@ export class PosixDirectory {
 		for (const name of await readdir(this.procPath, { encoding: "buffer" })) {
 			await rm(Buffer.concat([prefix, name]), { recursive: true, force: true });
 		}
+	}
+
+	unlinkFile(name: string) {
+		if (this.procPath) return unlinkSync(join(this.procPath, name));
+		api ??= loadPosixApi();
+		checked(api.unlinkat(this.fd, name, 0), name);
 	}
 
 	rmdir(name: string) {

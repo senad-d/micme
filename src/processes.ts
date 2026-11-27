@@ -76,7 +76,8 @@ export function spawnLiveWorker({ command, args, display, spawnOptions }: Comman
 }
 
 export function spawnRecording(command: CommandSpec, audioPath: string, tempDir: string, directory?: RecordingDirectory): Recording {
-	const owned = spawnOwnedInteractive(command, Boolean(command.stopInput), directory?.cwdFd);
+	const startedAtMonotonic = performance.now();
+	const owned = spawnOwnedInteractive(command, Boolean(command.stopInput), command.useCallerCwd ? undefined : directory?.cwdFd);
 	const child = owned.process;
 	let stdout = "";
 	let audioLevel = 0;
@@ -92,7 +93,7 @@ export function spawnRecording(command: CommandSpec, audioPath: string, tempDir:
 		});
 	}
 
-	return { ...owned, audioPath, tempDir, directory, startedAt: Date.now(), audioLevel: () => audioLevel, stdout: () => stdout };
+	return { ...owned, audioPath, tempDir, directory, startedAt: Date.now(), startedAtMonotonic, audioLevel: () => audioLevel, stdout: () => stdout };
 }
 
 export function stopProcess(active: OwnedProcess) {

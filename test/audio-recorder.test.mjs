@@ -5,9 +5,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import * as capture from "../src/live-capture.ts";
 import { findExecutable, hasRecorderExited, spawnRecording, stopProcess } from "../src/processes.ts";
-import { createLiveRecordingDirectory } from "../src/recording-dir.ts";
+import { createClipRecordingDirectory, createLiveRecordingDirectory } from "../src/recording-dir.ts";
 
-const { buildFfmpegRecorderArgs, buildRecorderCommand, parseAvfoundationDevices, parseDirectShowDevices, parseVolumeDb, renderDevicePanel } = await import("../src/audio.ts");
+const { buildFfmpegRecorderArgs, buildOwnedClipRecorderCommand, buildRecorderCommand, parseAvfoundationDevices, parseDirectShowDevices, parseVolumeDb, renderDevicePanel } = await import("../src/audio.ts");
 const { getAvfoundationDropLateFrames, getAvfoundationInputSampleRate, getRecordMeter, getRecordSampleRate, getRecordSync, reloadMicmeConfig } = await import("../src/config.ts");
 
 function withEnv(values, fn) {
@@ -273,6 +273,32 @@ test("live recorder shares the clip device and writes one worker-format output w
 		assert.equal(args.join(" ").split("volume=0.5").length - 1, Number(enabled));
 		assert.equal(args.at(-1), path);
 	}
+});
+
+test("built-in clip requests the configured selector and flushes one sample-observable output without the optional meter", ffmpegOnly, async (t) => {
+	const { directory, path } = await liveSpool(t);
+	const spec = await withEnv({ ...LIVE_SETTINGS, MICME_RECORD_METER: "0" }, () => buildOwnedClipRecorderCommand(path, directory, false, t.signal));
+	assert.equal(spec.capture.source, "builtin");
+	const device = process.platform === "darwin" ? ":3" : process.platform === "win32" ? "Studio  Mic" : "test-input";
+	assert.equal(spec.capture.requested, device);
+	assert.equal(spec.args[spec.args.indexOf("-i") + 1], process.platform === "win32" ? `audio=${device}` : device);
+	assert.equal(spec.args.filter((arg) => arg === "-i").length, 1);
+	assert.equal(spec.args[spec.args.indexOf("-flush_packets") + 1], "1");
+	assert.equal(spec.args.includes("pipe:1"), false);
+	assert.equal(spec.args.at(-1), path);
+});
+
+test("temporary opaque clip hooks keep their legacy absolute placeholders and caller cwd in a held spool", async (t) => {
+	const directory = await createClipRecordingDirectory(".", false, "micme-clip-command-test-");
+	t.after(async () => {
+		try { await directory.remove(); } finally { directory.close(); }
+	});
+	const path = directory.liveFilePath("raw.wav");
+	const settings = { MICME_RECORD_COMMAND: "rec {audio} {tempDir} {transcript}", MICME_PULSE_SOURCE: "private-input" };
+	const legacy = await withEnv(settings, () => buildRecorderCommand(join(directory.path, "raw.wav"), directory.path, t.signal));
+	const owned = await withEnv(settings, () => buildOwnedClipRecorderCommand(path, directory, false, t.signal));
+	assert.deepEqual(owned, { ...legacy, useCallerCwd: true });
+	assert.deepEqual(owned.capture, { source: "custom", requested: null });
 });
 
 test("live custom hooks preserve the clip template and own all their filtering", async (t) => {

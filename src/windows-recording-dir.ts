@@ -101,6 +101,18 @@ class WindowsRecordingFile implements VerifiedRecordingFile {
 		return windowsFileId(this.native, this.openedHandle());
 	}
 
+	snapshotStamp() {
+		const handle = this.openedHandle();
+		const basic = Buffer.alloc(40); // FILE_BASIC_INFO
+		const standard = Buffer.alloc(24); // FILE_STANDARD_INFO
+		if (!this.native.information(handle, 0, basic, basic.length) || !this.native.information(handle, 1, standard, standard.length)) {
+			throw new Error("Windows could not verify the stopped recording's file metadata.");
+		}
+		if (standard.readUInt32LE(16) !== 1 || standard[20]) throw new Error("Micme cannot verify an unbound or hard-linked recording leaf.");
+		// File size, last-write and metadata-change times (not access time).
+		return `${standard.readBigInt64LE(8)}:${basic.readBigInt64LE(16)}:${basic.readBigInt64LE(24)}`;
+	}
+
 	size() {
 		const size = Buffer.alloc(8);
 		if (!this.native.fileSize(this.openedHandle(), size)) throw new Error("Windows could not read the live recording size.");

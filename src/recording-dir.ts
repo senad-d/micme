@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, read } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, read, unlinkSync, type BigIntStats } from "node:fs";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -19,6 +19,8 @@ const readAt = promisify(read);
 
 export interface VerifiedRecordingFile {
 	identity(): string;
+	/** Reject ambiguous hard links and detect writes/truncation during a stopped snapshot. */
+	snapshotStamp(): string;
 	size(): number;
 	readAt(bytes: Buffer, offset: number): Promise<number>;
 	close(): void;
@@ -32,6 +34,8 @@ type DirectoryAccess = {
 	containsFile: (identity: string) => Promise<boolean>;
 	verifiedDisplayPath: () => string | undefined;
 	createPrivateFile: (name: string) => number;
+	matchesPrivateFile: (name: string, expected: BigIntStats) => boolean;
+	unlinkPrivateFile: (name: string) => void;
 	remove: () => Promise<void>;
 	close: () => void;
 };
@@ -39,6 +43,8 @@ type DirectoryAccess = {
 export class RecordingDirectory {
 	private removal?: Promise<void>;
 	private closed = false;
+	private heldClip?: { name: string; file: VerifiedRecordingFile };
+	private readonly transientFiles = new Map<string, BigIntStats>();
 	readonly path: string;
 	private readonly access?: DirectoryAccess;
 
@@ -58,6 +64,30 @@ export class RecordingDirectory {
 		return this.liveAccess().openVerifiedFile(recordingFileName(path));
 	}
 
+	/** A clip can first open after stop (e.g. a close-only hook). Never replace a held source. */
+	holdClipFile(path: string) {
+		const { openVerifiedFile } = this.liveAccess();
+		const name = recordingFileName(path);
+		if (this.heldClip) {
+			if (this.heldClip.name !== name) throw new Error("Micme already holds a different clip recording file.");
+			return this.heldClip.file;
+		}
+		const file = openVerifiedFile(name);
+		if (file) this.heldClip = { name, file };
+		return file;
+	}
+
+	/** An exact leaf check differs from retention, which may find audio moved into a subtree. */
+	matchesVerifiedFile(path: string, file: VerifiedRecordingFile) {
+		const entry = this.openVerifiedFile(path);
+		if (!entry) return false;
+		try {
+			return entry.identity() === file.identity();
+		} finally {
+			entry.close();
+		}
+	}
+
 	containsVerifiedFile(file: VerifiedRecordingFile) {
 		return this.liveAccess().containsFile(file.identity());
 	}
@@ -68,6 +98,20 @@ export class RecordingDirectory {
 
 	createPrivateFile(path: string) {
 		return this.liveAccess().createPrivateFile(recordingFileName(path));
+	}
+
+	matchesPrivateFile(path: string, expected: BigIntStats) {
+		return this.liveAccess().matchesPrivateFile(recordingFileName(path), expected);
+	}
+
+	discardPrivateFile(path: string, expected: BigIntStats) {
+		if (this.matchesPrivateFile(path, expected)) this.liveAccess().unlinkPrivateFile(recordingFileName(path));
+	}
+
+	/** A snapshot staged alongside retained raw audio belongs only to the open take. */
+	discardPrivateFileOnClose(path: string, expected: BigIntStats) {
+		this.liveAccess();
+		this.transientFiles.set(recordingFileName(path), expected);
 	}
 
 	private liveAccess() {
@@ -105,20 +149,49 @@ export class RecordingDirectory {
 	async remove() {
 		if (this.removal) return this.removal;
 		if (this.closed) throw new Error("Micme's recording directory has been closed.");
+		this.closeClipFile();
 		this.removal = this.access?.remove() ?? cleanup(this.path);
 		return this.removal;
 	}
 
 	close() {
 		if (this.closed) return;
-		this.closed = true;
-		this.access?.close();
+		try {
+			if (!this.removal) {
+				for (const [name, expected] of this.transientFiles) {
+					try {
+						this.discardPrivateFile(name, expected);
+					} catch {
+						// Best effort only: do not delete an unverifiable file or strand the directory handle.
+					}
+				}
+			}
+			this.closeClipFile();
+		} finally {
+			this.closed = true;
+			this.transientFiles.clear();
+			this.access?.close();
+		}
+	}
+
+	private closeClipFile() {
+		const held = this.heldClip;
+		this.heldClip = undefined;
+		held?.file.close();
 	}
 }
 
 export async function createRecordingDirectory(cwd: string, keepAudio: boolean, tempPrefix = "micme-") {
 	if (!keepAudio) return new RecordingDirectory(await mkdtemp(join(tmpdir(), tempPrefix)));
 	return createProjectRecordingDirectory(cwd);
+}
+
+/** Observe and freeze mic clips through a held directory without requiring that of an opaque hook on other hosts. */
+export function createClipRecordingDirectory(cwd: string, keepAudio: boolean, tempPrefix = "micme-") {
+	if (keepAudio) return createProjectRecordingDirectory(cwd);
+	if (HOST_PLATFORM === "win32") return createWindowsLiveTempDirectory(tempPrefix);
+	if (HOST_PLATFORM === "linux" || HOST_PLATFORM === "darwin") return createPosixLiveTempDirectory(tempPrefix);
+	return createRecordingDirectory(cwd, false, tempPrefix);
 }
 
 /** Live spools and refinement targets require held directory access even when not kept. */
@@ -192,9 +265,30 @@ function createPosixLeaf(root: PosixDirectory, parent: string, name: string) {
 		containsFile: leaf.containsFile.bind(leaf),
 		verifiedDisplayPath: () => leaf.isAt(path) ? path : undefined,
 		createPrivateFile: (file) => leaf.openFile(file, EXCLUSIVE_FILE_FLAGS | constants.O_NOFOLLOW, PRIVATE_FILE_MODE),
+		matchesPrivateFile: (file, expected) => matchesPosixPrivateFile(leaf, file, expected),
+		unlinkPrivateFile: leaf.unlinkFile.bind(leaf),
 		remove: () => removePosixRecording(root, name, leaf),
 		close: () => closePosixRecording(root, leaf),
 	});
+}
+
+function matchesPosixPrivateFile(directory: PosixDirectory, name: string, expected: BigIntStats) {
+	let fd: number;
+	try {
+		fd = directory.openFile(name, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+	} catch (error) {
+		if (hasCode(error, "ENOENT") || hasCode(error, "ELOOP")) return false;
+		throw error;
+	}
+	try {
+		return sameRegularFile(expected, fstatSync(fd, { bigint: true }));
+	} finally {
+		closeSync(fd);
+	}
+}
+
+function sameRegularFile(expected: BigIntStats, found: BigIntStats) {
+	return found.isFile() && expected.ino === found.ino && expected.dev === found.dev;
 }
 
 function openVerifiedPosixFile(directory: PosixDirectory, name: string) {
@@ -228,6 +322,12 @@ class PosixRecordingFile implements VerifiedRecordingFile {
 
 	identity() {
 		return posixFileIdentity(fstatSync(this.descriptor(), { bigint: true }));
+	}
+
+	snapshotStamp() {
+		const stats = fstatSync(this.descriptor(), { bigint: true });
+		if (stats.nlink !== 1n) throw new Error("Micme cannot verify a recording leaf with ambiguous hard links.");
+		return `${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
 	}
 
 	size() {
@@ -331,9 +431,16 @@ function windowsLeaf(path: string, leaf: WindowsRecordingDirectory) {
 		// Create a new file exclusively under the locked directory; this is
 		// never the path used to read or verify a recorder-created leaf.
 		createPrivateFile: (name) => openSync(join(leaf.path, name), EXCLUSIVE_FILE_FLAGS, PRIVATE_FILE_MODE),
+		matchesPrivateFile: (name, expected) => matchesWindowsPrivateFile(join(leaf.path, name), expected),
+		unlinkPrivateFile: (name) => unlinkSync(join(leaf.path, name)),
 		remove: leaf.remove.bind(leaf),
 		close: leaf.close.bind(leaf),
 	});
+}
+
+function matchesWindowsPrivateFile(path: string, expected: BigIntStats) {
+	const found = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+	return found !== undefined && sameRegularFile(expected, found);
 }
 
 function recordingFileName(path: string) {
