@@ -4,6 +4,7 @@ import { MIN_AUDIO_BYTES, RECORDER_STARTUP_GRACE_MS, RECORDING_WIDGET_KEY, STATU
 import {
 	env,
 	envFlag,
+	expandConfigPath,
 	getShortcut,
 	getLegacyStreamSettings,
 	getPrintableShortcuts,
@@ -37,7 +38,7 @@ import { buildLiveWorkerCommand, caughtUpForLivePreview, livePoll, LiveTranscrip
 import { pasteOrSubmitTranscript } from "./transcript-delivery.ts";
 import { sanitizeTerminalOutput } from "./terminal-text.ts";
 import { resolveTranscriptionPlan } from "./backends.ts";
-import { getWhisperCppModelNameFromPath } from "./models.ts";
+import { getWhisperCppModelNameFromPath, isEnglishOnlyWhisperModelName, isTranslationUnsupportedWhisperModelName } from "./models.ts";
 import { transcribe } from "./transcription.ts";
 import { freezeAudio, initialCapture, noteLiveBlock, observeCapture } from "./transfer/capture.ts";
 import { MICME_TRANSFER_ACTIONS, type Capture, type Choice, type EntryId, type Final, type Host, type ReviewTrial, type Row, type Selection, type SetForeground, type TransferAction, type VerifiedAudio } from "./transfer/contracts.ts";
@@ -664,7 +665,20 @@ async function startRecording(owner: MicmeSessionOwner, operation: MicmeOperatio
 	} else if (streaming) {
 		return startStreamingTranscription(owner, operation, ctx);
 	}
-	if (operation.history && !operation.engine) operation.modelId = resolveTranscriptionPlan({ transcriptionMode: "clip" }).modelName ?? null;
+	if (!operation.engine && !operation.trial) {
+		const explicit = getTranslateToEnglishLanguage() && env("MICME_WHISPER_CPP_MODEL")?.trim();
+		if (explicit || operation.history) {
+			const plan = resolveTranscriptionPlan({ transcriptionMode: "clip" });
+			if (explicit && plan.effectiveBackend === "whisper.cpp") {
+				// Check the selected weight, not the multilingual sibling the legacy resolver may suggest.
+				const name = getWhisperCppModelNameFromPath(expandConfigPath(explicit))?.replace(/-q\d+_\d+$/i, "");
+				if (isEnglishOnlyWhisperModelName(name) || isTranslationUnsupportedWhisperModelName(name)) {
+					throw new Error("The selected Whisper model does not support translation to English. Choose a translation-capable multilingual model in /micme conf or turn off MICME_TRANSLATE_TO_ENGLISH.");
+				}
+			}
+			if (operation.history) operation.modelId = plan.modelName ?? null;
+		}
+	}
 	await startClipRecording(owner, operation);
 }
 
@@ -1043,9 +1057,12 @@ async function offerArtifactRetry(operation: MicmeOperation, audio: VerifiedAudi
 	// retry behind the same take's foreground reservation.
 	releaseForeground(operation);
 	try {
-		const { recognizeFile } = await import("./transfer/recognition.ts");
+		const { recognizeVerifiedRetry } = await import("./transfer/recognition.ts");
 		signal.throwIfAborted();
-		const final = await recognizeFile(audio, engine.choice, "retry", ignoreRetryProgress, signal);
+		const final = await recognizeVerifiedRetry(audio, engine.choice, ignoreRetryProgress, signal, () => {
+			signal.throwIfAborted();
+			ctx.ui.notify("Micme is retrying the verified recording on CPU after the fresh Auto attempt failed.", "warning");
+		});
 		return { ...final, source };
 	} catch {
 		if (!signal.aborted) ctx.ui.notify("Micme could not recognize the verified recording on retry.", "warning");

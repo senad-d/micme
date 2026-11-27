@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
@@ -2034,6 +2035,81 @@ test("RPC cancel during an unacknowledged feed never takes a recovery snapshot",
 		assert.deepEqual(harness.sentMessages, []);
 		assert.deepEqual(await readdir(scratch), []);
 		await assertProcessesStopped(await readProcessRows(log));
+	});
+});
+
+// Replace only the recognition service's engine/discovery boundary; keep the
+// registered command, capture, verified audio and retry policy in the test.
+export let retryFixture;
+
+test("Pi announces only the CPU retry allowed by the verified recovery policy", { skip: process.platform === "win32" }, async (t) => {
+	const { createRecognitionService } = await import("../src/transfer/recognition.ts");
+	const variantId = "public-retry-fixture";
+	const device = { id: "fixture-vulkan", label: "Fixture Vulkan" };
+	const recorderPcm = Buffer.alloc(980, 0x12);
+	const recognition = new URL("../src/transfer/recognition.ts", import.meta.url).href;
+	const owners = new Set(["../src/extension.ts", "../src/transfer/host.ts"].map((file) => new URL(file, import.meta.url).href));
+	const facade = `import { retryFixture } from ${JSON.stringify(import.meta.url)};
+export const listInstalled = (...args) => retryFixture.listInstalled(...args);
+export const listCompute = (...args) => retryFixture.listCompute(...args);
+export const openRecognizer = (...args) => retryFixture.openRecognizer(...args);
+export const recognizeFile = (...args) => retryFixture.recognizeFile(...args);
+export const recognizeVerifiedRetry = (audio, choice, progress, signal, onCpuRecovery) => retryFixture.recognizeFile(audio, choice, "retry", progress, signal, { onCpuRecovery });`;
+	const hook = registerHooks({ resolve(specifier, context, next) {
+		const result = next(specifier, context);
+		return result.url === recognition && owners.has(context.parentURL)
+			? { url: `data:text/javascript,${encodeURIComponent(facade)}`, shortCircuit: true } : result;
+	} });
+	t.after(() => { hook.deregister(); retryFixture = undefined; });
+
+	for (const scenario of ["auto", "pinned", "canceled"]) await t.test(scenario, async (caseTest) => {
+		const events = [];
+		let retryStarted = false;
+		const api = createRecognitionService({ load: async (choice) => {
+			events.push(choice.requestedDeviceId ?? choice.compute);
+			const cpu = choice.compute === "cpu";
+			return {
+				traits: { stream: false, batch: true, longForm: false, nativeLid: false, bias: false, translateEn: false,
+					languages: ["en"], vad: "off", actualCompute: cpu ? "cpu" : "vulkan", boundDevice: cpu ? null : device },
+				maxInputSamples: 640_000,
+				evidence: () => ({ inputSamples: recorderPcm.length / 2, inputPcmSha256: createHash("sha256").update(recorderPcm).digest("hex") }),
+				batch: async (pcm, _language, signal) => {
+					assert.deepEqual(pcm, recorderPcm);
+					if (cpu) return "Recovered once.";
+					if (scenario === "canceled" && events.length === 2) {
+						retryStarted = true;
+						await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+					}
+					throw new Error("fixture inference failure");
+				},
+				close: async () => {},
+			};
+		} });
+		retryFixture = { ...api, listInstalled: async () => [{ variantId }], listCompute: async () => [{ backend: "vulkan", device }] };
+		await withLiveFixture(caseTest, { env: {
+			MICME_TRANSCRIPTION_MODE: "clip", MICME_ARTIFACT: variantId, MICME_WHISPER_CPP_MODEL: undefined, MICME_TRANSCRIBE_COMMAND: undefined,
+			MICME_COMPUTE: scenario === "pinned" ? device.id : "auto", MICME_DETECTOR: "off", MICME_HISTORY: "0",
+		} }, async ({ harness, micme }) => {
+			harness.ctx.ui.confirm = async () => true;
+			const notify = harness.ctx.ui.notify;
+			harness.ctx.ui.notify = (message, level) => {
+				if (/retrying.*CPU/i.test(message)) events.push("notice");
+				notify(message, level);
+			};
+			await micme();
+			assert.equal(harness.owner.getPhase(), "recording");
+			const stopping = micme();
+			if (scenario === "canceled") {
+				await waitFor(() => retryStarted, "the verified retry did not start");
+				await micme("cancel");
+			}
+			await stopping;
+			assert.equal(harness.owner.getPhase(), "idle");
+			assert.deepEqual(events, scenario === "auto" ? ["auto", "auto", "notice", "cpu"] : Array(2).fill(scenario === "pinned" ? device.id : "auto"));
+			assert.deepEqual(harness.sentMessages, []);
+			assert.deepEqual(harness.uiCalls.filter(({ method }) => method === "pasteToEditor" || method === "setEditorText"),
+				scenario === "auto" ? [{ method: "pasteToEditor", value: "Recovered once. " }] : []);
+		});
 	});
 });
 
