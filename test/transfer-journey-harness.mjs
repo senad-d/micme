@@ -34,7 +34,7 @@ export async function until(check, why, diagnostics = () => "") {
 }
 
 function labelFor(options, pattern) {
-	return options.find((option) => pattern.test(option));
+	return options.find((option) => pattern.test(option.trim()));
 }
 
 class Dialogs {

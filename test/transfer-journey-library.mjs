@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { closeSync, writeFileSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import test from "node:test";
@@ -61,16 +62,22 @@ async function namedTake(f, ui, text, pcmByte) {
 async function flagProtected(f, ui) {
 	const star = await namedTake(f, ui, "Starred specimen.", 31);
 	const { pending } = await rowDetail(ui, /Starred specimen\.|\bready\b|\bclip\b/i);
+	await ui.dialogs.pick(/^Original transcript$/i);
 	await ui.dialogs.expect(/Starred specimen\./);
+	ui.dialogs.input("\x1b");
 	await ui.dialogs.pick(/^\s*(?:star|protect)(?:\s|$)/i);
 	await until(async () => (await readRows()).some((row) => row.id === star.id && row.starred), "star action did not protect the exact row");
 	await leave(ui, pending);
 	// Seed an imported, ready row via L's verified copy boundary, not an INSERT or
 	// a fake WAV. The registered import dialog/media journey is exercised by V5.
-	const { enqueueImport, publishAudio, updateTake, verifiedAudio } = await library();
+	const { enqueueImport, publishAudio, updateTake } = await library();
 	const signal = new AbortController().signal;
-	const audio = await verifiedAudio(star.id, signal);
-	assert.ok(audio);
+	const bytes = wav(Buffer.alloc(fullInput.length, 33));
+	const audio = { bytes: bytes.length, sha256: sha(bytes), async copyTo(target) {
+		const fd = target.createPrivateFile("import-seed.wav");
+		try { writeFileSync(fd, bytes); } finally { closeSync(fd); }
+		return target.liveFilePath("import-seed.wav");
+	} };
 	const id = await enqueueImport(f.sample, { variantId: f.model, compute: "auto", requestedDeviceId: null, language: "fr", task: "transcribe", detector: "model", chunking: true }, signal);
 	await publishAudio(id, audio, signal);
 	await updateTake(id, { raw: "Imported specimen.", local: "Imported specimen.", state: "ready" }, signal);
@@ -82,17 +89,14 @@ async function flagProtected(f, ui) {
 }
 
 async function editRetention(ui, policy, approve) {
-	// A proposed config value is not active retention until the visible preview is
-	// explicitly confirmed. Allow either Pi's built-in dialogs or custom selectors.
+	// A proposed config value is not active retention until the visible preview is explicitly confirmed.
 	await writeMicmeConfigValues({ MICME_RETENTION: policy });
 	const { pending } = await ui.open("history");
-	await ui.dialogs.pick(/\bretention\b|\bprune\b/i);
-	const [, number] = policy.split(":");
-	const option = policy.startsWith("days:") ? new RegExp(`days:${number}|${number} days`, "i") : new RegExp(`count:${number}|(?:keep|newest|latest)[^\\n]*\\b${number}\\b`, "i");
-	if (ui.dialogs.current?.kind === "input") await ui.dialogs.type(/retention|keep|prune|policy/i, policy);
-	else if (ui.dialogs.current?.kind === "select") await ui.dialogs.pick(option);
-	else if (ui.dialogs.current?.kind === "custom" && /(?:count|age|policy).*(?:days|count):/i.test(ui.dialogs.text())) await ui.dialogs.pick(option);
-	await ui.dialogs.answer(/\b(?:confirm|prune|delete|keep|retention)\b/i, approve);
+	await ui.dialogs.pick(/^Retention…$/i);
+	await ui.dialogs.pick(new RegExp(`^Preview configured policy \\(${policy}\\)$`, "i"));
+	await ui.dialogs.expect(new RegExp(`Apply retention: ${policy}\\?`, "i"));
+	await ui.dialogs.pick(approve ? /^Apply retention$/i : /^Cancel$/i);
+	if (approve) await ui.dialogs.expect(/Retention applied/i);
 	await leave(ui, pending);
 }
 
@@ -112,9 +116,10 @@ test("Pi restart plays and retries the exact saved ASR-failed WAV but rejects a 
 	await f.control({ text: "Recovered public words." });
 	const { pending } = await rowDetail(ui, /ASR[- ]failed|recognition failed|transcription failed/i);
 	await ui.dialogs.pick(/^\s*play(?:\s|$)/i);
-	const played = await f.waitEvent("play");
+	const played = await f.waitEvent("play", 1, ui.diagnostics);
 	assert.deepEqual(played, { kind: "play", digest: saved.digest, bytes: saved.bytes });
-	await ui.dialogs.pick(/^\s*retry(?:\s|$)/i);
+	await ui.dialogs.pick(/^Retry with current model/i);
+	await ui.dialogs.pick(/^Start retry$/i);
 	await until(async () => (await readRows()).some((row) => row.id === failed.id && row.local === "Recovered public words." && row.state === "ready"), "retry did not update the same row");
 	const clips = await f.events("clip");
 	assert.equal(clips.length, 2, "ASR should be called once before and once after restart");
@@ -128,8 +133,8 @@ test("Pi restart plays and retries the exact saved ASR-failed WAV but rejects a 
 	await writeFile(saved.path, replacement);
 	const reopened = await f.host({ width: 80 });
 	const detail = await rowDetail(reopened, /Recovered public words\.|\bready\b|\bclip\b/i);
-	await reopened.dialogs.expect(/audio (?:missing|invalid|unverified|unavailable|changed)|unverified (?:WAV|audio)|no verified audio/i);
-	assert.doesNotMatch(reopened.dialogs.text(), /^\s*[→❯›>]?\s*(?:play|retry)\s*$/im, "unsafe WAV got an enabled play/retry action");
+	await reopened.dialogs.expect(/No verified saved audio/i);
+	assert.doesNotMatch(reopened.dialogs.text(), /^\s*[→❯›>]?\s*(?:Play saved audio|Retry with current model)/im, "unsafe WAV got an enabled play/retry action");
 	const { verifiedAudio, play, retry } = await library();
 	const signal = new AbortController().signal;
 	assert.equal(await verifiedAudio(failed.id, signal), null);
@@ -156,6 +161,8 @@ test("Pi keeps copyable failed-delivery text distinct from ASR failure", posix, 
 
 	const ui = await f.host();
 	const { pending } = await rowDetail(ui, /delivery[- ]failed|could not deliver/i);
+	await ui.dialogs.expect(/Saved text is still copyable/i);
+	await ui.dialogs.pick(/^Original transcript$/i);
 	await ui.dialogs.expect(/Public specimen words\./);
 	await ui.dialogs.expect(/copy|selectable text/i);
 	await leave(ui, pending);

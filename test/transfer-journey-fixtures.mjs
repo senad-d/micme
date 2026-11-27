@@ -176,8 +176,9 @@ if (args.includes("--help") || args.includes("-h") || args.includes("--version")
 `;
 
 const playerSource = `
-const input = args.find((arg) => arg.endsWith(".wav") && existsSync(arg));
-assert.ok(input, "player did not receive a verified WAV: " + JSON.stringify(args));
+const inputIndex = args.indexOf("-i");
+const input = args[inputIndex + 1];
+assert.ok(inputIndex >= 0 && input && existsSync(input), "player did not receive a verified WAV: " + JSON.stringify(args));
 const bytes = readFileSync(input);
 log("play", { digest: sha(bytes), bytes: bytes.length });
 `;
@@ -196,7 +197,7 @@ export async function fixtures(root) {
 	const bin = join(root, "bin");
 	const models = join(root, "models");
 	const spool = join(root, "spool");
-	await Promise.all([agent, project, bin, models, spool].map((dir) => mkdir(dir)));
+	await Promise.all([agent, project, bin, models, spool].map((dir) => mkdir(dir, { mode: 0o700 })));
 	const model = join(models, "ggml-base.bin");
 	const whisper = join(bin, "whisper-cli");
 	const worker = join(bin, "micme-live");

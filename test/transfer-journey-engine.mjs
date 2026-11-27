@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { fullInput, publicText, sha } from "./transfer-journey-fixtures.mjs";
@@ -21,9 +22,24 @@ const streaming = { ...common, id: "fixture-stream-v1", traits: { ...traits, str
 const batch = { ...common, id: "fixture-batch-v1", traits: { ...traits, stream: false, longForm: false },
 	measurements: [{ feature: "A4", language: "fr", task: "translate-en", rig: "fixture", device: device2, wer: null, cer: null, xrt: null, evidence: "scripted V4 only", disposition: "adapted-verified" }] };
 const variants = [streaming, batch];
+const helper = "Public fixture executable, not a real recognizer.\n";
+const fixtureRig = `linux-x86_64/micme-1.0/i5-1234/4t/headless/sha256:${sha(helper)}`;
 let engineState;
 
 export const referenceRows = () => variants.map((variant) => ({ id: variant.id, label: `Public ${variant.traits.stream ? "stream" : "batch"} fixture`, curated: true, variants: [variant] }));
+export const getCatalogVariant = (id) => variants.find((variant) => variant.id === id) ?? null;
+export const getManagedCatalogVariant = (id, scope, task, language) => {
+	const variant = getCatalogVariant(id);
+	return variant && ["fixture", fixtureRig].includes(scope.rig) && scope.actualCompute === "vulkan" && scope.device?.id === device2.id &&
+		language === "fr" && (task === "transcribe" || variant.traits.translateEn) ? variant : null;
+};
+export const getWhisperVariant = () => null;
+export const getManagedWhisperVariant = () => null;
+export const whisperVadVariant = () => ({ id: "fixture-vad" });
+export const referenceClaim = () => null;
+export const whisperVariants = () => [];
+export const fixtureCpus = () => [{ model: "fixture i5-1234" }];
+export const fixtureReadFile = (file, ...args) => file === "/etc/os-release" ? Promise.resolve("ID=micme\nVERSION_ID=1.0\n") : readFile(file, ...args);
 export const getEngineEvidence = (id) => {
 	const row = variants.find((variant) => variant.id === id);
 	return row ? { runtime: row.runtime, traits: row.traits, measurements: row.measurements } : null;
@@ -42,8 +58,11 @@ export async function loadEngine(choice, signal) {
 	const boundDevice = wrongBinding ? device1 : device2;
 	events.push({ kind: "load", choice, boundDevice });
 	let blocks = [];
+	let input = Buffer.alloc(0);
 	return {
 		traits: { ...variant.traits, boundDevice },
+		maxInputSamples: 640_000, pid: process.pid, binarySha256: sha(helper), threads: 4,
+		evidence: () => ({ inputSamples: input.length / 2, inputPcmSha256: sha(input) }),
 		begin: async (language, words, operation) => { operation.throwIfAborted(); events.push({ kind: "begin", language, words: [...words] }); },
 		feed: async (from, pcm, last, operation) => {
 			operation.throwIfAborted();
@@ -51,29 +70,38 @@ export async function loadEngine(choice, signal) {
 			const to = from + pcm.length / 2;
 			events.push({ kind: "feed", from, to, last });
 			if (!last) return [];
-			const all = Buffer.concat(blocks);
-			events.push({ kind: "stream-final", sha256: sha(all), length: all.length });
+			input = Buffer.concat(blocks);
+			events.push({ kind: "stream-final", sha256: sha(input), length: input.length });
 			return [{ kind: "commit", from: 0, to, text: publicText }];
 		},
 		batch: async (pcm, language, operation) => {
 			operation.throwIfAborted();
-			events.push({ kind: "batch", language, sha256: sha(pcm), length: pcm.length });
+			input = Buffer.from(pcm);
+			events.push({ kind: "batch", language, sha256: sha(input), length: input.length });
 			return publicText;
 		},
-		reset: async () => { blocks = []; },
+		reset: async () => { blocks = []; input = Buffer.alloc(0); },
 		close: async () => {},
 	};
 }
 
 function fixtureModules() {
 	const urls = new Set(["catalog", "engine", "engine-evidence"].map((file) => new URL(`../src/transfer/${file}.ts`, import.meta.url).href));
+	const recognition = new URL("../src/transfer/recognition.ts", import.meta.url).href;
 	registerHooks({ resolve(specifier, context, next) {
+		if (context.parentURL === recognition && ["node:os", "node:fs/promises"].includes(specifier)) {
+			const fixture = specifier === "node:os" ? "fixtureCpus as cpus" : "fixtureReadFile as readFile";
+			const facade = `export * from ${JSON.stringify(specifier)}; export {${fixture}} from ${JSON.stringify(import.meta.url)};`;
+			return { url: `data:text/javascript,${encodeURIComponent(facade)}`, shortCircuit: true };
+		}
 		const result = next(specifier, context);
 		return urls.has(result.url) ? { url: import.meta.url, shortCircuit: true } : result;
 	} });
 }
 
 async function installManaged(t, variant, corruptFirst = false) {
+	const { reloadMicmeConfig } = await import("../src/config.ts");
+	reloadMicmeConfig();
 	const { ensureManaged } = await import("../src/transfer/managed.ts");
 	assert.equal(typeof ensureManaged, "function", "M managed artifacts are not implemented yet");
 	const calls = [];
@@ -130,7 +158,8 @@ async function engineJourney(t, mode) {
 	const { isolatedJourney, prompt, until } = await import("./transfer-journey-harness.mjs");
 	const variant = mode === "native" ? streaming : batch;
 	const f = await isolatedJourney(t);
-	await f.configure({ MICME_ARTIFACT: variant.id, MICME_COMPUTE: device2.id, MICME_WHISPER_CPP_MODEL: "",
+	await writeFile(join(f.bin, "micme-recognizer"), helper, { mode: 0o700 });
+	await f.configure({ MICME_ARTIFACT: variant.id, MICME_COMPUTE: device2.id, MICME_WHISPER_CPP_MODEL: "", MICME_AUTO_DOWNLOAD_MODEL: "1",
 		MICME_TRANSCRIPTION_MODE: "stream", MICME_STREAM_FINALIZE_WITH_CLIP: "0", MICME_TRANSLATE_TO_ENGLISH: mode === "native" ? "off" : "fr",
 		MICME_WORDS: '["Public"]', MICME_HISTORY: mode === "native" ? "1" : "0" });
 	const calls = await installManaged(t, variant, mode === "native");
@@ -140,7 +169,7 @@ async function engineJourney(t, mode) {
 	assert.deepEqual(engineState.events, [], "opening Pi loaded an engine");
 	assert.deepEqual(await f.events(), [], "opening Pi opened a recorder");
 	await ui.command();
-	await f.waitEvent("block");
+	await f.waitEvent("block", 1, ui.diagnostics);
 	if (mode === "native") await until(() => engineState.events.some(({ kind, last }) => kind === "feed" && !last), "native recognizer never consumed the initial PCM before stop", ui.diagnostics);
 	else assert.deepEqual(engineState.events.filter(({ kind }) => kind === "batch"), [], "batch inference started from a growing WAV");
 	await ui.command();
@@ -163,21 +192,26 @@ async function engineJourney(t, mode) {
 async function advancedDeviceChoices(t) {
 	const { isolatedJourney, assertUntouched, until } = await import("./transfer-journey-harness.mjs");
 	const f = await isolatedJourney(t);
+	await writeFile(join(f.bin, "micme-recognizer"), helper, { mode: 0o700 });
+	await f.configure({ MICME_ARTIFACT: streaming.id, MICME_COMPUTE: device2.id, MICME_WHISPER_CPP_MODEL: "", MICME_TRANSCRIPTION_MODE: "stream", MICME_AUTO_DOWNLOAD_MODEL: "1" });
 	await installManaged(t, streaming);
-	await f.configure({ MICME_ARTIFACT: streaming.id, MICME_COMPUTE: device2.id, MICME_WHISPER_CPP_MODEL: "", MICME_TRANSCRIPTION_MODE: "stream" });
+	const { listCompute: qualifiedCompute } = await import("../src/transfer/recognition.ts");
+	assert.ok((await qualifiedCompute()).some(({ device }) => device?.id === device2.id));
+	assert.ok(!(await qualifiedCompute()).some(({ device }) => device?.id === device1.id));
 	engineState = { events: [], wrongBinding: true };
 	const ui = await f.host({ width: 80 });
 	const { pending } = await ui.open("conf");
-	await ui.dialogs.pick(/advanced|experimental/i);
-	await ui.dialogs.expect(/compute|device/i);
-	await ui.dialogs.pick(/compute|device/i);
-	await ui.dialogs.expect(/Fixture device A|fixture-vulkan-1/i);
+	await ui.dialogs.expect(/Advanced controls\s+Hidden/i);
+	ui.dialogs.input("\r", "/", "Advanced controls");
+	await ui.dialogs.expect(/Advanced controls/i);
+	ui.dialogs.input("\r", "/", "Requested compute");
+	await ui.dialogs.expect(/Requested compute/i);
+	assert.doesNotMatch(ui.dialogs.text(), /Fixture device A|fixture-vulkan-1/i);
 	await ui.dialogs.expect(/Fixture device B|fixture-vulkan-2/i);
-	await ui.dialogs.pick(/Fixture device B|fixture-vulkan-2/i);
 	for (let n = 0; n < 8 && ui.dialogs.current; n++) ui.dialogs.input("\x1b");
 	await pending;
 	await ui.command();
-	await until(() => /(?:device|binding|bound)[^\n]*(?:mismatch|different|did not|expected)|(?:mismatch|different)[^\n]*(?:device|binding)/i.test(ui.visible()), "same-family runtime binding mismatch was not diagnosed", ui.diagnostics);
+	await until(() => /(?:mismatch|different|did not|does not match)[^\n]*(?:device|binding)|(?:device|binding|bound)[^\n]*(?:mismatch|different|did not|expected)/i.test(ui.visible()), "same-family runtime binding mismatch was not diagnosed", ui.diagnostics);
 	const loads = engineState.events.filter(({ kind }) => kind === "load");
 	assert.equal(loads.length, 1, "explicit device fell back to another load");
 	assert.equal(loads[0].choice.requestedDeviceId, device2.id);
@@ -193,5 +227,5 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
 	fixtureModules();
 	test("loaded native stream uses exact PCM and reports a bias outcome without a text diff", async (t) => engineJourney(t, "native"));
 	test("loaded batch route uses the full closed WAV and the explicit translation task", async (t) => engineJourney(t, "batch"));
-	test("qualified advanced devices remain distinct and a loaded same-family mismatch refuses fallback", advancedDeviceChoices);
+	test("only the qualified advanced device is selectable and a loaded same-family mismatch refuses fallback", advancedDeviceChoices);
 }

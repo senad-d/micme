@@ -47,7 +47,9 @@ function wave(samples, { rate = 16000, channels = 1, bits = 16, format = 1, mark
 }
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
-function modelNamed(id, name) { return id === name || id.endsWith(`:${name}`) || basename(id) === `ggml-${name}.bin`; }
+function modelNamed(id, name) {
+	return id === name || id.endsWith(`:${name}`) || basename(id) === `ggml-${name}.bin` || id.startsWith(`whisper.cpp/${name}/`);
+}
 
 function pcmFormat(bytes) {
 	assert.equal(bytes.toString("ascii", 0, 4), "RIFF");
@@ -125,7 +127,7 @@ registerHooks({
 });
 `;
 const whisper = `#!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 const root = process.env.V5_ROOT;
@@ -138,7 +140,7 @@ const audio = readFileSync(arg("-f"));
 if (audio.toString("ascii", 0, 4) !== "RIFF") throw new Error("Expected normalized WAV input");
 appendFileSync(join(root, "calls"), JSON.stringify({ pid: process.pid, model: basename(arg("-m")), bytes: audio.length }) + "\\n");
 while (existsSync(join(root, "hold")) && !existsSync(join(root, "release-" + process.pid))) await delay(15);
-console.log(${JSON.stringify(fixtureText)});
+writeFileSync(arg("-of") + ".txt", ${JSON.stringify(fixtureText + "\n")});
 `;
 const deviceFixture = `
 import { appendFileSync } from "node:fs";
@@ -165,11 +167,13 @@ async function fixture(t, { media = false } = {}) {
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const bin = join(root, "bin");
 	const agent = join(root, "agent");
-	const models = join(root, "models");
 	const project = join(root, "project");
+	const models = join(project, "models");
 	const scratch = join(root, "scratch");
 	const home = join(root, "home");
-	await Promise.all([bin, agent, models, project, scratch, home].map((path) => mkdir(path)));
+	const cache = join(root, "managed-cache");
+	await Promise.all([bin, agent, project, scratch, home, cache].map((path) => mkdir(path, { mode: 0o700 })));
+	await mkdir(models, { mode: 0o700 });
 	const trap = join(root, "offline.mjs");
 	const hook = join(bin, "output-hook");
 	await Promise.all([
@@ -183,7 +187,7 @@ async function fixture(t, { media = false } = {}) {
 	const env = {
 		HOME: home, PATH: bin, TMPDIR: scratch, LC_ALL: "C", V5_ROOT: root,
 		NODE_OPTIONS: `--import=${pathToFileURL(trap).href}`,
-		PI_CODING_AGENT_DIR: agent, MICME_MODEL_DIR: models, MICME_LANGUAGE: "en",
+		PI_CODING_AGENT_DIR: agent, MICME_MODEL_DIR: cache, MICME_LANGUAGE: "en",
 		MICME_TRANSCRIBE_BACKEND: "whisper.cpp", MICME_WHISPER_CPP_BIN: join(bin, "whisper-cli"),
 		MICME_AUTO_DOWNLOAD_MODEL: "1", MICME_AUTO_SUBMIT: "1", MICME_HISTORY: "1",
 		MICME_OUTPUT_HOOK: hook, MICME_POLISH_PROVIDER: "local-openai", MICME_POLISH_ENDPOINT: "http://localhost:1/v1",
@@ -214,7 +218,7 @@ const args = process.argv.slice(2);
 if (!args.includes("-i")) process.exit(spawnSync(${JSON.stringify(real)}, args, { stdio: "inherit" }).status ?? 1);
 const prefix = Buffer.from(${JSON.stringify(wave(4000).subarray(0, 60).toString("hex"))}, "hex");
 const output = args.at(-1);
-if (output === "-" || output.startsWith("pipe:")) await new Promise(resolve => process.stdout.write(prefix, resolve));
+if (output === "-" || output === "fd:" || output.startsWith("pipe:")) await new Promise(resolve => process.stdout.write(prefix, resolve));
 else writeFileSync(output, prefix);
 const marker = join(process.env.V5_ROOT, "staged-prefix");
 writeFileSync(marker, "");
@@ -247,7 +251,8 @@ async function importJourney(operation, files) {
 	}
 	const { importFiles, cancelJob } = await import("../src/transfer/import.ts");
 	assert.equal(typeof importFiles, "function", "L importFiles entry is not built yet");
-	const { page, verifiedAudio, enqueueImport, previewPrune, applyPrune, retry, deleteRow } = await import("../src/transfer/library.ts");
+	const { page, verifiedAudio, enqueueImport, retry, deleteRow } = await import("../src/transfer/library.ts");
+	const { previewPrune, applyPrune } = await import("../src/transfer/retention.ts");
 	const { listInstalled } = await import("../src/transfer/recognition.ts");
 	const { setForeground } = await import("../src/transfer/jobs.ts");
 	const installed = await listInstalled();

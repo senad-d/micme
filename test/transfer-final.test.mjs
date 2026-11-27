@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,7 +114,7 @@ for (const [provider, family] of [["local-openai", "chat"], ["custom-anthropic",
 		wire.respond((res) => { late = res; });
 		const stop = new AbortController();
 		const started = wire.next();
-		const pending = processFinal(FINAL, REVIEW, c, AbortSignal.any([t.signal, stop.signal]));
+		const pending = processFinal({ ...FINAL, source: "live" }, REVIEW, c, AbortSignal.any([t.signal, stop.signal]));
 		await expectDispatch(started, pending, "live final processing");
 		stop.abort();
 		late.end(JSON.stringify(family === "chat" ? openAi() : anthropic()));
@@ -152,7 +153,11 @@ for (const reason of ["timeout", "cancel"]) {
 			assert.deepEqual(await pending, reason === "timeout"
 				? { kind: "candidate", text: POLISHED, warnings: [{ stage: "hook", reason: "timeout" }] }
 				: { kind: "suppressed", reason: "cancel", warnings: [] });
-			assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "owner waited for actual hook exit");
+			const state = spawnSync("/bin/ps", ["-p", String(pid), "-o", "stat="], { encoding: "utf8" });
+			assert.ifError(state.error);
+			// A killed orphan can remain visible as a zombie until PID 1 reaps it.
+			assert.ok(state.status === 1 || (state.status === 0 && /^Z/u.test(state.stdout.trim())),
+				`owner returned while its hook was still running: ${state.stdout.trim() || state.stderr}`);
 		} finally { stop.abort(); await entered.catch(() => {}); }
 	});
 }
@@ -166,11 +171,20 @@ function noDisclosure(pi, rows) {
 	for (const marker of [SECRET, PRIVATE_ERROR, RAW, "AX-019", "1,204.50"]) assert.ok(!diagnostics.includes(marker), "diagnostics disclosed protected fixture data");
 }
 
+async function processingConsent(pi, action) {
+	const offset = pi.frames.length;
+	pi.fire(action);
+	const title = action === "polish" ? "Micme polish · New clip" : "Micme preview · Saved live final";
+	return pi.until(() => pi.frames.slice(offset).find((frame) => frame.includes(title) && frame.includes("Enter confirm")), `${action} consent before processing`);
+}
+
 async function armClip(pi) {
 	const count = (await pi.rows()).length;
-	await pi.run("polish");
-	const rows = (await pi.rows()).slice(count);
-	assert.ok(rows.some(({ kind }) => kind === "consent"), `S polish did not ask for consent: ${warningRows(rows).join("; ")}`);
+	const consent = await processingConsent(pi, "polish");
+	assert.match(consent, /Arm one clip/);
+	assert.ok(!(await pi.rows()).slice(count).some(({ kind }) => kind === "recorder-ready"), "opening consent cannot start capture");
+	pi.send("\r");
+	await pi.mark("finished", { action: "polish" }, count);
 	await pi.mark("recorder-ready", {}, count);
 }
 
@@ -319,11 +333,21 @@ for (const auto of [false, true]) {
 		assert.ok(!(await pi.rows()).some(({ kind }) => kind === "hook" || kind === "send"));
 
 		for (const outcome of ["success", "empty", "cancel"]) {
-			await f.scenario({ hook: outcome, decline: outcome === "cancel" });
+			await f.scenario({ hook: outcome });
 			const calls = selected.calls.length;
 			const from = (await pi.rows()).length;
 			const shown = pi.frames.length;
-			pi.fire("preview");
+			const consent = await processingConsent(pi, "preview");
+			assert.match(consent, /without changing the prompt or replay/);
+			assert.equal(selected.calls.length, calls, "opening consent cannot send text");
+			let late;
+			const entered = outcome === "cancel" ? selected.next() : undefined;
+			if (entered) selected.respond((res) => { late = res; });
+			pi.send("\r");
+			if (entered) {
+				await expectDispatch(entered, pi.mark("finished", { action: "preview" }, from), "confirmed live preview");
+				pi.send("\x1b");
+			}
 			const displayed = (text, rows) => pi.frames.slice(shown).some((frame) => frame.includes(text)) ||
 				rows.some((row) => (row.kind === "editor" && row.detail?.includes(text)) || (row.kind === "notify" && row.text?.includes(text)));
 			const settled = await pi.until(async () => {
@@ -334,16 +358,16 @@ for (const auto of [false, true]) {
 			}, `preview ${outcome} completed or showed a review candidate`);
 			if (!settled.ended) pi.send("\x1b");
 			const { before, after } = await pi.mark("finished", { action: "preview" }, from);
+			late?.end(JSON.stringify(openAi()));
 			assert.equal(before, edited);
 			assert.equal(after, edited);
 			const rows = (await pi.rows()).slice(from);
-			assert.ok(rows.some(({ kind }) => kind === "consent"), `S preview did not request consent: ${warningRows(rows).join("; ")}`);
 			assert.deepEqual(mutations(rows), []);
 			if (outcome === "success") await pi.until(() => displayed(OUTPUT, rows), "transformed review rendered outside the prompt");
 			else assert.ok(!displayed(OUTPUT, rows) && !displayed(POLISHED, rows), "empty/canceled preview produces no candidate");
-			assert.equal(selected.calls.length - calls, outcome === "cancel" ? 0 : 1);
+			assert.equal(selected.calls.length - calls, 1);
 			assert.deepEqual(rows.filter(({ kind }) => kind === "hook").map(({ text }) => text), outcome === "cancel" ? [] : [POLISHED]);
-			if (outcome !== "cancel") checkRequest(selected.calls.at(-1), "chat");
+			checkRequest(selected.calls.at(-1), "chat");
 			noDisclosure(pi, rows);
 			await expectReplay(pi, auto, edited);
 			if (!auto) {

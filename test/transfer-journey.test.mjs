@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, chmod, readFile, rename, rm, stat } from "node:fs/promises";
+import { access, chmod, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -29,27 +30,6 @@ async function stopCloseOnly(f, ui) {
 
 async function idle(ui) {
 	await until(() => ui.statuses.length > 0 && !ui.statuses.at(-1) && [...ui.widgets.values()].every((value) => !value), "recording never settled to idle", ui.diagnostics);
-}
-
-async function enterTry(ui, mode) {
-	ui.requireAction("setup");
-	const { pending } = await ui.open("setup");
-	const choice = mode === "sample" ? /sample|local (?:file|wav)/i : /\bmic(?:rophone)?\b/i;
-	const before = ui.dialogs.text();
-	const tryAction = mode === "sample" ? /\btry (?:it|(?:local )?sample)|\blocal (?:sample|trial)/i : /\btry (?:it|(?:the )?mic(?:rophone)?)|\blocal trial/i;
-	await ui.dialogs.pick(tryAction);
-	const step = await until(() => {
-		const current = ui.dialogs.current;
-		const view = ui.dialogs.text();
-		if (view === before) return null;
-		if (ui.visible().includes(trialText)) return "review";
-		if (["confirm", "input", "editor"].includes(current?.kind)) return current.kind;
-		if (/\b(?:file|sample|WAV) path\b/i.test(view)) return "input";
-		if (/\bconfirm\b|\bare you sure\b/i.test(view)) return "confirm";
-		return choice.test(view) ? "choose" : null;
-	}, `no ${mode} path in Pi Try It`, ui.diagnostics);
-	if (step === "choose") await ui.dialogs.pick(choice);
-	return { pending, step };
 }
 
 test("Pi accepts two exact SIGINT/255 close-only clips, never claims samples early, and leaves history off", posix, async (t) => {
@@ -90,17 +70,23 @@ for (const mode of ["sample", "mic"]) {
 		await f.control({ text: trialText });
 		ui.edit(edited);
 		const before = ui.mutations.length;
-		const { pending, step } = await enterTry(ui, mode);
+		let stop;
+		ui.requireAction("setup");
+		const { pending } = await ui.open("setup");
+		await ui.dialogs.pick(mode === "sample" ? /^Try It: local sample\b/i : /^Try It: microphone\b/i);
 		if (mode === "sample") {
-			if (["input", "editor"].includes(step) || ["input", "editor"].includes(ui.dialogs.current?.kind)) await ui.dialogs.type(/sample|\.wav|path/i, f.sample);
-			if (ui.dialogs.current?.kind === "confirm") await ui.dialogs.answer(/sample|review|try/i, true);
+			await ui.dialogs.type(/Local sample WAV path/i, f.sample);
+			assert.deepEqual(await f.events("clip"), [], "sample was processed before explicit consent");
+			await ui.dialogs.pick(/^Transcribe sample\b/i);
 		} else {
 			assert.deepEqual(await f.events("clip"), [], "mic trial processed audio before consent");
 			await assert.rejects(access(f.hookReady), { code: "ENOENT" });
-			await ui.dialogs.answer(/\bmic(?:rophone)?\b/i, true);
+			await ui.dialogs.expect(/Try microphone\?/i);
+			await ui.dialogs.pick(/^Start recording\b/i);
 			await until(() => access(f.hookReady).then(() => true, () => false), "confirmed mic trial never reached the real stop hook", ui.diagnostics);
+			await until(() => /Recorder running; stop to finish/i.test(ui.visible()), "the host never exposed the ordinary stop toggle for the trial", ui.diagnostics);
 			assert.deepEqual(await files(f.spool, ".wav"), []);
-			await ui.command(); // Stop, not a second arming action or clip delivery.
+			stop = ui.command(); // Stop opens a review that must be dismissed before the command completes.
 		}
 		await until(() => ui.visible().includes(trialText), "transcript never reached a separate Pi review view", ui.diagnostics);
 		assert.match(ui.visible(), /\breview\b/i);
@@ -112,6 +98,7 @@ for (const mode of ["sample", "mic"]) {
 			digest: sha(input), pcmSha256: sha(input.subarray(44)), bytes: input.length }]);
 		if (mode === "sample") await assert.rejects(access(f.hookReady), { code: "ENOENT" });
 		await leave(ui, pending);
+		await stop;
 		await writeMicmeConfigValues({ MICME_AUTO_SUBMIT: "0" });
 		await ui.command("last");
 		assert.equal(ui.text, `${edited}${publicText} `, "review overwrote ordinary Pi replay");
@@ -333,7 +320,19 @@ test("Pi RPC refuses interactive actions and only explicitly replays a complete 
 	assert.deepEqual(f.network, []);
 });
 
-test("Pi verified model repair, loaded stream/batch routing, and qualified advanced device choices", posix, async () => {
+test("Pi rejects an explicitly selected English-only Whisper clip weight before recording a French translation", posix, async (t) => {
+	const f = await isolatedJourney(t);
+	const english = join(dirname(f.model), "ggml-base.en.bin");
+	await writeFile(english, "public fixture, not weights");
+	await f.configure({ MICME_WHISPER_CPP_MODEL: english, MICME_TRANSLATE_TO_ENGLISH: "fr" });
+	const ui = await f.host();
+	await ui.command();
+	assert.deepEqual(await f.events("trigger"), [], "incompatible explicit weights must be rejected before opening a recorder");
+	assert.match(ui.visible(), /English.only|incompatible|does not support translation/i);
+	assertUntouched(ui);
+});
+
+test("Pi verified model repair, loaded stream/batch routing, and qualified advanced device choices", { skip: process.platform !== "linux" || process.arch !== "x64" }, async () => {
 	const isolated = fileURLToPath(new URL("./transfer-journey-engine.mjs", import.meta.url));
 	try {
 		// Passing NODE_TEST_CONTEXT from the outer runner can suppress nested CLI
