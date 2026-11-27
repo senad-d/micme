@@ -4,6 +4,7 @@ import { readdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { getSystemErrorName } from "node:util";
+import { posixNodeExecutable } from "./node-runtime.ts";
 
 const requireNative = createRequire(import.meta.url);
 const DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
@@ -107,7 +108,7 @@ if (process.argv[2] === "list") {
 
 function directoryTask(fd: number, action: "list" | "clear" | "scan", identity = "") {
 	return new Promise<string>((resolve, reject) => {
-		const child = spawn(process.execPath, ["--input-type=commonjs", "-e", DIRECTORY_TASK_SOURCE, posixDirectoryLibrary(), action, identity], {
+		const child = spawn(posixNodeExecutable, ["--input-type=commonjs", "-e", DIRECTORY_TASK_SOURCE, posixDirectoryLibrary(), action, identity], {
 			stdio: ["ignore", "pipe", "pipe", fd],
 		});
 		let stdout = "";

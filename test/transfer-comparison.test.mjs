@@ -290,6 +290,37 @@ test("report regrades one changed B observation at a time and keeps native, disp
 	assert.match(markdown, /stopGesture → correctTarget \| 1000 \/ ∞ \(5\/6\)/);
 });
 
+test("report does not grade a missing observed draft as not applicable for an aligned streaming take", async (t) => {
+	const root = await workspace(t);
+	const artifact = build("micme-current");
+	const stream = publicTake(slot(artifact, "visible-draft", 0, { fixture: "quiet" }));
+	const missing = structuredClone(stream);
+	missing.trial = { ...stream.trial, pairId: "unobserved-draft" };
+	missing.visible = [];
+	missing.events = missing.events.filter(({ stage }) => stage !== "firstUseful");
+	missing.gaps = [{ stage: "firstUseful", code: "no-observer", detail: "The display trace could not be observed." }];
+	const empty = { ...missing, trial: { ...stream.trial, pairId: "observed-empty-display" }, gaps: [] };
+	const batch = { ...empty, trial: { ...stream.trial, pairId: "batch-without-draft" },
+		native: { ...empty.native, route: "batch", wire: null, endpoints: [] } };
+
+	const records = [stream, missing, empty, batch];
+	const output = join(root, "transfer-baseline.md");
+	await saveArchive(root, protocol(records.map(({ trial }) => trial)), records);
+	await command(root, "--transfer-report", root, output, "--baseline-only");
+	const markdown = await readFile(output, "utf8");
+	assert.match(slotLine(markdown, "visible-draft"), /completed \| pass\b/);
+	assert.doesNotMatch(slotLine(markdown, "visible-draft"), /preview:/);
+	assert.match(slotLine(markdown, "batch-without-draft"), /preview: not-applicable/);
+	const missingDrafts = ["unobserved-draft", "observed-empty-display"].map((id) => {
+		const row = slotLine(markdown, id);
+		return { take: id, result: /completed \| ([\w-]+)/.exec(row)?.[1], preview: /preview: ([\w-]+)/.exec(row)?.[1] };
+	});
+	assert.deepEqual(missingDrafts, [
+		{ take: "unobserved-draft", result: "unverified", preview: "unverified" },
+		{ take: "observed-empty-display", result: "fail", preview: "fail" },
+	]);
+});
+
 test("report regeneration counts short, unmatched, failed and scripted cohorts without claiming parity", async (t) => {
 	const root = await workspace(t);
 	const left = build("micme-70ad138");

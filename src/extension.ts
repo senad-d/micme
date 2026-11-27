@@ -18,6 +18,7 @@ import {
 import { buildOwnedClipRecorderCommand, listAudioDevices, prepareAudioForTranscription, prepareRestoredDevicePanels, registerDeviceMessageRenderer, validateRecordedAudio } from "./audio.ts";
 import type { MicmeEditorInputHandlers } from "./editor.ts";
 import { pcm16BufferLevel } from "./audio-level.ts";
+import { hostDefaultShortcut, isOmp } from "./host.ts";
 import { buildLiveRecorderCommand, openLivePcm, type LivePcmReader } from "./live-capture.ts";
 import { ensureLiveModels, resolveLivePlan } from "./live-plan.ts";
 import {
@@ -120,11 +121,11 @@ export default function micmeExtension(pi: ExtensionAPI) {
 }
 
 export function registerMicmeExtension(pi: ExtensionAPI) {
-	const owner = new MicmeSessionOwner(pi);
 	reloadMicmeConfig();
+	const terminalShortcut = getTerminalShortcut(hostDefaultShortcut);
+	const owner = new MicmeSessionOwner(pi, terminalShortcut);
 	registerDeviceMessageRenderer(pi);
-	const terminalShortcut = getTerminalShortcut();
-	const previewShortcut = terminalShortcut?.toLowerCase() === "alt+3" ? "alt+7" : "alt+3";
+	const previewShortcut = isOmp ? undefined : terminalShortcut?.toLowerCase() === "alt+3" ? "alt+7" : "alt+3";
 
 	pi.registerCommand("micme", {
 		description: "Toggle local voice recording and paste the transcript into the editor",
@@ -138,10 +139,12 @@ export function registerMicmeExtension(pi: ExtensionAPI) {
 			handler: async (ctx) => handleMicmeTerminalShortcut(owner, ctx),
 		});
 	}
-	pi.registerShortcut(previewShortcut, {
-		description: "Micme: preview the saved live final without submitting the composer",
-		handler: (ctx) => owner.runTransferAction(ctx, "preview"),
-	});
+	if (previewShortcut) {
+		pi.registerShortcut(previewShortcut, {
+			description: "Micme: preview the saved live final without submitting the composer",
+			handler: (ctx) => owner.runTransferAction(ctx, "preview"),
+		});
+	}
 
 	pi.on("session_start", (_event, ctx) => owner.startSession(ctx));
 	pi.on("session_shutdown", async (_event, ctx) => owner.shutdown(ctx));
@@ -161,11 +164,14 @@ export class MicmeSessionOwner {
 	private lastLiveFinal: ReturnType<Host["lastLive"]> = null;
 	private actionController?: AbortController;
 	private lastAudioDir = "";
+	private removeOmpShortcuts?: () => void;
 	private advisedLiveMigration = false;
 	private readonly pi: ExtensionAPI;
+	private readonly terminalShortcut?: string;
 
-	constructor(pi: ExtensionAPI) {
+	constructor(pi: ExtensionAPI, terminalShortcut?: string) {
 		this.pi = pi;
+		this.terminalShortcut = terminalShortcut;
 	}
 
 	getPhase(): MicmeOperationPhase {
@@ -179,9 +185,50 @@ export class MicmeSessionOwner {
 		if (!config.error && getTransferOptions().MICME_HISTORY) await this.runSessionWork(ctx, enforceHistoryRetention);
 		if (ctx.mode !== "tui" || this.closed) return;
 		await prepareRestoredDevicePanels(ctx);
-		if (!getPrintableShortcuts().length || this.closed) return;
-		const { installMicmeEditorFallback } = await import("./editor.ts");
-		if (!this.closed) installMicmeEditorFallback(ctx, createMicmeEditorHandlers(this, ctx));
+		if (this.closed) return;
+		const hasPrintableShortcuts = getPrintableShortcuts().length > 0;
+		if (isOmp) {
+			if (this.terminalShortcut || hasPrintableShortcuts) await this.installOmpShortcuts(ctx, hasPrintableShortcuts);
+		} else if (hasPrintableShortcuts) {
+			// Only Pi exports CustomEditor; OMP must not resolve it during validation.
+			const editor = "./editor.ts";
+			const { installMicmeEditorFallback } = await import(editor) as typeof import("./editor.ts");
+			if (!this.closed) installMicmeEditorFallback(ctx, createMicmeEditorHandlers(this, ctx));
+		}
+	}
+
+	private async installOmpShortcuts(ctx: ExtensionContext, hasPrintableShortcuts: boolean) {
+		const [{ installMicmeComposerShortcut, releaseKey }, { canonicalKeyId, decodeTerminalKey }] = await Promise.all([
+			import("./editor-omp.ts"),
+			import("./terminal-ui-omp.ts"),
+		]);
+		if (this.closed) return;
+		this.removeOmpShortcuts?.();
+		const id = this.terminalShortcut && canonicalKeyId(this.terminalShortcut);
+		let pressedKey: ReturnType<typeof releaseKey>;
+		const removeTerminalListener = id ? ctx.ui.onTerminalInput((data) => {
+			const key = decodeTerminalKey(data);
+			if (!key) return;
+			// The registered shortcut still owns activation. Observe raw events only
+			// to suppress repeats and rearm on release, even if modifiers changed.
+			if (key.kind === "release") {
+				const matches = pressedKey === undefined ? key.id === id : releaseKey(key) === pressedKey;
+				if (!matches) return;
+				pressedKey = undefined;
+				this.lastShortcutInputAt = Number.NEGATIVE_INFINITY;
+				return;
+			}
+			if (key.id !== id) return;
+			if (key.kind === "press") pressedKey = releaseKey(key);
+			else this.lastShortcutInputAt = Date.now();
+		}) : undefined;
+		const removeComposerListener = hasPrintableShortcuts
+			? installMicmeComposerShortcut(ctx, createMicmeEditorHandlers(this, ctx), decodeTerminalKey)
+			: undefined;
+		this.removeOmpShortcuts = () => {
+			removeComposerListener?.();
+			removeTerminalListener?.();
+		};
 	}
 
 	async toggle(ctx: ExtensionContext) {
@@ -208,6 +255,10 @@ export class MicmeSessionOwner {
 		if (this.closed) return;
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify(`/micme ${action} requires interactive TUI mode.`, "warning");
+			return;
+		}
+		if (isOmp) {
+			ctx.ui.notify(`/micme ${action} is only available in Pi.`, "warning");
 			return;
 		}
 		if (this.current || this.actionController) {
@@ -269,9 +320,13 @@ export class MicmeSessionOwner {
 	async shutdown(ctx: ExtensionContext) {
 		if (this.closed) return;
 		this.closed = true;
+		this.removeOmpShortcuts?.();
+		this.removeOmpShortcuts = undefined;
+		const active = this.current;
+		this.current = undefined;
 		this.sessionController.abort();
 		const pendingSessionWork = Promise.allSettled(this.sessionWork);
-		if (this.current) await this.cancelOperation(this.current, ctx);
+		if (active) await this.cancelOperation(active, ctx);
 		else {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			this.clearRecordingWidget(ctx);
@@ -357,7 +412,9 @@ export class MicmeSessionOwner {
 		} else if (state.stage === "waiting" || state.stage === "opaque-running" || state.stage === "samples" || state.stage === "digital-zero") {
 			const clip = !operation.live;
 			const ready = state.firstSampleMs !== null;
-			const prefix = clip ? (ready ? "● recording " : "○ recording ") : (ready ? "● streaming " : "");
+			// OMP's legacy clip cue means the recorder can be stopped, not that PCM was seen.
+			const armed = ready || (isOmp && state.stage === "opaque-running");
+			const prefix = clip ? (armed ? "● recording " : "○ recording ") : (ready ? "● streaming " : "");
 			operation.context.ui.setStatus(STATUS_KEY, `${prefix}(${label}; ${operation.stopHint} or /micme to stop; /micme cancel to discard)`);
 		} else {
 			operation.context.ui.setStatus(STATUS_KEY, label);
@@ -516,7 +573,7 @@ export class MicmeSessionOwner {
 			processes: new Set(),
 			directories: new Set(),
 			capture: initialCapture("builtin"),
-			stopHint: sanitizeTerminalOutput(getShortcut()) || "shortcut",
+			stopHint: sanitizeTerminalOutput(getShortcut(hostDefaultShortcut)) || "shortcut",
 			history: !target?.trial && getTransferOptions().MICME_HISTORY,
 			modelId: null,
 			...target,
@@ -549,7 +606,7 @@ function getMicmeArgumentCompletions(prefix: string) {
 	return matches.length ? matches.map((value) => ({ value, label: value })) : null;
 }
 
-async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, args: string, ctx: ExtensionContext, previewShortcut: string) {
+async function handleMicmeCommand(owner: MicmeSessionOwner, pi: ExtensionAPI, args: string, ctx: ExtensionContext, previewShortcut?: string) {
 	const action = args.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
 	try {
 		switch (action) {
@@ -629,11 +686,13 @@ function formatOperationPhase(phase: MicmeOperation["phase"]) {
 	return phase.replaceAll("_", " ");
 }
 
-function getHelpText(previewShortcut: string) {
-	const shortcut = sanitizeTerminalOutput(getShortcut()) || "not set";
+function getHelpText(previewShortcut?: string) {
+	const shortcut = sanitizeTerminalOutput(getShortcut(hostDefaultShortcut)) || "not set";
 	const actions = MICME_ACTIONS.filter((action) => action !== "help").join("|");
-	return `Usage: /micme [${actions}]. Shortcut: ${shortcut} starts or stops recording. /micme cancel stops without transcription or delivery.\n` +
-		`${previewShortcut} opens live-final preview without submitting your draft. Use /micme preview only from an empty composer.`;
+	const usage = `Usage: /micme [${actions}]. Shortcut: ${shortcut} toggles recording; tap once to start, tap again to stop/transcribe. /micme cancel stops without transcription or delivery.`;
+	return previewShortcut
+		? `${usage}\n${previewShortcut} opens live-final preview without submitting your draft. Use /micme preview only from an empty composer.`
+		: usage;
 }
 
 async function runSampleTrial(owner: MicmeSessionOwner, operation: MicmeOperation, path: string) {

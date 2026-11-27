@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import {
 	env,
@@ -27,18 +27,35 @@ import {
 } from "./config.ts";
 import { discoverAudioDevices, LIVE_CAPTURE_RATE } from "./audio.ts";
 import { formatBackendLabel, resolveTranscriptionPlan } from "./backends.ts";
-import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getPythonWhisperModelName, getWhisperCppModelNameFromPath, getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "./models.ts";
+import { hostDefaultShortcut, isOmp } from "./host.ts";
+import { discoverPythonWhisperModels, discoverWhisperCppModels, ensureWhisperCppModel, getDownloadableWhisperCppModelName, getPythonWhisperModelName, getWhisperCppModelCacheDir, getWhisperCppModelNameFromPath, getWhisperVadModelPath, isRegularFile, resolveWhisperCppModel } from "./models.ts";
 import { findExecutable } from "./processes.ts";
 import { fitTerminalTail } from "./recording-widget.ts";
 import { sanitizeTerminalOutput, sanitizeTerminalText } from "./terminal-text.ts";
-import { type Component, Container, decodeKittyPrintable, fuzzyFilter, Input, Key, matchesKey, parseKey, type SettingItem, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
+import { type Component, Container, decodeKittyPrintable, fuzzyFilter, Input, Key, matchesKey, parseKey, type SelectItem, type SettingItem, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./terminal-ui.ts";
 import { MODEL_IDLE_MODES, SCRIPTS, type Detector, type RecognitionTask, type TransferOptionKey, type Variant } from "./transfer/contracts.ts";
 import { getManagedCatalogVariant } from "./transfer/catalog.ts";
 import { getEngineEvidence } from "./transfer/engine-evidence.ts";
-import { checkSetupModelSelection, cleanSettingText, configuredModelLabel, createSettingsPicker, discoverAdvancedRuntime, getPrintableInput, LANGUAGE_LABELS, managedWhisperName, sensitiveOptionsSummary, TRANSLATE_FROM_VALUE_LABELS, TRANSCRIPTION_LANGUAGE_VALUES, TRANSLATION_SOURCE_LANGUAGE_VALUES, whisperModelCompatibility, type AdvancedRuntime } from "./transfer/settings.ts";
+import type { AdvancedRuntime } from "./transfer/settings.ts";
 import type { AudioDeviceCandidate, ModelCandidate, ResolvedTranscriptionPlan } from "./types.ts";
 
 type MicmeTheme = ExtensionContext["ui"]["theme"];
+
+// The transfer picker uses Pi-only components, including DynamicBorder.
+const piSettingsPath = "./transfer/settings.ts";
+const piSettings = isOmp ? undefined : await import(piSettingsPath) as typeof import("./transfer/settings.ts");
+const ompSelector = isOmp ? await import("./model-selector-omp.ts") : undefined;
+const cleanSettingText = piSettings?.cleanSettingText ?? ((text: string) => sanitizeTerminalText(text.replace(/\p{Bidi_Control}/gu, "")));
+const LANGUAGE_LABELS: Record<string, string> = piSettings?.LANGUAGE_LABELS ?? {
+	auto: "Auto detect", en: "English", bs: "Bosnian", hr: "Croatian", sr: "Serbian", de: "German", es: "Spanish", fr: "French",
+	it: "Italian", pt: "Portuguese", nl: "Dutch", pl: "Polish", tr: "Turkish",
+};
+const TRANSCRIPTION_LANGUAGE_VALUES = piSettings?.TRANSCRIPTION_LANGUAGE_VALUES ?? ["en", ...Object.keys(LANGUAGE_LABELS).filter((value) => value !== "en")];
+const TRANSLATION_SOURCE_LANGUAGE_VALUES = piSettings?.TRANSLATION_SOURCE_LANGUAGE_VALUES ?? TRANSCRIPTION_LANGUAGE_VALUES.filter((value) => value !== "en" && value !== "auto");
+const TRANSLATE_FROM_VALUE_LABELS = piSettings?.TRANSLATE_FROM_VALUE_LABELS ?? {
+	off: "Off",
+	...Object.fromEntries(TRANSLATION_SOURCE_LANGUAGE_VALUES.map((language) => [language, `${LANGUAGE_LABELS[language]} → English`])),
+};
 
 type ConfigurationCategoryId = "general" | "transcription" | "streaming" | "audio";
 type FocusedPane = "categories" | "settings";
@@ -114,7 +131,7 @@ export async function showConfiguration(ctx: ExtensionContext, sessionSignal?: A
 				pendingSave = saveConfigurationValue(ctx, id, newValue, { signal: controller.signal, artifactDetector });
 				return pendingSave.then(() => buildConfigurationView(discovery.modelCandidates, discovery.pythonModelCandidates, discovery.audioDevices, theme));
 			},
-			onDiscoverAdvanced: canDiscover ? () => discoverAdvancedRuntime(controller.signal) : async () => ({ installed: [], compute: [] }),
+			onDiscoverAdvanced: canDiscover && piSettings ? () => piSettings.discoverAdvancedRuntime(controller.signal) : async () => ({ installed: [], compute: [] }),
 			requestRender: () => tui.requestRender(),
 			statusText: canDiscover ? formatDiscoveryStatus(discovery.pending) : "Fix Micme config and reopen settings to run discovery.",
 		});
@@ -305,7 +322,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	private handleCloseInput(data: string) {
-		if (!matchesKey(data, Key.ctrl("c")) && data !== "q" && data !== "Q") return false;
+		if (!matchesKey(data, "ctrl+c") && data !== "q" && data !== "Q") return false;
 		this.close();
 		return true;
 	}
@@ -317,7 +334,7 @@ class ConfigurationScreen implements Component {
 	}
 
 	private handlePaneSwitchInput(data: string) {
-		if (!matchesKey(data, Key.tab) && !matchesKey(data, Key.shift("tab"))) return false;
+		if (!matchesKey(data, Key.tab) && !matchesKey(data, "shift+tab")) return false;
 		this.focusedPane = this.focusedPane === "categories" ? "settings" : "categories";
 		this.requestRender();
 		return true;
@@ -839,7 +856,7 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 	const diagnostics = flagValue(envFlag("MICME_STREAM_DIAGNOSTICS"));
 	const whisperCppBinValues = uniqueStrings([env("MICME_WHISPER_CPP_BIN") ?? "", findExecutable(["whisper-cli"]) ?? "", findExecutable(["whisper-cpp"]) ?? "", "whisper-cli", "whisper-cpp"]);
 	const audioFilter = getAudioFilter();
-	const shortcut = getShortcutSettingValue();
+	const shortcut = getShortcutSettingValue(hostDefaultShortcut);
 	const translateToEnglish = getTranslateToEnglishLanguage() ?? "off";
 	const backendValues = ["auto", "whisper.cpp", "python"];
 	const processing = flagValue(mode === "stream" ? getFlagSetting("MICME_PROCESS_AUDIO", true) : env("MICME_PROCESS_AUDIO") !== "0");
@@ -1115,10 +1132,10 @@ function buildConfigurationView(modelCandidates: ModelCandidate[], pythonModelCa
 			displayKind: "text",
 			emptyLabel: "not set",
 		},
-		{
-			id: ADVANCED_SETTING_ID, categoryId: "general", label: "Advanced controls", rawValue: "", currentValue: "Hidden",
+		...(!isOmp ? [{
+			id: ADVANCED_SETTING_ID, categoryId: "general" as const, label: "Advanced controls", rawValue: "", currentValue: "Hidden",
 			description: "Show optional controls in their applicable contexts for this visit. No settings change until edited.",
-		},
+		}] : []),
 		{
 			id: "MICME_STREAM_DIAGNOSTICS",
 			categoryId: "general",
@@ -1150,7 +1167,7 @@ function buildAdvancedItems(plan: ResolvedTranscriptionPlan, runtime: AdvancedRu
 	const items = [
 		flag("MICME_HISTORY", "Local take history", "Opt-in storage of local audio and text. Confirm retention changes in /micme history.", options.MICME_HISTORY),
 		{ id: "micme-sensitive", categoryId: "general" as const, label: "Final processing", rawValue: "", currentValue: "Explicit only",
-			emptyLabel: "Explicit only", description: "Optional provider and hook configuration (redacted). No test request is sent here.", details: sensitiveOptionsSummary() },
+			emptyLabel: "Explicit only", description: "Optional provider and hook configuration (redacted). No test request is sent here.", details: piSettings!.sensitiveOptionsSummary() },
 	];
 	if (plan.effectiveBackend === "whisper.cpp") {
 		items.push(
@@ -1203,13 +1220,13 @@ export function createArtifactSelector(variants: Variant[], value: string, curre
 		value: id, label: id.split("@")[0]!, details: [`Qualified detector: ${DETECTOR_LABELS[observedDetector(traits.vad)]}.`],
 	}] : [])];
 	let currentPicker: Component;
-	const artifacts = createSettingsPicker({ title: "Qualified artifact", rows, cursor: { selected: value } }, theme, (id) => {
+	const artifacts = piSettings!.createSettingsPicker({ title: "Qualified artifact", rows, cursor: { selected: value } }, theme, (id) => {
 		const traits = variants.find((variant) => variant.id === id)?.traits;
 		if (!id || !traits) return done(id);
 		const required = observedDetector(traits.vad);
 		if (current === required) return done(id);
 		const conflict = detectorShellConflict(required, current);
-		currentPicker = createSettingsPicker({
+		currentPicker = piSettings!.createSettingsPicker({
 			title: "Speech detector for artifact",
 			heading: [conflict ?? `This artifact requires ${DETECTOR_LABELS[required]}; current detector: ${DETECTOR_LABELS[current]}. Accept to save both settings.`],
 			rows: conflict ? [{ value: "", label: "Back to artifacts" }] : [
@@ -1342,16 +1359,18 @@ function flagValue(enabled: boolean) {
 }
 
 export function createModelSelector(candidates: ModelCandidate[], theme: MicmeTheme, done: (selectedValue?: string) => void): Component {
-	return createSettingsPicker({
+	const rows: SelectItem[] = candidates.map((candidate) => ({
+		value: candidate.value,
+		label: `${candidate.installed ? "✓" : "○"} ${cleanSettingText(candidate.label) || "model"}`,
+		description: cleanSettingText(candidate.description),
+	}));
+	if (ompSelector) return ompSelector.createOmpModelSelector(rows, theme, done);
+	return piSettings!.createSettingsPicker({
 		title: "Select whisper.cpp model",
 		heading: ["✓ found, not verified · ○ missing", "Missing managed models download if auto-download is on."],
 		searchHint: "Type to search models",
 		maxVisible: 12,
-		rows: candidates.map((candidate) => ({
-			value: candidate.value,
-			label: `${candidate.installed ? "✓" : "○"} ${candidate.label}`,
-			description: candidate.description,
-		})),
+		rows,
 	}, theme, done);
 }
 
@@ -1381,12 +1400,18 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 	}
 	if (id === "MICME_WHISPER_CPP_MODEL" && value) {
 		const path = expandConfigPath(value);
-		const managedName = managedWhisperName(path);
+		const standardName = getDownloadableWhisperCppModelName(path);
+		const managedName = standardName && resolve(path) === resolve(getWhisperCppModelCacheDir(), `ggml-${standardName}.bin`) ? standardName : undefined;
 		const explicit = env(id)?.trim();
 		const manual = explicit && resolve(path) === resolve(expandConfigPath(explicit));
-		const problem = whisperModelCompatibility(getWhisperCppModelNameFromPath(path));
-		if (problem) throw new Error(problem);
-		checkSetupModelSelection(managedName && !manual ? "whisper" : "manual");
+		if (piSettings) {
+			const problem = piSettings.whisperModelCompatibility(getWhisperCppModelNameFromPath(path));
+			if (problem) throw new Error(problem);
+			piSettings.checkSetupModelSelection(managedName && !manual ? "whisper" : "manual");
+		} else if (selectedArtifact || process.env.MICME_WHISPER_CPP_MODEL !== undefined ||
+			(managedName && !manual && process.env.MICME_DEFAULT_WHISPER_CPP_MODEL !== undefined)) {
+			throw new Error("Clear the selected artifact or shell override before changing the Whisper model.");
+		}
 		await ensureWhisperCppModel(path, ctx, { signal: options.signal });
 		if (managedName && !manual) {
 			valuesToWrite.MICME_WHISPER_CPP_MODEL = undefined;
@@ -1404,7 +1429,7 @@ export async function saveConfigurationValue(ctx: ExtensionContext, id: string, 
 }
 
 export function displayConfigurationValue(id: string, value: string) {
-	if (id === "MICME_WHISPER_CPP_MODEL") return value ? configuredModelLabel(value) : "not set";
+	if (id === "MICME_WHISPER_CPP_MODEL") return value ? cleanSettingText(basename(value)) || "model" : "not set";
 	if (SENSITIVE_SETTING_KEYS.has(id)) return value && value !== "[]" ? "configured (hidden)" : "not set";
 	if (id === "MICME_AUDIO_FILTER") return sanitizeTerminalText(value) || "<empty>";
 	return cleanSettingText(value) || "not set";
@@ -1482,6 +1507,14 @@ function clamp(value: number, min: number, max: number) {
 
 function isTruthyConfigValue(value: string) {
 	return /^(1|true|yes|on)$/i.test(value);
+}
+
+function getPrintableInput(data: string) {
+	if (piSettings) return piSettings.getPrintableInput(data);
+	if (!data || data.includes("\x1b")) return "";
+	if (matchesKey(data, Key.space)) return " ";
+	if (matchesKey(data, Key.enter) || matchesKey(data, Key.tab) || matchesKey(data, Key.backspace) || matchesKey(data, Key.delete)) return "";
+	return /^[^\x00-\x1F\x7F]+$/u.test(data) ? data : "";
 }
 
 function getShortcutInput(data: string) {

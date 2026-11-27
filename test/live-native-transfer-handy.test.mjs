@@ -4,7 +4,7 @@ import { cpus, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { sha256, wavHeader } from "./live-native/corpus.mjs";
-import { loopbackSource } from "./live-native/transfer-handy-driver.mjs";
+import { desktopLog, loopbackSource } from "./live-native/transfer-handy-driver.mjs";
 import { collect, handyCommit, handyTag, projectHandyTake } from "./live-native/transfer-handy.mjs";
 import { runTransfer } from "./live-native/transfer-runner.mjs";
 import { isPlannedTake, readJsonl, validateTake } from "./live-native/transfer-schema.mjs";
@@ -114,6 +114,19 @@ test("frozen Handy trials pass the private rig preflight, but different displays
 		checkGap(await collect({ ...slot, rig: { ...slot.rig, display: "Wayland" } }, signal(), { local }), "identity-mismatch");
 		checkGap(await collect({ ...slot, rig: { ...slot.rig, mic: "other.monitor" } }, signal(), { local }), "identity-mismatch");
 	}
+});
+
+test("the pinned Linux startup receipt recognizes only the actual SIGUSR2 handler log", () => {
+	const state = { active: false, handler: false, portable: false };
+	const logPrefix = "[DEBUG][handy_app_lib::signal_handle] ";
+	for (const line of ["[portable] data dir: /bench/bin/Data", `${logPrefix}Signal handlers registered (SIGUSR1, SIGUSR2)`]) {
+		desktopLog({}, state, line);
+	}
+	assert.equal(state.portable, true);
+	assert.equal(state.handler, false);
+	// Handy v0.10.2, src-tauri/src/signal_handle.rs, non-macOS branch.
+	desktopLog({}, state, `${logPrefix}Signal handler registered (SIGUSR2; SIGUSR1 is left to WebKitGTK)`);
+	assert.equal(state.handler, true, "the launched Linux app's own handler receipt must clear the activation gate");
 });
 
 const event = (stage, ns) => ({ kind: "event", stage, ns: String(ns) });
