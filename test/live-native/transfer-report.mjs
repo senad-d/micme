@@ -84,7 +84,8 @@ function scorePreview(take, times, wire) {
 	const { native: n, trial: t } = take;
 	const continuous = t.fixture === "continuous";
 	const pairedBeforeEnd = n && n.alignedWords.filter(({ endMs }) => endMs < n.endMs).length >= 2;
-	const applies = t.width !== null && t.track !== "pcm" && (continuous || (pairedBeforeEnd && take.visible.length));
+	// An empty trace does not make a planned preview inapplicable.
+	const applies = t.width !== null && t.track !== "pcm" && (continuous || pairedBeforeEnd);
 	if (!applies) return { preview: na("Not a display fixture with applicable aligned preview"), firstUsefulMs: null };
 	if (n?.route === "batch") return { preview: na("Batch route does not produce speculative drafts"), firstUsefulMs: null };
 	if (!n) return { preview: measured(null, "Missing native endpoint/alignment observer"), firstUsefulMs: null };

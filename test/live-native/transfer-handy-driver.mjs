@@ -405,9 +405,10 @@ async function ownsInstance(job, state) {
 	return job.alive() && started?.dev === pinned.dev && started.ino === pinned.ino;
 }
 
-function desktopLog(spec, state, plain) {
+export function desktopLog(spec, state, plain) {
 	state.portable ||= plain.includes(portableLog);
-	state.handler ||= plain.includes("Signal handlers registered (SIGUSR2;");
+	// The pinned Linux release registers only SIGUSR2 and logs the singular form.
+	state.handler ||= plain.includes("Signal handler registered (SIGUSR2; SIGUSR1 is left to WebKitGTK)");
 	if (!state.bound) state.bound = observeBinding(plain, spec);
 	if (!state.active) return;
 	if (!state.ready && plain.includes("Microphone is receiving samples; recording is ready")) { state.ready = true; event("firstSample"); }
