@@ -487,9 +487,14 @@ export async function collect(trial, signal, { local, clock = takeClock() } = {}
 		}
 		take.trial.rig.actualBackend = backend;
 		if (trial.rig.requestedDevice === "cpu" && backend !== "cpu") {
-			block(backend === "unknown" ? "no-observer" : "identity-mismatch", "The decoder did not establish the planned CPU backend.");
+			const detail = "The decoder did not establish the planned CPU backend.";
+			if (backend !== "unknown") block("identity-mismatch", detail);
+			// Missing backend proof invalidates the condition, not the capture receipt.
+			take.outcome = "unavailable";
+			take.gaps.push({ stage: null, code: "no-observer", detail });
+		} else if (backend === "unknown") {
+			take.gaps.push({ stage: null, code: "no-observer", detail: "Native diagnostics did not identify the loaded compute backend." });
 		}
-		if (backend === "unknown") take.gaps.push({ stage: null, code: "no-observer", detail: "Native diagnostics did not identify the loaded compute backend." });
 		if (!isPlannedTake(trial, take.trial)) block("identity-mismatch", "Observed host, backend, or device does not match the frozen condition.");
 	} catch (error) {
 		if (signal?.aborted) return emptyTake(trial, "lost", "canceled", `${label}: interrupted and isolated children closed.`);
