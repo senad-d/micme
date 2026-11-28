@@ -17,15 +17,21 @@ const enumerated = [
 ];
 const choice = { variantId: referenceClaim("moonshine-streaming-tiny").variants.find((row) => row.quant === "Q8_0").id, compute: "cpu", requestedDeviceId: null, language: "en", task: "transcribe", detector: "off", chunking: true };
 
+function publishPid(path) {
+	const { renameSync, writeFileSync } = process.getBuiltinModule("node:fs");
+	const pending = `${path}.tmp`;
+	writeFileSync(pending, String(process.pid));
+	renameSync(pending, path);
+}
+
 function peer(mode, pidFile, devices) {
-	const { writeFileSync } = process.getBuiltinModule("node:fs");
 	let input = Buffer.alloc(0);
 	process.stdin.on("data", (chunk) => {
 		input = Buffer.concat([input, chunk]);
 		if (input.length < 5 || input.length < input.readUInt32BE() + 4) return;
 		const op = String.fromCharCode(input[4]);
 		input = input.subarray(input.readUInt32BE() + 4);
-		if (op === "V") writeFileSync(pidFile, String(process.pid));
+		if (op === "V") publishPid(pidFile);
 		if (op === "V" && mode === "hang") return;
 		if (op === "V" && mode === "lost") process.exit(23);
 		const reply = { version: 1, ok: true, asrCalls: 0, asrLoads: 0, vadLoads: 0, peakRssBytes: null, data: op === "V" ? { devices } : {} };
@@ -38,7 +44,7 @@ function peer(mode, pidFile, devices) {
 		setImmediate(() => process.stdout.write(header.subarray(2), () => {
 			if (mode !== "oversize") process.stdout.write(payload, () => {
 				if (op !== "Q") return;
-				if (mode === "hang-on-close") writeFileSync(`${pidFile}.closing`, String(process.pid));
+				if (mode === "hang-on-close") publishPid(`${pidFile}.closing`);
 				else process.exit(0);
 			});
 		}));
@@ -52,7 +58,7 @@ async function provision(t, mode = "ok") {
 	t.after(remove.bind(null, dir));
 	const recognizerFile = join(dir, "recognizer.cjs");
 	const pidFile = join(dir, "pid");
-	const source = `#!${process.execPath}\n(${peer.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(pidFile)}, ${JSON.stringify(enumerated)});\n`;
+	const source = `#!${process.execPath}\n${publishPid.toString()}\n(${peer.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(pidFile)}, ${JSON.stringify(enumerated)});\n`;
 	await writeFile(recognizerFile, source, { mode: 0o700 });
 	return { recognizerFile, recognizerSha256: createHash("sha256").update(source).digest("hex"), pidFile };
 }
@@ -60,7 +66,9 @@ async function provision(t, mode = "ok") {
 async function peerPid(pidFile) {
 	for (let n = 0; n < 100; n++) {
 		try {
-			return Number(await readFile(pidFile, "utf8"));
+			const pid = Number(await readFile(pidFile, "utf8"));
+			assert.ok(Number.isSafeInteger(pid) && pid > 0, "Expected a positive fixture PID.");
+			return pid;
 		} catch (error) {
 			if (error.code !== "ENOENT") throw error;
 			await delay(10);
@@ -72,6 +80,12 @@ async function peerPid(pidFile) {
 function gone(pid) {
 	assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 }
+
+test("an empty fixture receipt is rejected rather than interpreted as PID zero", linux, async (t) => {
+	const { pidFile } = await provision(t);
+	await writeFile(pidFile, "");
+	await assert.rejects(peerPid(pidFile), /Expected a positive fixture PID/);
+});
 
 test("native probes preserve distinct same-backend runtime IDs and a null backend-only identity", linux, async (t) => {
 	const local = await provision(t);
