@@ -1,6 +1,6 @@
 {
   "name": "@senad-d/micme",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "Local voice dictation for Pi coding prompts. Press Alt+M, speak, review, send.",
   "license": "MIT",
