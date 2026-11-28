@@ -17,6 +17,13 @@ foreach(flag IN ITEMS BUILD_SHARED_LIBS WHISPER_BUILD_TESTS WHISPER_BUILD_EXAMPL
 endforeach()
 option(GGML_METAL "Build the optional Metal backend" OFF)
 
+# On the measured CPU build, ggml's bundled tiled matrix kernels accelerate
+# Whisper's encoder. Unsupported operations still use ggml's generic kernels.
+# Leave the upstream default elsewhere and honor explicit GGML_LLAMAFILE values.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set(GGML_LLAMAFILE_DEFAULT ON)
+endif()
+
 # Use pin metadata, not Git discovery that could identify the enclosing Micme
 # checkout instead of the upstream source archive.
 set(CMAKE_DISABLE_FIND_PACKAGE_Git ON)

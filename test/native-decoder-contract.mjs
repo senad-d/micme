@@ -1,5 +1,5 @@
 // Opt-in contract checks, not a recognition benchmark. Set MICME_TEST_WHISPER_CPP_SOURCE
-// to the pinned upstream source tree and put the built micme-live on PATH.
+// to the pinned upstream source tree and put micme-live and CMake on PATH.
 // Run: node --test test/native-decoder-contract.mjs
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -103,6 +103,25 @@ test("native continuously open gate advances by exactly 20 seconds when ASR yiel
 	assert.equal(done.through, audio.length / 2);
 	assert.equal(done.vadFrames, Math.ceil(done.through / 512));
 	assert.equal(done.asrCalls, finals.length);
+});
+
+test("fresh Linux x64 builds select the tiled CPU kernels and honor an explicit opt-out", {
+	skip: process.platform !== "linux" || process.arch !== "x64",
+}, () => {
+	const build = mkdtempSync(join(tmpdir(), "micme-native-cmake-"));
+	const native = fileURLToPath(new URL("../native/live/", import.meta.url));
+	try {
+		for (const [value, flags] of [["ON", []], ["OFF", ["-DGGML_LLAMAFILE=OFF"]]]) {
+			const result = spawnSync("cmake", ["-S", native, "-B", build, `-DFETCHCONTENT_SOURCE_DIR_WHISPERCPP=${source}`, ...flags],
+				{ encoding: "utf8", timeout: 30_000 });
+			assert.ifError(result.error);
+			assert.equal(result.status, 0, result.stderr);
+			const cache = readFileSync(join(build, "CMakeCache.txt"), "utf8");
+			assert.equal(cache.match(/^GGML_LLAMAFILE:BOOL=(.*)$/m)?.[1], value);
+		}
+	} finally {
+		rmSync(build, { recursive: true, force: true });
+	}
 });
 
 let stub;

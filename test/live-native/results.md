@@ -2,6 +2,50 @@
 
 See the [replay procedure](README.md) and the [gate definitions](../../docs/specs/local-dictation-hardening.md#proof).
 
+## Issue #161: CPU matrix kernels on the same host
+
+Both matrices were run on 2026-11-28 on Linux x86-64 `7.0.0-44-generic`, Intel Core i5-7500 at 3.40 GHz (four available cores, 14.7 GiB RAM), Node 24.22.3 and FFmpeg 6.1.1. Both workers are GCC 13.3.0 / CMake 3.31.10 Release builds of the pinned whisper.cpp `96ec4d9823e9d0211944172da35f9f29134af990`, with native CPU and OpenMP, without BLAS or GPU backends. Both use the same four Whisper threads and one Silero thread. The baseline is Micme `0bdda36` (then-current `main`); the final worker enables ggml's bundled tiled CPU kernels (`GGML_LLAMAFILE=ON`). Both runs use the same clip binary, recordings, references, scoring and thresholds, with refinement off for the comparison. The replay context in both runs supplies the empty session history now required by the extension.
+
+| Input | SHA-256 |
+| --- | --- |
+| Baseline worker (`GGML_LLAMAFILE=OFF`) | `fe9c9cfafaeaf2e7a7a3fb87a4cb2d31e72a5c82e9baceb2124b443aa8fbeaff` |
+| Final worker (`GGML_LLAMAFILE=ON`) | `eba0908c8f4527c4fdc41e731a34324b68184722054f13278dc5058770bce2f7` |
+| Shared `whisper-cli` | `7792df4a2059f82c38362e6a04e70afa8f15268af6f9fcae1c2cacbc04d8b280` |
+| Shared `ggml-base.en.bin` | `a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002` |
+| Shared `ggml-small.en.bin` | `c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d` |
+| Shared `ggml-base.bin` (French control) | `60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe` |
+| Shared `ggml-silero-v5.1.2.bin` | `29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf` |
+
+### Where the time went
+
+Separate instrumented workers replayed the exact frame sequence from each model's first baseline run at 80 columns, without pacing. These timings are diagnostic; they are not included in the paced result below. Encoder and decoder are Whisper's reported stages; preview, rollover and endpoint time are inclusive and should not be added to those stages.
+
+| Time in seconds (baseline → final) | `base.en` | `small.en` |
+| --- | ---: | ---: |
+| Whisper encoder | 7.87 → 4.30 | 25.84 → 12.99 |
+| Whisper decoder | 6.30 → 6.37 | 12.37 → 12.59 |
+| Preview calls | 12.49 → 9.66 | 30.96 → 20.87 |
+| Rollover call | 1.54 → 1.27 | 3.63 → 2.68 |
+| Last endpoint call | 1.37 → 0.99 | 4.60 → 3.02 |
+| Silero inference | 0.26 → 0.19 | 0.23 → 0.17 |
+
+The encoder accounted for most of the time saved. In the paced matrices, model loads were about 106–113 ms for `base.en` and 259–271 ms for `small.en` (OS caches not forced cold); the first native final reached the editor in at most 3.02 ms.
+
+### Before and after
+
+Each timing cell is baseline → final, with nearest-rank median / p95 over five runs. Draft time starts at speech onset; editor commit time starts at capture. ASR seconds per second of audio count native work, not time waiting for input.
+
+| Model | Columns | ASR s/audio s | First correct draft (s) | First editor commit (s) | Final WER | Relevant runs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `base.en` | 80 | 0.485 / 0.494 → 0.338 / 0.348 | 1.457 / 1.461 → 1.336 / 1.343 | 21.958 / 22.156 → 21.341 / 21.563 | 8.93% → 8.93% | 5/5 → 5/5 |
+| `base.en` | 40 | 0.477 / 0.492 → 0.344 / 0.352 | 1.458 / 1.574 → 1.334 / 1.457 | 21.824 / 22.000 → 21.531 / 21.579 | 8.93% → 8.93% | 5/5 → 5/5 |
+| `small.en` | 80 | 1.077 / 1.092 → 0.883 / 0.907 | 2.169 / 2.288 → 1.696 / 1.843 | 24.096 / 24.645 → 23.030 / 23.186 | 6.25% → 6.25% | 5/5 → 5/5 |
+| `small.en` | 40 | 1.067 / 1.079 → 0.905 / 0.921 | 2.168 / 2.178 → 1.698 / 1.816 | 24.511 / 24.961 → 23.268 / 23.831 | 6.25% → 6.25% | 2/5 → 4/5 |
+
+Median ASR compute fell 28–30% for `base.en` and 15–18% for `small.en`. All ten final `small.en` runs spent less than one second on ASR per second of audio. That is a compute result, not a guarantee that each visible draft kept up: `small.en` hit 72 → 71 of 80 checkpoints at 80 columns and 65 → 68 at 40 columns, with consecutive misses in one final narrow run. `base.en` is already the English stream default; `small.en` remains the English clip default. Neither default changed.
+
+Both matrices exited 0 through `base.en` and the same-language French control. All 41 live runs in each matrix matched the input PCM byte for byte and passed editor delivery. Both English models had 0% live WER on JFK, short, quiet, paused speech and the overload control. Silence, rain and immediate stop produced no words and made no ASR calls. `base.en` preserved the deliberate “but now, but now” repeat; `small.en` still omitted it in both matrices (18.18% WER on that control).
+
 ## Independent rerun: `base.en` passes during continuous speech
 
 On the four-core i5-7500, `base.en` passed every timed checkpoint while speech was still in progress, with refinement off. Two separate Release builds produced the same worker (SHA-256 `e624c8d1c4594b61367afa30ac8ef60a2c2a89433af38c6bb2a386b9a65a10fe`); both full matrices passed with `base.en`. The decoder now reuses an acoustic boundary for lighter-model draft windows and waits for more speech or agreement before displaying an uncertain suffix. The audio, references, timed scorer and thresholds did not change. The separate final-year check rejects “eighteen sixty four. Three.”
@@ -15,7 +59,7 @@ The table and [all 320 visible checkpoints](reference-checkpoints.tsv) are from 
 | `small.en` | 80 | 14, 11, 12, 14, 13 | 3/5 | 2.182 / 2.902 s |
 | `small.en` | 40 | 13, 13, 13, 14, 12 | 3/5 | 2.172 / 2.293 s |
 
-- **While speaking:** `base.en` spent 0.45–0.61 seconds on ASR per second of continuous audio. The first editor commit came at 21.65–22.64 seconds from capture, well after the first visible draft. `small.en` took 1.07–1.15 seconds of ASR per second of audio and missed 31 checkpoints. Use `base.en` for English feedback on a similar CPU; the `small.en` default has not changed.
+- **While speaking:** `base.en` spent 0.45–0.61 seconds on ASR per second of continuous audio. The first editor commit came at 21.65–22.64 seconds from capture, well after the first visible draft. `small.en` took 1.07–1.15 seconds of ASR per second of audio and missed 31 checkpoints. At the time, the recommendation was to use `base.en` for English feedback on a similar CPU, even though `small.en` was still the default.
 - **At stop:** continuous clip → live word error rate was 53.57% → 8.93% for `base.en` and 51.79% → 6.25% for `small.en`. Both captured the final year without a duplicated rollover phrase. JFK, short, quiet and paused speech had 0% live WER for both. Only `base.en` kept the deliberate “but now, but now” repeat. The French control with multilingual `base` returned “Paris.”
 - **Audio and delivery:** all 41 live runs matched the input PCM byte for byte and passed the editor delivery checks. Silence, rain and immediate stop produced no visible or committed words and made no ASR calls. These are comparisons against matched clip decoding on recorded speech, not measurements of a physical mic, legacy SDL capture or an accelerator.
 
