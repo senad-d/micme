@@ -32,14 +32,16 @@ export async function loadLocal(manifestPath) {
 
 // The clock is created by the runner; a collector calls trigger just before
 // the actual gesture/input and projects ONLY local monotonic stamps onto it.
-export function takeClock() {
+export function takeClock(onTrigger) {
 	let origin;
 	return Object.freeze({
 		stamp: () => performance.now(),
 		trigger() {
 			if (origin !== undefined) throw new Error("Trial is already triggered");
 			origin = performance.now();
-			return { stage: "trigger", ms: 0 };
+			const event = { stage: "trigger", ms: 0 };
+			onTrigger?.(event);
+			return event;
 		},
 		ms(stamp = performance.now()) {
 			if (origin === undefined) throw new Error("No trial trigger observed");
@@ -104,7 +106,8 @@ async function attempt(trial, collect, context, stopSignal, timeoutMs, injected)
 	const deadline = new AbortController();
 	const timer = setTimeout(() => deadline.abort(), timeoutMs);
 	const signal = stopSignal ? AbortSignal.any([stopSignal, deadline.signal]) : deadline.signal;
-	const clock = takeClock();
+	let trigger;
+	const clock = takeClock((event) => { if (!signal.aborted) trigger = { ...event }; });
 	let cancel;
 	const interrupted = new Promise((done) => {
 		cancel = () => done(null);
@@ -120,8 +123,10 @@ async function attempt(trial, collect, context, stopSignal, timeoutMs, injected)
 		if (signal.aborted || result === null) {
 			const settled = await waitForTeardown(collecting);
 			const canceled = stopSignal?.aborted;
-			return [emptyTake(trial, canceled ? "lost" : "timeout", canceled ? "canceled" : "no-result",
-				canceled ? "Run canceled during collection." : "Collector exceeded the per-take deadline."), Boolean(settled)];
+			const take = emptyTake(trial, canceled ? "lost" : "timeout", canceled ? "canceled" : "no-result",
+				canceled ? "Run canceled during collection." : "Collector exceeded the per-take deadline.");
+			take.events = interruptedEvents(trial, settled?.take, trigger);
+			return [take, Boolean(settled)];
 		}
 		if (result.failed) return [emptyTake(trial, "failed", "no-result", "Collector failed before returning evidence; inspect the private local diagnostics."), true];
 		try {
@@ -137,10 +142,22 @@ async function attempt(trial, collect, context, stopSignal, timeoutMs, injected)
 	}
 }
 
+function interruptedEvents(trial, receipt, trigger) {
+	let events = [];
+	try {
+		// Keep stage observations from a partial receipt, not a late completion.
+		if (receipt && receipt.outcome !== "completed" && isPlannedTake(trial, validateTake(redactPhysical(receipt)).trial)) events = receipt.events;
+	} catch {
+		// The runner's own pre-abort trigger is still evidence.
+	}
+	if (!trigger || events.some(({ stage, ms }) => stage === "trigger" && ms === 0)) return events;
+	return [...events.filter(({ stage }) => stage !== "trigger"), trigger].sort((a, b) => a.ms - b.ms);
+}
+
 async function waitForTeardown(collecting) {
 	const cancel = new AbortController();
 	try {
-		return await Promise.race([collecting.then(() => true), delay(teardownMs, false, { signal: cancel.signal })]);
+		return await Promise.race([collecting, delay(teardownMs, null, { signal: cancel.signal })]);
 	} finally {
 		cancel.abort();
 	}

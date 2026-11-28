@@ -201,6 +201,28 @@ test("aborting after the trigger preserves that observation without activating l
 		"the canceled take reached its trigger; the later unavailable slot did not");
 });
 
+test("an interrupted collector retains reached stages without inventing a trigger", async (t) => {
+	const root = await workspace(t);
+	const slot = plan();
+	const manifest = join(root, "plan.json");
+	await writeJson(root, "plan.json", protocol([slot.build], [slot]));
+	for (const reachedTrigger of [true, false]) {
+		const stop = new AbortController();
+		const output = join(root, `interrupted-${reachedTrigger}.jsonl`);
+		const prepared = { stage: "modelLoaded", ms: -1 };
+		const collectors = { [slot.product]: (trial, _signal, { clock }) => {
+			if (reachedTrigger) clock.trigger();
+			stop.abort();
+			if (reachedTrigger) return { ...emptyTake(trial, "lost", "canceled", "Interrupted after preparation"), events: [prepared] };
+			clock.trigger(); // A callback reached only during teardown is not pre-abort evidence.
+			throw new Error("No partial receipt");
+		} };
+		assert.equal((await runTransfer(manifest, output, { collectors, signal: stop.signal })).lost, 1);
+		const [row] = await readJsonl(output, validateTake);
+		assert.deepEqual(row.events, reachedTrigger ? [prepared, { stage: "trigger", ms: 0 }] : []);
+	}
+});
+
 test("forged tolerance is rejected before collector activation or recording", async (t) => {
 	const { root, frozen } = await bundle(t);
 	frozen.toleranceMs[0].ms = 1;
@@ -245,6 +267,25 @@ test("a reference repeat with a different consumed PCM digest cannot calibrate m
 		(error) => { assert.match(error.message, /calibration/i); return "invalid calibration"; },
 	);
 	assert.match(result, /invalid calibration|\*\*(?:fail|unavailable)\*\*/, "the reporter used a failed exact-PCM repeat to certify parity");
+});
+
+test("missing consumed PCM cannot calibrate, and missing or wrong candidate PCM prevents timed parity", async (t) => {
+	const { root, file, frozen, a, b } = await bundle(t);
+	const manifest = "transfer-p1-manifest.json";
+	frozen.calibration[1].fedSha256 = null;
+	await writeJson(root, manifest, frozen);
+	await assert.rejects(generateReport(root, { baselineOnly: true }), /reference\/reference calibration/);
+
+	frozen.calibration[1].fedSha256 = hash;
+	await writeJson(root, manifest, frozen);
+	const candidates = b.map((slot) => cpms(slot, 101));
+	candidates[0].fedSha256 = null;
+	await writeRows(root, file, [...a.map((slot) => cpms(slot)), ...candidates]);
+	assert.match((await generateReport(root, { baselineOnly: true })).markdown, /\*\*unavailable\*\*.*20\/20 paired slots/);
+
+	candidates[0].fedSha256 = "b".repeat(64);
+	await writeRows(root, file, [...a.map((slot) => cpms(slot)), ...candidates]);
+	assert.match((await generateReport(root, { baselineOnly: true })).markdown, /\*\*fail\*\*.*20\/20 paired slots/);
 });
 
 test("report distinguishes 20 paired repeats, exploratory counts, and incomplete latency", async (t) => {

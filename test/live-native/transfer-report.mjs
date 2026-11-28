@@ -324,11 +324,12 @@ function deriveCalibration(protocol) {
 		const bands = new Map();
 		for (const band of protocol.toleranceMs) {
 			const differences = scored.map(([a, b]) => {
+				if (a.score.gates.pcm.state !== "pass" || b.score.gates.pcm.state !== "pass") return null;
 				const ref = latency(a, band);
 				const repeat = latency(b, band);
 				return ref === null || repeat === null ? null : Math.abs(ref - repeat);
 			});
-				const stats = summarize(differences);
+			const stats = summarize(differences);
 			bands.set(interval(band), { ...stats, usable: complete && stats.count > 0 && stats.finite === stats.count && Math.abs(stats.p95 - band.ms) < 1e-9 });
 		}
 		result.set(key, { takes: takes.length, bands });
