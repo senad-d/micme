@@ -51,6 +51,7 @@ function tuiContext(work) {
 	let editor = "";
 	const ctx = {
 		mode: "tui", cwd: work, hasUI: true, isIdle: () => true,
+		sessionManager: { getEntries: () => [] },
 		ui: {
 			theme: { fg: (_kind, text) => text, bold: (text) => text },
 			setWidget(key, rows) {

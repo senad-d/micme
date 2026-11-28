@@ -22,6 +22,8 @@ cmake --install build/micme-live --config Release --prefix "$HOME/.local"
 
 The install step puts `micme-live` (`micme-live.exe` on Windows) in the prefix's `bin` directory by default. If the package directory is not writable, replace `build/micme-live` in all three commands with an absolute path to a writable build directory. On macOS, Metal is off by default; to opt in with a toolchain that supports it, add `-DGGML_METAL=ON` to the configure command.
 
+Fresh x86-64 Linux builds enable ggml's bundled tiled CPU matrix kernels. They require no extra runtime dependency. When updating an existing CMake build, use a fresh build directory or pass `-DGGML_LLAMAFILE=ON` to replace the cached value. To use the older CPU kernels, configure with `-DGGML_LLAMAFILE=OFF`.
+
 ## Build without network access
 
 Before going offline, obtain the [pinned whisper.cpp archive](https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/96ec4d9823e9d0211944172da35f9f29134af990). Verify that its SHA-256 is `4d46e659151f31535b3947e322a58b0c604d3cbe93dfb284294e989a19d25ad7`, then extract it. The local-source override skips CMake's download **and** checksum verification, so point it only at a trusted source tree for this exact revision. Do not point it at an installed Whisper binary or library.

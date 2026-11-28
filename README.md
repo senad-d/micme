@@ -218,7 +218,7 @@ See [`micme.example.json`](micme.example.json) for the full JSON template.
 
 ## Live Dictation
 
-In a paced speech test on a four-core CPU, `base.en` showed the first relevant words in about 1.5 seconds. All five runs at each terminal width passed the relevance check on the words visible while speaking; an occasional draft was still wrong. `small.en` produced more accurate final text on that recording but fell behind while speech was in progress. Stream mode is experimental: these measurements used recorded speech, not a microphone. See [Models and Backends](#models-and-backends) to select a weight.
+Stream mode is experimental. See the [live dictation benchmark](https://github.com/senad-d/micme/blob/main/test/live-native/results.md) for speed and accuracy on paced public recordings, not a microphone, and [Models and Backends](#models-and-backends) to select a weight.
 
 ### Set up or migrate
 
