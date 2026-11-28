@@ -40,30 +40,36 @@ function assertFailure(result, code, detail) {
 	assert.match(result.stderr, detail);
 }
 
+function runCliEntry(options, ...args) {
+	const result = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", ...args], options);
+	assert.ifError(result.error);
+	return result;
+}
+
 test("CLI dispatches through a bin symlink and stays inert when imported", { skip: process.platform === "win32" }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "micme-cli-entry-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const entry = new URL("../scripts/transcribe.mjs", import.meta.url);
 	const bin = join(root, "micme-transcribe");
 	await symlink(fileURLToPath(entry), bin);
-	const options = { cwd: root, encoding: "utf8", timeout: 15_000, env: { HOME: root, PATH: root, PI_CODING_AGENT_DIR: root, MICME_MODEL_DIR: root } };
-	const listed = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", bin, flags.listModels, flags.json], options);
-	assert.ifError(listed.error);
+	const run = runCliEntry.bind(undefined, { cwd: root, encoding: "utf8", timeout: 15_000, env: { HOME: root, PATH: root, PI_CODING_AGENT_DIR: root, MICME_MODEL_DIR: root } });
+	const listed = run(bin, flags.listModels, flags.json);
 	assert.equal(listed.status, exit.success, listed.stderr);
 	assert.equal(listed.stderr, "");
 	assert.deepEqual(JSON.parse(listed.stdout), { models: [] });
 
-	const invalid = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", bin, "--unknown"], options);
-	assert.ifError(invalid.error);
+	const invalid = run(bin, "--unknown");
 	assert.equal(invalid.status, exit.usage, invalid.stderr);
 	assert.equal(invalid.stdout, "");
 	assert.match(invalid.stderr, /^Usage: micme-transcribe/m);
 
 	const importer = join(root, "importer.mjs");
 	await writeFile(importer, `import ${JSON.stringify(entry.href)};\n`);
-	const imported = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", importer], options);
-	assert.ifError(imported.error);
+	const imported = run(importer);
 	assert.deepEqual([imported.status, imported.stdout, imported.stderr], [exit.success, "", ""]);
+
+	const evalImport = run("--input-type=module", "--eval", "await import(process.argv[1])", fileURLToPath(entry));
+	assert.deepEqual([evalImport.status, evalImport.stdout, evalImport.stderr], [exit.success, "", ""]);
 });
 
 test("CLI rejects invalid flags, conflicting modes and nonpositive or partial repeat counts", async () => {

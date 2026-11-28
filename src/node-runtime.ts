@@ -1,5 +1,19 @@
 import { realpathSync, statSync } from "node:fs";
 import { win32 } from "node:path";
+import { pathToFileURL } from "node:url";
+
+/** Direct-entry fallback for Node versions without import.meta.main. */
+export function isDirectInvocation(moduleUrl: string) {
+	const entry = process.argv[1];
+	// In eval/print mode argv[1] can be an argument to the evaluated code.
+	if (!entry || process.execArgv.some((arg) => /^(?:-(?:e|p|ep|pe)$|--(?:eval|print)(?:=|$))/.test(arg))) return false;
+	try {
+		// Node resolves an npm bin symlink for import.meta.url but not for argv[1].
+		return pathToFileURL(entry).href === moduleUrl || pathToFileURL(realpathSync(entry)).href === moduleUrl;
+	} catch {
+		return false;
+	}
+}
 
 // A Bun-compiled host's execPath points at the agent, not a JS interpreter.
 export const posixNodeExecutable = process.versions.bun ? "node" : process.execPath;
