@@ -223,6 +223,22 @@ test("an interrupted collector retains reached stages without inventing a trigge
 	}
 });
 
+test("a partial receipt cannot backdate a trigger reached only during cancellation", async (t) => {
+	const root = await workspace(t);
+	const slot = plan();
+	const manifest = join(root, "plan.json");
+	const output = join(root, "late-trigger.jsonl");
+	const stop = new AbortController();
+	await writeJson(root, "plan.json", protocol([slot.build], [slot]));
+	const collectors = { [slot.product]: (trial, _signal, { clock }) => {
+		stop.abort();
+		return { ...emptyTake(trial, "lost", "canceled", "Interrupted during setup"), events: [clock.trigger()] };
+	} };
+	assert.equal((await runTransfer(manifest, output, { collectors, signal: stop.signal })).lost, 1);
+	const [row] = await readJsonl(output, validateTake);
+	assert.deepEqual(row.events, [], "a post-abort trigger was recorded at time zero");
+});
+
 test("forged tolerance is rejected before collector activation or recording", async (t) => {
 	const { root, frozen } = await bundle(t);
 	frozen.toleranceMs[0].ms = 1;
