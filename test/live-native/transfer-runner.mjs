@@ -150,8 +150,11 @@ function interruptedEvents(trial, receipt, trigger) {
 	} catch {
 		// The runner's own pre-abort trigger is still evidence.
 	}
-	if (!trigger || events.some(({ stage, ms }) => stage === "trigger" && ms === 0)) return events;
-	return [...events.filter(({ stage }) => stage !== "trigger"), trigger].sort((a, b) => a.ms - b.ms);
+	// A partial receipt can preserve measurements, but only the runner's live
+	// clock can attest that the trigger was reached before interruption.
+	const measured = events.filter(({ stage }) => stage !== "trigger");
+	if (trigger) measured.push(trigger);
+	return measured.sort((a, b) => a.ms - b.ms);
 }
 
 async function waitForTeardown(collecting) {

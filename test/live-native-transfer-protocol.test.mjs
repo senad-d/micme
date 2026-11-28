@@ -239,6 +239,30 @@ test("a partial receipt cannot backdate a trigger reached only during cancellati
 	assert.deepEqual(row.events, [], "a post-abort trigger was recorded at time zero");
 });
 
+test("abort ordering keeps measured stages and only the live runner trigger", async (t) => {
+	const root = await workspace(t);
+	const slot = plan();
+	const manifest = join(root, "plan.json");
+	await writeJson(root, "plan.json", protocol([slot.build], [slot]));
+
+	for (const triggeredBeforeAbort of [false, true]) {
+		const stop = new AbortController();
+		const prepared = { stage: "modelLoaded", ms: -1 };
+		const output = join(root, `abort-order-${triggeredBeforeAbort}.jsonl`);
+		const collectors = { [slot.product]: async (trial, signal, { clock }) => {
+			const aborted = new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+			if (triggeredBeforeAbort) clock.trigger();
+			queueMicrotask(() => stop.abort());
+			await aborted;
+			const trigger = triggeredBeforeAbort ? { stage: "trigger", ms: 0 } : clock.trigger();
+			return { ...emptyTake(trial, "lost", "canceled", "Interrupted fixture"), events: [prepared, trigger, trigger] };
+		} };
+		assert.equal((await runTransfer(manifest, output, { collectors, signal: stop.signal })).lost, 1);
+		const [row] = await readJsonl(output, validateTake);
+		assert.deepEqual(row.events, triggeredBeforeAbort ? [prepared, { stage: "trigger", ms: 0 }] : [prepared]);
+	}
+});
+
 test("forged tolerance is rejected before collector activation or recording", async (t) => {
 	const { root, frozen } = await bundle(t);
 	frozen.toleranceMs[0].ms = 1;
