@@ -2,4 +2,4 @@
 "@senad-d/micme": minor
 ---
 
-Pi users gain guided setup, optional local recognizers, a take library, media import, standalone WAV transcription and opt-in final-text processing.
+Pi users can opt into local take history, media import and final-text processing, and transcribe WAV files with the standalone CLI.
