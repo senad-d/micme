@@ -180,12 +180,16 @@ test("runner freezes calibration and writes one ordered row per failure, timeout
 	await assert.rejects(runTransfer(manifest, output, { collectors }), { code: "EEXIST" });
 });
 
-test("aborting an attempted slot prevents later collectors without dropping planned records", async (t) => {
+test("aborting after the trigger preserves that observation without activating later slots", async (t) => {
 	const root = await workspace(t);
 	const candidate = build();
 	const frozen = protocol([candidate], [plan(candidate), plan(candidate, 1)]);
 	const signal = new AbortController();
-	const collect = t.mock.fn((slot) => { signal.abort(); return cpms(slot); });
+	const collect = t.mock.fn((slot, _signal, { clock }) => {
+		const trigger = clock.trigger();
+		signal.abort();
+		return { ...emptyTake(slot, "lost", "canceled", "Canceled fixture"), events: [trigger] };
+	});
 	const output = join(root, "aborted.jsonl");
 	await writeJson(root, "plan.json", frozen);
 	assert.deepEqual(await runTransfer(join(root, "plan.json"), output, { collectors: { "micme-current": collect }, signal: signal.signal }),
@@ -193,6 +197,8 @@ test("aborting an attempted slot prevents later collectors without dropping plan
 	assert.equal(collect.mock.callCount(), 1);
 	const rows = await readJsonl(output, validateTake);
 	assert.deepEqual(rows.map(({ outcome, gaps }) => [outcome, gaps[0].code]), [["lost", "canceled"], ["unavailable", "canceled"]]);
+	assert.deepEqual(rows.map(({ events }) => events), [[{ stage: "trigger", ms: 0 }], []],
+		"the canceled take reached its trigger; the later unavailable slot did not");
 });
 
 test("forged tolerance is rejected before collector activation or recording", async (t) => {
