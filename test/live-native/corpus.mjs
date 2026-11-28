@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export const RATE = 16_000;
@@ -24,11 +25,26 @@ const silence = (ms) => Buffer.alloc(ms * bytesPerMs);
 const slice = (pcm, from, to) => pcm.subarray(from * bytesPerMs, to * bytesPerMs);
 export const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 
+export async function hashFile(path) {
+	const hash = createHash("sha256");
+	const info = await stat(path);
+	assert.ok(info.isFile(), `Expected a regular file: ${path}`);
+	for await (const chunk of createReadStream(path)) hash.update(chunk);
+	return { name: (await realpath(path)).split(/[/\\]/).at(-1), bytes: info.size, sha256: hash.digest("hex") };
+}
+
 export function wavHeader(pcmBytes) {
 	const head = Buffer.from("524946460000000057415645666d74201000000001000100803e0000007d0000020010006461746100000000", "hex");
 	head.writeUInt32LE(pcmBytes + 36, 4);
 	head.writeUInt32LE(pcmBytes, 40);
 	return head;
+}
+
+export function wavDurationMs(wave, name) {
+	const pcmBytes = wave.length - 44;
+	assert.ok(pcmBytes > 0 && pcmBytes % 2 === 0, `Expected nonempty 16-bit PCM: ${name}`);
+	assert.deepEqual(wave.subarray(0, 44), wavHeader(pcmBytes), `Expected a canonical WAV: ${name}`);
+	return pcmBytes / bytesPerMs;
 }
 
 async function loadSource(assets, name) {

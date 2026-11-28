@@ -1,0 +1,42 @@
+{
+  "english-commission.wav": {
+    "language": "en",
+    "reference": "The examination and testimony of the experts enabled the Commission to conclude that five shots may have been fired,"
+  },
+  "english-continuous.wav": {
+    "language": "en",
+    "reference": "But now it doesn't seem to matter very much. My uncle was delighted. For myself, moody and dissatisfied, I appeared almost to expect a glimpse of the ghost of Hamlet. Mister Morton seemed particularly struck with the account of Waverley's visit to Donald Bean Lean. Give me my horse and arms and wait for me here. I will go in quest of this knight and dead or alive I will make him keep his word plighted to so great beauty. It was written in the Upper Rangitata district of the Canterbury Province, as it then was, of New Zealand, and appeared at Christchurch in the Press newspaper June thirteenth, eighteen sixty-three."
+  },
+  "english-dumas.wav": {
+    "language": "en",
+    "reference": "From the respect paid her on all sides, she seemed like a queen, and from the adoration with which she was treated by two or three, she appeared an object of worship. The queen mother gave the French the most affectionate reception. France was her native country, and she had suffered too much unhappiness in England for England to have made her forget France."
+  },
+  "english-jfk.wav": {
+    "language": "en",
+    "reference": "And so, my fellow Americans, ask not what your country can do for you; ask what you can do for your country."
+  },
+  "english-natural-history.wav": {
+    "language": "en",
+    "reference": "Many animals of even complex structure which live parasitically within others are wholly devoid of an alimentary cavity."
+  },
+  "english-quiet.wav": {
+    "language": "en",
+    "reference": "But now it doesn't seem to matter very much."
+  },
+  "english-thank-you.wav": {
+    "language": "en",
+    "reference": "Thank you."
+  },
+  "french-paris.wav": {
+    "language": "fr",
+    "reference": "Paris."
+  },
+  "rain-noise.wav": {
+    "language": "en",
+    "reference": null
+  },
+  "russian-birthday.wav": {
+    "language": "ru",
+    "reference": "Сегодня 18 июня, и это день рождения Муйриел!"
+  }
+}

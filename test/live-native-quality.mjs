@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { constants, createReadStream } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { availableParallelism, cpus, release, totalmem, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { prepareCorpus, RATE } from "./live-native/corpus.mjs";
+import { hashFile, prepareCorpus, RATE } from "./live-native/corpus.mjs";
 import { extraBoundaryRepeats, hasKeywords, nearestRank, previewProgress, scoreDraftTrace, tokens, visibleWords, wordErrors } from "./live-native/scoring.mjs";
 
 const runFile = promisify(execFile);
@@ -19,12 +18,6 @@ const repeats = 5;
 const clock = () => Number(process.hrtime.bigint()) / 1e6;
 const round = (x) => Math.round(x * 100) / 100;
 const describe = (error) => error instanceof Error ? error.message : String(error);
-
-async function hashFile(path) {
-	const hash = createHash("sha256");
-	for await (const chunk of createReadStream(path)) hash.update(chunk);
-	return { name: (await realpath(path)).split(/[/\\]/).at(-1), bytes: (await stat(path)).size, sha256: hash.digest("hex") };
-}
 
 async function traceRows(path) {
 	try {

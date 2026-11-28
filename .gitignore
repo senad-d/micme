@@ -35,6 +35,18 @@ models/
 *.gguf
 ggml-*.bin
 
+# Repository-only audio test fixtures (not part of the npm package)
+!/test/fixtures/audio/english-commission.wav
+!/test/fixtures/audio/english-continuous.wav
+!/test/fixtures/audio/english-dumas.wav
+!/test/fixtures/audio/english-jfk.wav
+!/test/fixtures/audio/english-natural-history.wav
+!/test/fixtures/audio/english-quiet.wav
+!/test/fixtures/audio/english-thank-you.wav
+!/test/fixtures/audio/french-paris.wav
+!/test/fixtures/audio/rain-noise.wav
+!/test/fixtures/audio/russian-birthday.wav
+
 # Security scaning
 trivy-reports
 .trivycache
