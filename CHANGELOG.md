@@ -26,6 +26,10 @@ All notable changes to Micme will be documented in this file.
 - Align `micme-doctor` executable/model checks with runtime validation and translation-capable model fallback behavior.
 - Let `MICME_RECORD_COMMAND` use the same `{audio}`, `{tempDir}`, and `{transcript}` placeholders as custom transcription commands.
 
+## [0.5.1] - 2026-11-28
+
+- Restores Oh My Pi 19.2 settings and dictation, recognizes distinct shortcut taps when the terminal reports releases, and uses a trusted Node executable for Windows helpers.
+
 ## [0.5.0] - 2026-11-26
 
 - Stream mode replaces whisper-stream with micme-live and VAD weights, defaults to base.en for English live drafts, and requires existing stream users to migrate; clip mode retains its previous model default.
