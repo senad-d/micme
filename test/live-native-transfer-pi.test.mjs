@@ -156,6 +156,19 @@ test("Pi collector does not certify CPU when the Worker v1 default reports a dif
 	assert.match(take.gaps[0].detail, /planned CPU backend/);
 });
 
+test("Pi collector keeps the attempted capture when Worker v1 cannot establish the planned CPU backend", linux, async (t) => {
+	const { local, trial } = await provision(t, "");
+	const fixture = await stageFixture(local, "immediate", Buffer.alloc(640));
+	const take = validateTake(await collect({ ...trial, ...fixture }, t.signal, { local }));
+	assert.equal(take.trial.rig.actualBackend, "unknown", "an unobserved backend cannot qualify the planned CPU cell");
+	assert.ok(take.gaps.some(({ code, detail }) => code === "no-observer" && /planned CPU backend/.test(detail)));
+	assert.ok(take.events.some(({ stage }) => stage === "trigger"), "a run that reached the recorder must retain its trigger even without a backend observation");
+	assert.ok(take.events.some(({ stage }) => stage === "drained"));
+	assert.equal(take.native?.closedSamples, 320);
+	assert.equal(take.fedSha256, fixture.pcmSha256);
+	assert.equal(take.observedTarget, publicPrefix);
+});
+
 test("Pi collector refuses to grade a new process as an idle model reload", linux, async (t) => {
 	const { local, trial } = await provision(t);
 	const fixture = await stageFixture(local, "continuous", Buffer.alloc(128_000, 1));
